@@ -329,20 +329,100 @@ Ported in this session
      into `chunk_by_paragraph` and `chunk_by_exchange`. Constants
      `CHUNK_SIZE`, `LINE_GROUP_SIZE`, `LINE_FALLBACK_MIN_NEWLINES` added.
 
+5. `mempalace/palace.py` + `mempalace/cli.py` `c933095` (#1498) — split the
+   single "No palace found / run init" message into three actionable states
+   so users no longer see the same wrong hint whether the palace dir is
+   missing, init-pending, or empty. Backend gains a typed
+   `CollectionNotInitializedError` (subclass of `PalaceNotFoundError`).
+   - Rust: new `palace_db::PalaceState` (`Missing` / `NotInitialized` /
+     `Empty` / `Ready`) + `classify_palace` + `print_palace_state_hint`.
+     `cmd_compress` and `cmd_status` route through the classifier;
+     `searcher::SearchError` gains `NotInitialized` and `Empty` variants
+     so the search error message matches the state. Regression tests
+     `test_classify_palace_*` (palace_db) and
+     `test_search_memories_palace_*` (searcher).
+
 Not ported (Rust N/A)
 ---------------------
 
-- `#1426` (`afaedc6`) — tolerate None metadata cells. Python-specific:
-  Rust's typed `HashMap<String, Value>` is never None.
-- `#1473` (`3e92719`) — surface `create_tunnel` ValueError. Rust port has
-  no `tool_create_tunnel` MCP endpoint; `create_tunnel` takes `&str` refs.
-- `#1498` (`c933095`) — stratify state messages for empty/missing palace.
-  UI-only cosmetic change.
-- `#1495` (`cf96e68`) — cold-start embedder diagnostics. Python ChromaDB-
-  specific; Rust uses `edgebert`/`embedvec` with different startup path.
-- `#1372` (`6f9fe80`) — canonicalize KG cache key via realpath. Python-
-  specific import cache.
-- `3da27d3` — VACUUM + FTS5 rebuild after repair. Python ChromaDB-specific.
+Each entry below is a commit in `bb31396..1b94f4e` (~36 non-merge commits)
+that does not apply to the Rust port. Rationale recorded so the next sync
+can skip the same triage.
+
+Python-only fixes that don't apply to Rust's typed implementation:
+
+- `#1426` (`afaedc6`) — tolerate `None` metadata cells. Rust's
+  `HashMap<String, serde_json::Value>` is statically typed; entries are
+  either present (and a concrete `Value` variant) or absent. No `None`
+  cell to tolerate.
+- `#1473` (`3e92719`) — surface `tool_create_tunnel` `ValueError`. Rust's
+  MCP layer returns typed `Result` errors and has no `ValueError` masking
+  path; the equivalent error is already surfaced via `ErrorData`.
+- `02c05aa` — refactor merging the two `ValueError` guards. Follow-up to
+  `#1473`. N/A for the same reason.
+- `2c75c6f` + `c49c10f` — UTF-8 lock holder encoding. Rust `String` is
+  UTF-8 by definition and `mine_palace_lock` writes via `writeln!`, which
+  emits UTF-8 bytes; no `bytes vs str` mismatch exists.
+- `2bf3621` — refactor `_metadata_matches_extract_mode` helper. The Rust
+  port already inlines the equivalent check in `file_already_mined_with_mode`
+  (#1505 port above); extracting a one-liner helper has no payoff in Rust.
+
+Python ChromaDB / FTS5 / HNSW-specific fixes (Rust uses embedvec):
+
+- `3da27d3` (#1516 / #1517) — VACUUM + FTS5 rebuild after repair to
+  reclaim SQLite space. Rust's drawer storage is `palace.json`
+  (HashMap-backed) plus embedvec vector files; no ChromaDB SQLite
+  metadata table and no FTS5 index to rebuild. Repair already truncates
+  and rewrites the JSON.
+- `e811b6d` — avoid false HNSW metadata quarantine. Chroma-specific
+  quarantine code path; embedvec stores HNSW directly without the
+  metadata-collection sidecar that triggers the false positive.
+- `cf96e68` (#1495) — cold-start embedder diagnostics + opt-in warmup.
+  Targets `chromadb.utils.embedding_functions`; Rust embeds via
+  `edgebert` / `onnxruntime` and has its own warmup path
+  (`OnnxModel::warmup`).
+- `cb13036` — close SQLite connection + clean temp palace on exception
+  during migrate. Rust's `migrate.rs` uses RAII: the `Connection`
+  auto-closes on scope exit and the function does not currently
+  `mkdtemp`-swap (the embedvec upsert path is a TODO). Will revisit when
+  the swap step lands.
+
+Python KG-cache-specific fixes (Rust has no in-process KG handle cache):
+
+- `#1372` (`6f9fe80`) — canonicalize KG cache key via realpath +
+  normcase. Rust opens a fresh `KnowledgeGraph` per MCP call (see
+  `mcp_server.rs::kg_path`); there is no `_kg_by_path` dict to keep
+  consistent.
+- `51eb279` + `4dc3ccf` + `3ee158e` — capture canonical KG path /
+  thread it through `_get_kg` / tighten `_canonicalize_kg_path` tests.
+  Follow-ups to #1372. N/A for the same reason.
+
+Python hook-script + test-isolation fixes (Rust delegates to upstream
+Python hooks unchanged):
+
+- `e241aa3` + `2bdb1e8` + `c736a57` (#1440) — `mapfile` → `sed` for bash
+  3.2 compat, post-review hardenings, force `umask 022`. The Rust port
+  carries the upstream `hooks/*.sh` files verbatim; bash-script-level
+  fixes are inherited at next vendor.
+- `eee5f32` + `b201255` (#1443) — write placeholder PID when claiming a
+  mine slot. Rust's `mine_palace_lock` already writes the live PID via
+  `writeln!` at lock creation. The Python-style separate "claim slot"
+  helper does not exist in `hooks_cli.rs`.
+- `90fece7` + `426d164` (#1510) — isolate `_MINE_PID_DIR` / `test_hooks_cli`
+  from `test_cli`. Pytest-fixture-specific.
+- `c736a57` — force `umask 022` in hooks tests. Pytest-fixture-specific.
+
+Python style / CI fixes (no Rust counterpart):
+
+- `2cab6f5` + `83e4711` + `3c74ba6` + `419a34c` — ruff 0.15.9 reformats.
+  Rust port uses `cargo fmt` + `clippy -D warnings` and already passes.
+- `283ef03` + `96a3272` — pin ruff in pre-commit + uv.lock. Rust port's
+  CI pins toolchain via `rust-toolchain.toml`; no ruff equivalent.
+
+Specific upstream review polishes:
+
+- `990b155` — address Gemini review on #1532. Targets a Python-side
+  refactor that does not exist in Rust.
 
 Remaining gaps after this sync
 ------------------------------

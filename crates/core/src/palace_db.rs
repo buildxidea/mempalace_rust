@@ -1,11 +1,31 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::dedup_window::{DedupVerdict, WindowedDedup};
 use crate::onnx_embed::OnnxModel;
 
 pub const DEFAULT_COLLECTION_NAME: &str = "mempalace_drawers";
 pub const DEFAULT_COMPRESSED_COLLECTION_NAME: &str = "mempalace_compressed";
+
+/// Process-global online dedup window (mp-032 / report 06 §3.5).
+///
+/// Initialised lazily on first use with [`WindowedDedup::default`]
+/// (5-minute window, 4096-entry LRU). The same instance is shared across
+/// every `PalaceDb` opened in this process so multiple short-lived
+/// `PalaceDb::open` calls (e.g. the MCP `tool_add_drawer` flow that
+/// re-opens per request) still benefit from the rolling window.
+///
+/// Returns an `Arc` so callers can either
+/// (a) use the returned handle directly, or
+/// (b) hand it to [`PalaceDb::add_drawer_with_dedup`] for tests that
+/// want isolated state.
+pub fn dedup_window() -> Arc<WindowedDedup> {
+    static GLOBAL: OnceLock<Arc<WindowedDedup>> = OnceLock::new();
+    GLOBAL
+        .get_or_init(|| Arc::new(WindowedDedup::default()))
+        .clone()
+}
 
 /// Distinct lifecycle states of a palace on disk (#1498).
 ///
@@ -260,10 +280,17 @@ impl PalaceDb {
                 .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
                 .collect();
 
+            // Privacy filter (mp-031, ADR-12) — strip API keys, JWTs,
+            // private keys, and other well-known secret patterns from the
+            // verbatim drawer body before it lands on disk. Wing/room slugs
+            // are structural and never run through the redactor; only the
+            // user-text `content` field is processed.
+            let redacted = crate::privacy::redact(content).redacted_text;
+
             self.documents.insert(
                 id.to_string(),
                 DocumentEntry {
-                    content: content.to_string(),
+                    content: redacted,
                     metadata: meta_map,
                 },
             );
@@ -278,10 +305,13 @@ impl PalaceDb {
         documents: &[(String, String, HashMap<String, serde_json::Value>)],
     ) -> anyhow::Result<()> {
         for (id, content, metadata) in documents {
+            // Privacy filter (mp-031, ADR-12) — same as `add()`.
+            let redacted = crate::privacy::redact(content).redacted_text;
+
             self.documents.insert(
                 id.clone(),
                 DocumentEntry {
-                    content: content.clone(),
+                    content: redacted,
                     metadata: metadata.clone(),
                 },
             );
@@ -501,6 +531,52 @@ impl PalaceDb {
 
         query_results
     }
+
+    /// Add a single drawer with the process-global online dedup window
+    /// (mp-032). If the trimmed `content` was seen within the rolling
+    /// window, the insert is skipped and `Ok(None)` is returned; otherwise
+    /// the drawer is inserted via [`PalaceDb::add`] and `Ok(Some(id))` is
+    /// returned. Caller is responsible for `flush()` when batching.
+    ///
+    /// Use [`PalaceDb::add_drawer_with_dedup`] in tests that need an
+    /// isolated dedup state, since the global window persists across
+    /// concurrent test cases otherwise.
+    pub fn add_drawer(
+        &mut self,
+        id: &str,
+        content: &str,
+        metadata: &[(&str, &str)],
+    ) -> anyhow::Result<Option<String>> {
+        self.add_drawer_with_dedup(&dedup_window(), id, content, metadata)
+    }
+
+    /// Variant of [`PalaceDb::add_drawer`] that uses an explicit dedup
+    /// instance. Lets call sites (and unit tests) inject scoped state
+    /// instead of relying on the process-global window.
+    pub fn add_drawer_with_dedup(
+        &mut self,
+        dedup: &WindowedDedup,
+        id: &str,
+        content: &str,
+        metadata: &[(&str, &str)],
+    ) -> anyhow::Result<Option<String>> {
+        match dedup.check_and_record(content) {
+            DedupVerdict::Duplicate => {
+                let hash = crate::dedup_window::hash_normalized(content);
+                tracing::debug!(
+                    target: "mempalace::dedup",
+                    drawer_id = %id,
+                    sha256 = %hex::encode(hash),
+                    "dedup skipped"
+                );
+                Ok(None)
+            }
+            DedupVerdict::Fresh => {
+                self.add(&[(id, content)], &[metadata])?;
+                Ok(Some(id.to_string()))
+            }
+        }
+    }
 }
 
 impl EmbeddingDb {
@@ -644,5 +720,127 @@ mod tests {
         .unwrap();
         db.flush().unwrap();
         assert_eq!(classify_palace(&palace), PalaceState::Ready);
+    }
+
+    /// mp-031 regression: secrets in drawer bodies must be redacted **before**
+    /// they're persisted. We round-trip a chunk that contains a fake OpenAI
+    /// key through `add()` + `flush()` + a fresh `open()` and assert the raw
+    /// key is not present on disk.
+    #[test]
+    fn test_add_redacts_openai_key_before_storage() {
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        let raw_key = "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234";
+        let body = format!("the leaked key was {} please rotate it", raw_key);
+
+        {
+            let mut db = PalaceDb::open(&palace).unwrap();
+            db.add(
+                &[("d-secret", body.as_str())],
+                &[&[("wing", "ops"), ("room", "incident")]],
+            )
+            .unwrap();
+            db.flush().unwrap();
+        }
+
+        // Re-open from disk and inspect the persisted document.
+        let db = PalaceDb::open(&palace).unwrap();
+        let stored = db._get_document("d-secret").expect("drawer present");
+        assert!(
+            stored.content.contains("<REDACTED:OPENAI_KEY>"),
+            "redaction placeholder missing: {}",
+            stored.content
+        );
+        assert!(
+            !stored.content.contains(raw_key),
+            "raw key leaked into storage: {}",
+            stored.content
+        );
+        // Surrounding prose is preserved.
+        assert!(stored.content.contains("the leaked key was"));
+        assert!(stored.content.contains("please rotate it"));
+    }
+
+    /// mp-031: `upsert_documents` is the other canonical add path
+    /// (diary_ingest, sweeper, compress). It must redact too.
+    #[test]
+    fn test_upsert_documents_redacts_before_storage() {
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        let raw_token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB";
+        let body = format!("token={}", raw_token);
+
+        let mut db = PalaceDb::open(&palace).unwrap();
+        let mut meta: HashMap<String, serde_json::Value> = HashMap::new();
+        meta.insert("wing".into(), serde_json::json!("ops"));
+        meta.insert("room".into(), serde_json::json!("creds"));
+        db.upsert_documents(&[("d-gh".to_string(), body, meta)])
+            .unwrap();
+        db.flush().unwrap();
+
+        let db = PalaceDb::open(&palace).unwrap();
+        let stored = db._get_document("d-gh").expect("drawer present");
+        assert!(stored.content.contains("<REDACTED:GITHUB_TOKEN>"));
+        assert!(!stored.content.contains(raw_token));
+    }
+
+    /// mp-032 wiring: `PalaceDb::add_drawer_with_dedup` honours the
+    /// rolling-window dedup. First call inserts; second call with the
+    /// same content (within the window) skips and returns `None`. We
+    /// inject a fresh `WindowedDedup` so this test does not entangle
+    /// with the process-global window other tests share.
+    #[test]
+    fn test_add_drawer_with_dedup_skips_duplicate_within_window() {
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        let mut db = PalaceDb::open(&palace).unwrap();
+        let dedup =
+            crate::dedup_window::WindowedDedup::new(std::time::Duration::from_secs(300), 64);
+        let meta = [("wing", "ops"), ("room", "shipping")];
+
+        let first = db
+            .add_drawer_with_dedup(&dedup, "d-1", "release notes v0.1", &meta)
+            .expect("first add_drawer call should succeed");
+        assert_eq!(first, Some("d-1".to_string()));
+        assert_eq!(db.count(), 1);
+
+        let second = db
+            .add_drawer_with_dedup(&dedup, "d-1-clone", "release notes v0.1", &meta)
+            .expect("second add_drawer call should succeed");
+        assert_eq!(second, None, "duplicate content should be skipped");
+        assert_eq!(db.count(), 1, "no new drawer must be inserted on duplicate");
+    }
+
+    /// mp-032 wiring: whitespace differences are folded by the dedup
+    /// hash so `"foo"` and `"  foo  "` collapse into one drawer.
+    #[test]
+    fn test_add_drawer_with_dedup_normalises_whitespace() {
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        let mut db = PalaceDb::open(&palace).unwrap();
+        let dedup =
+            crate::dedup_window::WindowedDedup::new(std::time::Duration::from_secs(300), 64);
+        let meta = [("wing", "ops"), ("room", "shipping")];
+
+        assert_eq!(
+            db.add_drawer_with_dedup(&dedup, "d-a", "foo", &meta)
+                .unwrap(),
+            Some("d-a".to_string())
+        );
+        assert_eq!(
+            db.add_drawer_with_dedup(&dedup, "d-b", "  foo  ", &meta)
+                .unwrap(),
+            None,
+            "trimmed whitespace should still hit the dedup window"
+        );
+        assert_eq!(db.count(), 1);
     }
 }

@@ -353,7 +353,6 @@ fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject) -> DynResu
                 "memory_kg_stats" | "memory_graph_stats" => tool_kg_stats(&state, args),
                 "memory_traverse" => tool_traverse(&state, args),
                 "memory_find_tunnels" => tool_find_tunnels(&state, args),
-                "memory_graph_stats" => tool_graph_stats(&state, args),
                 "memory_diary_read" => tool_diary_read(&state, args),
                 "memory_diary_write" => tool_diary_write(&state, args),
                 "memory_status" => tool_status(&state, args),

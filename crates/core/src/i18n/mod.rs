@@ -107,7 +107,7 @@ pub struct DialectConfig {
 }
 
 fn default_compression_instructions() -> String {
-    "Compress your memories into AAAK format for efficient storage and retrieval. AAAK is a lossless shorthand dialect designed for AI agents.".to_string()
+    "Compress your memories into AAAK format for efficient storage and retrieval. AAAK is a lossy shorthand dialect designed for AI agents.".to_string()
 }
 
 /// Locale manager that loads and provides locale configurations.
@@ -192,7 +192,7 @@ impl LocaleManager {
     "corpus_empty": "No content found in the specified directory."
   },
   "dialect": {
-    "compression_instructions": "Compress your memories into AAAK format for efficient storage and retrieval. AAAK is a lossless shorthand dialect designed for AI agents."
+    "compression_instructions": "Compress your memories into AAAK format for efficient storage and retrieval. AAAK is a lossy shorthand dialect designed for AI agents."
   }
 }"#.to_string()
     }
@@ -225,7 +225,7 @@ impl LocaleManager {
     "corpus_empty": "Nenhum conteúdo encontrado no diretório especificado."
   },
   "dialect": {
-    "compression_instructions": "Comprima suas memórias no formato AAAK para armazenamento e recuperação eficientes. AAAK é um dialeto abreviado sem perdas projetado para agentes de IA."
+    "compression_instructions": "Comprima suas memórias no formato AAAK para armazenamento e recuperação eficientes. AAAK é um dialeto abreviado com perdas projetado para agentes de IA."
   }
 }"#.to_string()
     }
@@ -258,7 +258,7 @@ impl LocaleManager {
     "corpus_empty": "Содержимое не найдено в указанной директории."
   },
   "dialect": {
-    "compression_instructions": "Сожмите свои воспоминания в формат AAAK для эффективного хранения и поиска. AAAK - это диалект сокращений без потерь, созданный для агентов ИИ."
+    "compression_instructions": "Сожмите свои воспоминания в формат AAAK для эффективного хранения и поиска. AAAK - это диалект сокращений с потерями, созданный для агентов ИИ."
   }
 }"#.to_string()
     }

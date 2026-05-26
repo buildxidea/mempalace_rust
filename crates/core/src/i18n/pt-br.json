@@ -24,6 +24,6 @@
     "corpus_empty": "Nenhum conteúdo encontrado no diretório especificado."
   },
   "dialect": {
-    "compression_instructions": "Comprima suas memórias no formato AAAK para armazenamento e recuperação eficientes. AAAK é um dialeto abreviado sem perdas projetado para agentes de IA."
+    "compression_instructions": "Comprima suas memórias no formato AAAK para armazenamento e recuperação eficientes. AAAK é um dialeto abreviado com perdas projetado para agentes de IA."
   }
 }

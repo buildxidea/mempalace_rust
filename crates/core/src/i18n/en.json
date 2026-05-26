@@ -24,6 +24,6 @@
     "corpus_empty": "No content found in the specified directory."
   },
   "dialect": {
-    "compression_instructions": "Compress your memories into AAAK format for efficient storage and retrieval. AAAK is a lossless shorthand dialect designed for AI agents."
+    "compression_instructions": "Compress your memories into AAAK format for efficient storage and retrieval. AAAK is a lossy shorthand dialect designed for AI agents."
   }
 }

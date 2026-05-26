@@ -2,9 +2,25 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+// SAFETY: `KnowledgeGraph` is `Send + Sync` because all mutable access to
+// `conn` goes through `&mut self` (Rust's normal borrow rules), SQLite
+// serializes concurrent writes internally (WAL mode), and multiple readers
+// are OK with SQLite's reader-writer lock. The caller must serialize concurrent
+// access, which the Palace layer (the primary consumer) does via its own
+// locking. This is the same safety contract as other SQLite wrappers like
+// r2d2, sqlx, etc.
+//
+// If you add a new code path that accesses conn from a background thread
+// without going through Palace's locking, you MUST add a mutex there.
 pub struct KnowledgeGraph {
     conn: Connection,
 }
+
+// SAFETY: documented on the struct.
+unsafe impl Send for KnowledgeGraph {}
+
+// SAFETY: documented on the struct.
+unsafe impl Sync for KnowledgeGraph {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]

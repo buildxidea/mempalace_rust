@@ -141,8 +141,20 @@ impl PalaceBuilder {
             anyhow::anyhow!("PalaceBuilder: config is mandatory. Call .config(PalaceConfig) before .open()")
         })?;
 
+        // With embed-fastembed: auto-resolve from MEMPALACE_EMBED_MODEL if not set.
+        // Without embed-fastembed: embedder is mandatory (no default available).
+        #[cfg(feature = "embed-fastembed")]
+        let embedder = match self.embedder {
+            Some(e) => e,
+            None => std::sync::Arc::from(crate::embed::embedder_from_env()?),
+        };
+        #[cfg(not(feature = "embed-fastembed"))]
         let embedder = self.embedder.ok_or_else(|| {
-            anyhow::anyhow!("PalaceBuilder: embedder is mandatory. Call .embedder(arc_embedder) before .open()")
+            anyhow::anyhow!(
+                "PalaceBuilder: embedder is mandatory. \
+                 Without `embed-fastembed` you must call .embedder(arc_embedder) before .open(). \
+                 Rebuild with `--features embed-fastembed` to use MEMPALACE_EMBED_MODEL automatically."
+            )
         })?;
 
         // Ensure palace directory exists first (manifest lives here).

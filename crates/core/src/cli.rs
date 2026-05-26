@@ -966,6 +966,7 @@ fn cmd_search(
         results,
         None,
         bm25,
+        None,
     ))?;
     searcher::print_search_response(&response);
     Ok(())

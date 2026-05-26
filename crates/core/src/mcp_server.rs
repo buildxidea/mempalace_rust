@@ -317,6 +317,7 @@ fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject) -> DynResu
         let state = state.clone();
         Box::pin(async move {
             match name.as_str() {
+                // mempalace_* canonical names
                 "mempalace_status" => tool_status(&state, args),
                 "mempalace_list_wings" => tool_list_wings(&state, args),
                 "mempalace_list_rooms" => tool_list_rooms(&state, args),
@@ -336,6 +337,26 @@ fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject) -> DynResu
                 "mempalace_graph_stats" => tool_graph_stats(&state, args),
                 "mempalace_diary_read" => tool_diary_read(&state, args),
                 "mempalace_diary_write" => tool_diary_write(&state, args),
+                // Aliases aligned with @modelcontextprotocol/server-memory (one minor release)
+                "memory_search" | "memory_list" => tool_search(&state, args),
+                "memory_list_wings" => tool_list_wings(&state, args),
+                "memory_list_rooms" => tool_list_rooms(&state, args),
+                "memory_get_taxonomy" => tool_get_taxonomy(&state, args),
+                "memory_get_aaak_spec" => tool_get_aaak_spec(&state, args),
+                "memory_check_duplicate" => tool_check_duplicate(&state, args),
+                "memory_add" | "memory_add_drawer" => tool_add_drawer(&state, args),
+                "memory_delete" | "memory_delete_drawer" => tool_delete_drawer(&state, args),
+                "memory_kg_query" | "memory_graph_query" => tool_kg_query(&state, args),
+                "memory_kg_add" | "memory_graph_add" => tool_kg_add(&state, args),
+                "memory_kg_invalidate" | "memory_graph_invalidate" => tool_kg_invalidate(&state, args),
+                "memory_kg_timeline" | "memory_graph_timeline" => tool_kg_timeline(&state, args),
+                "memory_kg_stats" | "memory_graph_stats" => tool_kg_stats(&state, args),
+                "memory_traverse" => tool_traverse(&state, args),
+                "memory_find_tunnels" => tool_find_tunnels(&state, args),
+                "memory_graph_stats" => tool_graph_stats(&state, args),
+                "memory_diary_read" => tool_diary_read(&state, args),
+                "memory_diary_write" => tool_diary_write(&state, args),
+                "memory_status" => tool_status(&state, args),
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -444,7 +465,7 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "mempalace_search",
             "Search",
             "Semantic search. Returns verbatim drawer content with similarity scores. Supports metadata filtering via where_filter.",
-            serde_json::json!({ "type": "object", "properties": { "query": { "type": "string", "description": "What to search for" }, "limit": { "type": "integer", "description": "Max results (default 5)" }, "wing": { "type": "string", "description": "Filter by wing (optional)" }, "room": { "type": "string", "description": "Filter by room (optional)" }, "context": { "type": "string", "description": "Optional caller context for transparency metadata" }, "where_filter": { "type": "object", "description": "Filter by custom metadata fields (e.g., {\"priority\": \"high\", \"status\": \"open\"})" } }, "required": ["query"] }),
+            serde_json::json!({ "type": "object", "properties": { "query": { "type": "string", "description": "What to search for" }, "limit": { "type": "integer", "description": "Max results (default 5)" }, "wing": { "type": "string", "description": "Filter by wing (optional)" }, "room": { "type": "string", "description": "Filter by room (optional)" }, "context": { "type": "string", "description": "Optional caller context for transparency metadata" }, "where_filter": { "type": "object", "description": "Filter by custom metadata fields (e.g., {\"priority\": \"high\", \"status\": \"open\"})" }, "max_per_session": { "type": "integer", "description": "Max results per session/source_file (default 3, post-RRF filter)" } }, "required": ["query"] }),
         ),
         tool(
             "mempalace_check_duplicate",
@@ -749,8 +770,9 @@ fn tool_search(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
         limit: Option<usize>,
         context: Option<String>,
         where_filter: Option<serde_json::Value>,
+        max_per_session: Option<usize>,
     }
-    let input: Input = parse_args_with_integer_coercion(args, &["limit"])?;
+    let input: Input = parse_args_with_integer_coercion(args, &["limit", "max_per_session"])?;
     let sanitized = crate::query_sanitizer::sanitize_query(&input.query);
 
     // Convert where_filter to metadata filter if provided
@@ -793,6 +815,26 @@ fn tool_search(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
             .collect(),
     })
     .map_err(|e| internal_error_safe(&e))?;
+
+    // Apply max_per_session filter (post-query deduplication by session)
+    if let Some(max) = input.max_per_session {
+        if let Some(obj) = response.as_object_mut() {
+            if let Some(results) = obj.get_mut("results").and_then(|v| v.as_array_mut()) {
+                let mut session_counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                results.retain(|r| {
+                    let source = r
+                        .get("source_file")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    let count = session_counts.entry(source).or_insert(0);
+                    *count += 1;
+                    *count <= max
+                });
+            }
+        }
+    }
 
     if let Some(object) = response.as_object_mut() {
         if sanitized.was_sanitized {

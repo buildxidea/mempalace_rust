@@ -119,6 +119,7 @@ pub async fn search_memories(
         n_results,
         _embedding_model,
         false,
+        None,
     )
     .await
 }
@@ -132,6 +133,7 @@ pub async fn search_memories_with_rerank(
     n_results: usize,
     _embedding_model: Option<&str>,
     use_bm25: bool,
+    max_per_session: Option<usize>,
 ) -> anyhow::Result<SearchResponse> {
     let sanitized = crate::query_sanitizer::sanitize_query(query);
 
@@ -188,6 +190,17 @@ pub async fn search_memories_with_rerank(
 
         // Truncate to requested count
         search_results.truncate(n_results);
+    }
+
+    // Apply max_per_session filter (post-RRF deduplication by session)
+    if let Some(max) = max_per_session {
+        let mut session_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        search_results.retain(|r| {
+            let count = session_counts.entry(r.source_file.clone()).or_insert(0);
+            *count += 1;
+            *count <= max
+        });
     }
 
     Ok(SearchResponse {

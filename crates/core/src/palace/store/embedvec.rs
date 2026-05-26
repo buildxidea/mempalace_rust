@@ -150,6 +150,14 @@ impl PalaceStore for EmbedvecStore {
     fn tier(&self) -> StoreTier {
         StoreTier::Embedvec
     }
+
+    async fn get_drawers(
+        &self,
+        _scope: Option<&SearchScope>,
+        _limit: Option<usize>,
+    ) -> anyhow::Result<Vec<Drawer>> {
+        Ok(vec![])
+    }
 }
 
 /// L2-normalize a vector (required for cosine similarity with embedvec).

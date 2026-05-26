@@ -6,6 +6,7 @@
 //! Layer 3: Deep Search (unlimited) — Full semantic search.
 
 use crate::config::Config;
+use crate::palace::{Drawer, MemoryProvider};
 use crate::palace_db::PalaceDb;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -91,26 +92,33 @@ impl Layer1 {
         }
     }
 
-    /// Pull top drawers from PalaceDb and format as compact L1 text.
-    pub fn generate(&self, palace_db: &PalaceDb) -> String {
+    /// Pull top drawers from Palace and format as compact L1 text.
+    pub async fn generate(&self, palace: &dyn MemoryProvider) -> String {
         let wing_filter = self.wing.as_deref();
-        let results = palace_db.get_all(wing_filter, None, self.max_drawers);
+        let scope = crate::palace::SearchScope::new().limit(self.max_drawers);
+        let scope = if let Some(w) = wing_filter {
+            scope.wing(w.to_string())
+        } else {
+            scope
+        };
+        let drawers = palace.get_drawers(Some(&scope), Some(self.max_drawers)).await.unwrap_or_default();
 
-        if results.is_empty() {
-            return "## L1 — No drawers found.".to_string();
+        // Convert Drawer to QueryResult-like entries for existing logic
+        let mut entries: Vec<DrawerEntry> = Vec::new();
+        for drawer in &drawers {
+            let mut meta = drawer.metadata.clone();
+            if let Some(w) = &drawer.wing { meta.insert("wing".to_string(), serde_json::json!(w)); }
+            if let Some(r) = &drawer.room { meta.insert("room".to_string(), serde_json::json!(r)); }
+            let importance = self.extract_importance(&meta);
+            entries.push(DrawerEntry {
+                importance,
+                doc: drawer.content.clone(),
+                meta,
+            });
         }
 
-        let mut entries: Vec<DrawerEntry> = Vec::new();
-        for qr in &results {
-            for (i, doc) in qr.documents.iter().enumerate() {
-                let meta = qr.metadatas.get(i).cloned().unwrap_or_default();
-                let importance = self.extract_importance(&meta);
-                entries.push(DrawerEntry {
-                    importance,
-                    doc: doc.clone(),
-                    meta,
-                });
-            }
+        if entries.is_empty() {
+            return "## L1 — No drawers found.".to_string();
         }
 
         if entries.is_empty() {
@@ -414,8 +422,10 @@ impl MemoryStack {
 
     /// Generate wake-up text: L0 (identity) + L1 (essential story).
     pub async fn wake_up(&mut self, wing: Option<&str>) -> String {
-        let palace_db = match PalaceDb::open(&self.palace_path) {
-            Ok(db) => db,
+        let palace = match crate::palace::PalaceBuilder::new()
+            .config(crate::palace::builder::PalaceConfig { palace_path: self.palace_path.clone(), ..Default::default() })
+            .open().await {
+            Ok(p) => p,
             Err(_) => return format!("{}\n\n## L1 — No palace found.", self.l0.render()),
         };
 
@@ -424,18 +434,20 @@ impl MemoryStack {
         }
 
         let l0_text = self.l0.render();
-        let l1_text = self.l1.generate(&palace_db);
+        let l1_text = self.l1.generate(palace.as_ref()).await;
 
         format!("{}\n\n{}", l0_text, l1_text)
     }
 
     /// On-demand L2 retrieval filtered by wing/room.
     pub fn recall(&self, wing: Option<&str>, room: Option<&str>, n_results: usize) -> String {
-        let palace_db = match PalaceDb::open(&self.palace_path) {
-            Ok(db) => db,
+        let palace = match crate::palace::PalaceBuilder::new()
+            .config(crate::palace::builder::PalaceConfig { palace_path: self.palace_path.clone(), ..Default::default() })
+            .open().await {
+            Ok(p) => p,
             Err(e) => return format!("No palace found: {}", e),
         };
-        self.l2.retrieve(&palace_db, wing, room, n_results)
+        self.l2.retrieve(palace.as_ref(), wing, room, n_results)
     }
 
     /// Deep L3 semantic search.
@@ -446,8 +458,10 @@ impl MemoryStack {
         room: Option<&str>,
         n_results: usize,
     ) -> String {
-        let palace_db = match PalaceDb::open(&self.palace_path) {
-            Ok(db) => db,
+        let palace = match crate::palace::PalaceBuilder::new()
+            .config(crate::palace::builder::PalaceConfig { palace_path: self.palace_path.clone(), ..Default::default() })
+            .open().await {
+            Ok(p) => p,
             Err(e) => return format!("No palace found: {}", e),
         };
         self.l3

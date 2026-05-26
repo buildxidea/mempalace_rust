@@ -305,6 +305,12 @@ pub trait PalaceStore: Send + Sync + 'static {
     /// Flush any buffered writes to durable storage.
     async fn flush(&self) -> anyhow::Result<()>;
 
+    async fn get_drawers(
+        &self,
+        scope: Option<&SearchScope>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<Drawer>>;
+
     /// The store tier this implementation belongs to (for `mpr doctor`).
     fn tier(&self) -> StoreTier;
 }
@@ -523,6 +529,13 @@ pub trait MemoryProvider: Send + Sync + 'static {
     /// The vector store this provider uses. Useful for introspection
     /// and tier promotion checks (`mpr doctor`).
     fn store(&self) -> &dyn PalaceStore;
+
+    /// Enumerate drawers, optionally filtered by scope and limited in count.
+    async fn get_drawers(
+        &self,
+        scope: Option<&SearchScope>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<Drawer>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +643,14 @@ impl MemoryProvider for Palace {
             expired_facts: 0,
             relationship_types: vec![],
         })
+    }
+
+    async fn get_drawers(
+        &self,
+        scope: Option<&SearchScope>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<Drawer>> {
+        self.store.get_drawers(scope, limit).await
     }
 
     fn fingerprint(&self) -> &str {

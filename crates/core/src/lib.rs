@@ -46,9 +46,9 @@ pub mod entity_detector;
 #[doc(hidden)]
 pub mod entity_registry;
 #[doc(hidden)]
-pub mod exporter;
+pub mod event_capture;
 #[doc(hidden)]
-pub mod fact_checker;
+pub mod exporter;
 #[doc(hidden)]
 pub mod general_extractor;
 #[doc(hidden)]
@@ -115,6 +115,12 @@ pub mod embed;
 
 pub use embed::{embedder_from_env, resolve_embedder, DEFAULT_EMBED_MODEL};
 pub use embed::{Embedder, EmbeddingManifest, ManifestMismatch, NullEmbedder};
+
+pub use event_capture::{
+    EventCapture, EventCaptureBox, MultiEventCapture, NoOpEventCapture,
+    EmbedderEvent, MemoryWriteEvent, PostToolEvent, PreToolEvent,
+    SessionStartEvent, StopEvent, UserPromptEvent,
+};
 
 // =====================================================================
 // New-architecture surface (mp-020 / ADR-3 / ADR-6 / ADR-7)

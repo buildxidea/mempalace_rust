@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use crate::dedup_window::{DedupVerdict, WindowedDedup};
-use crate::onnx_embed::OnnxModel;
 
 pub const DEFAULT_COLLECTION_NAME: &str = "mempalace_drawers";
 pub const DEFAULT_COMPRESSED_COLLECTION_NAME: &str = "mempalace_compressed";
@@ -123,8 +122,8 @@ pub struct PalaceDb {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct DocumentEntry {
-    content: String,
-    metadata: HashMap<String, serde_json::Value>,
+    pub content: String,
+    pub metadata: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +136,7 @@ pub struct QueryResult {
 }
 
 pub struct EmbeddingDb {
-    embedder: Arc<OnnxModel>,
+    embedder: Arc<dyn crate::embed::Embedder>,
     hnsw: embedvec::HnswIndex,
     #[allow(dead_code)]
     documents: Vec<(String, String)>,
@@ -597,15 +596,58 @@ impl PalaceDb {
         query_results
     }
 
-    /// Add a single drawer with the process-global online dedup window
-    /// (mp-032). If the trimmed `content` was seen within the rolling
-    /// window, the insert is skipped and `Ok(None)` is returned; otherwise
-    /// the drawer is inserted via [`PalaceDb::add`] and `Ok(Some(id))` is
-    /// returned. Caller is responsible for `flush()` when batching.
+    /// Compute synonymy edges between rooms (mp-082).
     ///
-    /// Use [`PalaceDb::add_drawer_with_dedup`] in tests that need an
-    /// isolated dedup state, since the global window persists across
-    /// concurrent test cases otherwise.
+    /// Groups drawers by (wing, room), computes word-overlap similarity
+    /// between room pairs within each wing, and returns pairs with
+    /// similarity > 0.85 (a text-proxy for cosine embedding similarity).
+    ///
+    /// Returns `(room_a, room_b, wing, similarity)` for each synonymy edge.
+    pub fn compute_synonymy_edges(&self, threshold: f64) -> Vec<(String, String, String, f64)> {
+        let mut by_room: std::collections::HashMap<(String, String), Vec<&str>> =
+            std::collections::HashMap::new();
+        for (_id, entry) in &self.documents {
+            let wing = entry
+                .metadata
+                .get("wing")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let room = entry
+                .metadata
+                .get("room")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if wing.is_empty() || room.is_empty() {
+                continue;
+            }
+            let key = (wing.to_string(), room.to_string());
+            by_room.entry(key).or_default().push(&entry.content);
+        }
+
+        let mut edges: Vec<(String, String, String, f64)> = Vec::new();
+        let mut room_names: Vec<(String, String)> = by_room.keys().cloned().collect();
+        room_names.sort();
+
+        for (i, (wing_a, room_a)) in room_names.iter().enumerate() {
+            for (wing_b, room_b) in room_names.iter().skip(i + 1) {
+                if wing_a != wing_b {
+                    continue;
+                }
+                if room_a == room_b {
+                    continue;
+                }
+                let texts_a = by_room.get(&(wing_a.clone(), room_a.clone())).unwrap();
+                let texts_b = by_room.get(&(wing_b.clone(), room_b.clone())).unwrap();
+                let sim = pairwise_room_similarity(texts_a, texts_b);
+                if sim > threshold {
+                    edges.push((room_a.clone(), room_b.clone(), wing_a.clone(), sim));
+                }
+            }
+        }
+        edges.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
+        edges
+    }
+
     pub fn add_drawer(
         &mut self,
         id: &str,
@@ -645,14 +687,12 @@ impl PalaceDb {
 }
 
 impl EmbeddingDb {
-    pub fn new(dimension: usize) -> anyhow::Result<Self> {
-        let embedder = OnnxModel::load()?;
-        Self::with_embedder(Arc::new(embedder), dimension)
-    }
-
-    pub fn with_embedder(embedder: Arc<OnnxModel>, dimension: usize) -> anyhow::Result<Self> {
+    /// Construct with an embedder already loaded.
+    /// The embedder's `dim()` is used to size the vector storage.
+    pub fn with_embedder(embedder: Arc<dyn crate::embed::Embedder>) -> anyhow::Result<Self> {
+        let dim = embedder.dim();
         let hnsw = embedvec::HnswIndex::new(16, 200, embedvec::Distance::Cosine);
-        let storage = embedvec::VectorStorage::new(dimension, embedvec::Quantization::None);
+        let storage = embedvec::VectorStorage::new(dim, embedvec::Quantization::None);
         Ok(Self {
             embedder,
             hnsw,
@@ -661,8 +701,8 @@ impl EmbeddingDb {
         })
     }
 
-    pub fn add(&mut self, id: &str, text: &str) -> anyhow::Result<usize> {
-        let embedding = self.embed(text)?;
+    pub async fn add(&mut self, id: &str, text: &str) -> anyhow::Result<usize> {
+        let embedding = self.embed(text).await?;
         let idx = self.documents.len();
         self.documents.push((id.to_string(), text.to_string()));
         self.storage.add(&embedding, None)?;
@@ -670,16 +710,16 @@ impl EmbeddingDb {
         Ok(idx)
     }
 
-    pub fn add_batch(&mut self, items: &[(String, String)]) -> anyhow::Result<()> {
+    pub async fn add_batch(&mut self, items: &[(String, String)]) -> anyhow::Result<()> {
         if items.is_empty() {
             return Ok(());
         }
         let texts: Vec<&str> = items.iter().map(|(_, t)| t.as_str()).collect();
-        let embeddings = self.embedder.encode_batch(&texts, true)?;
+        let embeddings = self.embedder.embed_batch(&texts).await?;
         let start_idx = self.documents.len();
         for (i, (id, text)) in items.iter().enumerate() {
             self.documents.push((id.clone(), text.clone()));
-            // Normalize ONNX embeddings before storing (ONNX model returns unnormalized)
+            // Normalize embeddings before storing
             let normalized = normalize_embedding(&embeddings[i]);
             self.storage.add(&normalized, None)?;
             self.hnsw
@@ -688,8 +728,12 @@ impl EmbeddingDb {
         Ok(())
     }
 
-    pub fn query(&self, query_text: &str, n_results: usize) -> anyhow::Result<Vec<(f32, usize)>> {
-        let query_embedding = self.embed(query_text)?;
+    pub async fn query(
+        &self,
+        query_text: &str,
+        n_results: usize,
+    ) -> anyhow::Result<Vec<(f32, usize)>> {
+        let query_embedding = self.embed(query_text).await?;
         let normalized_query = normalize_embedding(&query_embedding);
         let results = self
             .hnsw
@@ -697,8 +741,8 @@ impl EmbeddingDb {
         Ok(results.into_iter().map(|(id, dist)| (dist, id)).collect())
     }
 
-    pub fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
-        let embedding = self.embedder.encode(text)?;
+    pub async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        let embedding = self.embedder.embed(text).await?;
         Ok(embedding)
     }
 
@@ -713,6 +757,40 @@ impl EmbeddingDb {
             .hnsw
             .search(normalized_query, n_results, 1024, &self.storage, None)?;
         Ok(results.into_iter().map(|(id, dist)| (dist, id)).collect())
+    }
+}
+
+fn pairwise_room_similarity(texts_a: &[&str], texts_b: &[&str]) -> f64 {
+    if texts_a.is_empty() || texts_b.is_empty() {
+        return 0.0;
+    }
+    let mut total_sim = 0.0_f64;
+    let mut count = 0_usize;
+    for text_a in texts_a {
+        let words_a: std::collections::HashSet<_> = text_a.split_whitespace().collect();
+        if words_a.is_empty() {
+            continue;
+        }
+        let mut best_sim = 0.0_f64;
+        for text_b in texts_b {
+            let words_b: std::collections::HashSet<_> = text_b.split_whitespace().collect();
+            if words_b.is_empty() {
+                continue;
+            }
+            let intersection = words_a.intersection(&words_b).count() as f64;
+            let union = words_a.union(&words_b).count() as f64;
+            let sim = if union > 0.0 { intersection / union } else { 0.0 };
+            if sim > best_sim {
+                best_sim = sim;
+            }
+        }
+        total_sim += best_sim;
+        count += 1;
+    }
+    if count > 0 {
+        total_sim / count as f64
+    } else {
+        0.0
     }
 }
 

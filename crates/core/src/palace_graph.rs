@@ -393,6 +393,14 @@ fn build_graph_from_db_path(palace_path: &std::path::Path) -> PalaceGraph {
             rooms,
         });
     }
+
+    if let Ok(db) = crate::palace_db::PalaceDb::open(palace_path) {
+        let syn_edges = db.compute_synonymy_edges(0.85);
+        for (room_a, room_b, wing, sim) in syn_edges {
+            graph.add_synonymy_edge(&room_a, &room_b, &wing, sim);
+        }
+    }
+
     graph
 }
 
@@ -518,6 +526,11 @@ pub struct GraphEdge {
     pub wing_b: String,
     pub hall: String,
     pub count: usize,
+    /// Kind of edge: "tunnel" for cross-wing room edges, "synonymy" for
+    /// semantically similar room pairs (cosine similarity > 0.85 proxy via
+    /// text overlap).mp-082.
+    #[serde(default)]
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -581,6 +594,48 @@ impl PalaceGraph {
         }
 
         self.rebuild_edges();
+    }
+
+    pub fn add_synonymy_edge(&mut self, room_a: &str, room_b: &str, wing: &str, _similarity: f64) {
+        if room_a.is_empty() || room_b.is_empty() || room_a == room_b {
+            return;
+        }
+        for (node_name, node) in &mut self.nodes {
+            let matches_a = node_name == room_a;
+            let matches_b = node_name == room_b;
+            if !matches_a && !matches_b {
+                continue;
+            }
+            if !node.wings.iter().any(|w| w == wing) {
+                node.wings.push(wing.to_string());
+                node.wings.sort();
+            }
+            if matches_a && !node.halls.iter().any(|h| h == "synonymy") {
+                node.halls.push("synonymy".to_string());
+            }
+            if matches_b && !node.halls.iter().any(|h| h == "synonymy") {
+                node.halls.push("synonymy".to_string());
+            }
+        }
+
+        let (r_a, r_b) = if room_a <= room_b {
+            (room_a.to_string(), room_b.to_string())
+        } else {
+            (room_b.to_string(), room_a.to_string())
+        };
+        let already = self.edges.iter().any(|e| {
+            e.kind == "synonymy" && e.room == r_a && e.wing_a == r_b
+        });
+        if !already {
+            self.edges.push(GraphEdge {
+                room: r_a,
+                wing_a: r_b,
+                wing_b: wing.to_string(),
+                hall: "synonymy".to_string(),
+                count: 1,
+                kind: "synonymy".to_string(),
+            });
+        }
     }
 
     pub fn traverse(&self, start_room: &str, max_hops: usize) -> TraverseOutcome {
@@ -748,6 +803,7 @@ impl PalaceGraph {
                             wing_b: wing_b.clone(),
                             hall: hall.clone(),
                             count: data.count,
+                            kind: "tunnel".to_string(),
                         });
                     }
                 }

@@ -271,12 +271,10 @@ pub fn delete_tunnel(tunnel_id: &str) -> bool {
     }
 }
 
-static _GRAPH_CACHE: RwLock<GraphCache> = RwLock::new(GraphCache {
-    nodes: None,
-    edges: None,
-    cached_at: 0,
-    invalidate_counter: 0,
-});
+use std::sync::LazyLock;
+
+static _GRAPH_CACHE: LazyLock<RwLock<HashMap<PathBuf, GraphCache>>, fn() -> RwLock<HashMap<PathBuf, GraphCache>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 static _GRAPH_BUILD_VERSION: AtomicU64 = AtomicU64::new(0);
 
@@ -288,17 +286,34 @@ struct GraphCache {
     invalidate_counter: u64,
 }
 
-pub fn invalidate_cache() {
+impl GraphCache {
+    fn is_warm(&self) -> bool {
+        if self.nodes.is_none() {
+            return false;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let elapsed = std::time::Duration::from_secs(now.saturating_sub(self.cached_at));
+        elapsed < std::time::Duration::from_secs(60)
+    }
+}
+
+pub fn invalidate_cache(palace_path: &std::path::Path) {
+    let key = palace_path.to_path_buf();
     let mut cache = _GRAPH_CACHE.write().unwrap();
-    cache.nodes = None;
-    cache.edges = None;
-    cache.cached_at = 0;
-    cache.invalidate_counter += 1;
+    if let Some(entry) = cache.get_mut(&key) {
+        entry.nodes = None;
+        entry.edges = None;
+        entry.cached_at = 0;
+        entry.invalidate_counter += 1;
+    }
     _GRAPH_BUILD_VERSION.fetch_add(1, Ordering::SeqCst);
 }
 
 pub fn cache_invalidation_count() -> u64 {
-    _GRAPH_CACHE.read().unwrap().invalidate_counter
+    _GRAPH_BUILD_VERSION.load(Ordering::SeqCst)
 }
 
 /// Returns a warm cached `PalaceGraph` built from `palace_path`, rebuilding
@@ -307,17 +322,19 @@ pub fn cache_invalidation_count() -> u64 {
 /// Thread-safe. Uses a 60-second TTL so repeated graph-tool calls within
 /// the same time window reuse the in-memory graph without re-querying the
 /// vector DB. Any write to the palace (add_drawer, delete_drawer,
-/// diary_write) calls `invalidate_cache()` to bust the stale copy.
+/// diary_write) calls `invalidate_cache(palace_path)` to bust the stale copy.
 pub fn cached_graph(palace_path: &std::path::Path) -> PalaceGraph {
-    if _cache_is_warm() {
-        let cache = _GRAPH_CACHE.read().unwrap();
-        if let (Some(nodes), Some(edges)) = (&cache.nodes, &cache.edges) {
+    let key = palace_path.to_path_buf();
+    let cache = _GRAPH_CACHE.read().unwrap();
+    if let Some(entry) = cache.get(&key) {
+        if entry.is_warm() {
             return PalaceGraph {
-                nodes: nodes.clone(),
-                edges: edges.clone(),
+                nodes: entry.nodes.as_ref().unwrap().clone(),
+                edges: entry.edges.as_ref().unwrap().clone(),
             };
         }
     }
+    drop(cache);
 
     let graph = build_graph_from_db_path(palace_path);
     {
@@ -326,9 +343,15 @@ pub fn cached_graph(palace_path: &std::path::Path) -> PalaceGraph {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        cache.nodes = Some(graph.nodes.clone());
-        cache.edges = Some(graph.edges.clone());
-        cache.cached_at = now;
+        let entry = cache.entry(key).or_insert_with(|| GraphCache {
+            nodes: None,
+            edges: None,
+            cached_at: 0,
+            invalidate_counter: 0,
+        });
+        entry.nodes = Some(graph.nodes.clone());
+        entry.edges = Some(graph.edges.clone());
+        entry.cached_at = now;
     }
     graph
 }
@@ -402,22 +425,6 @@ fn build_graph_from_db_path(palace_path: &std::path::Path) -> PalaceGraph {
     }
 
     graph
-}
-
-fn _cache_is_warm() -> bool {
-    let cache = match _GRAPH_CACHE.read() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    if cache.nodes.is_none() {
-        return false;
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let elapsed = Duration::from_secs(now.saturating_sub(cache.cached_at));
-    elapsed < GRAPH_CACHE_TTL
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

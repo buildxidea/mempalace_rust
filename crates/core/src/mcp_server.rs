@@ -937,7 +937,7 @@ fn tool_add_drawer(state: &AppState, args: JsonObject) -> Result<CallToolResult,
     db.add(&[(&drawer_id, &input.content)], &[&standard_metadata])
         .map_err(|e| internal_error_safe(&e))?;
     db.flush().map_err(|e| internal_error_safe(&e))?;
-    crate::palace_graph::invalidate_cache();
+    crate::palace_graph::invalidate_cache(&state.palace_path);
     ok_json(
         serde_json::json!({ "success": true, "drawer_id": drawer_id, "wing": input.wing, "room": input.room }),
     )
@@ -959,7 +959,7 @@ fn tool_delete_drawer(state: &AppState, args: JsonObject) -> Result<CallToolResu
         .delete_id(&input.drawer_id)
         .map_err(|e| internal_error_safe(&e))?;
     if removed {
-        crate::palace_graph::invalidate_cache();
+        crate::palace_graph::invalidate_cache(&state.palace_path);
         ok_json(serde_json::json!({ "success": true, "drawer_id": input.drawer_id }))
     } else {
         ok_json(
@@ -1039,7 +1039,7 @@ fn tool_kg_add(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
             None,
         )
         .map_err(|e| internal_error_safe(&e))?;
-    crate::palace_graph::invalidate_cache();
+    crate::palace_graph::invalidate_cache(&state.palace_path);
     ok_json(
         serde_json::json!({ "success": true, "triple_id": triple_id, "fact": format!("{} → {} → {}", input.subject, input.predicate, input.object) }),
     )
@@ -1330,7 +1330,7 @@ fn tool_diary_write(state: &AppState, args: JsonObject) -> Result<CallToolResult
     )
     .map_err(|e| internal_error_safe(&e))?;
     db.flush().map_err(|e| internal_error_safe(&e))?;
-    crate::palace_graph::invalidate_cache();
+    crate::palace_graph::invalidate_cache(&state.palace_path);
     ok_json(serde_json::json!({
         "success": true,
         "entry_id": id,

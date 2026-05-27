@@ -9,7 +9,7 @@
 // Hosts (jcode, third-party Rust agents) that want to integrate
 // mempalace as a library consume only `Palace` / `MemoryProvider` / the
 // supporting traits. Concrete implementation details (`PalaceDb`,
-// `KnowledgeGraph`, `OnnxModel`) stay internal and are replaced via the
+// `KnowledgeGraph`, `Embedder`) stay internal and are replaced via the
 // builder pattern.
 //
 // Architecture per the master plan (§3 "Concrete API Sketch"):
@@ -44,9 +44,9 @@ pub mod builder;
 pub mod store;
 
 pub use builder::PalaceBuilder;
-pub use store::StoreTier;
 #[cfg(feature = "embed-embedvec")]
 pub use store::embedvec::EmbedvecStore;
+pub use store::StoreTier;
 
 // ---------------------------------------------------------------------------
 // Public types (mirroring the §3 Concrete API Sketch)
@@ -437,7 +437,8 @@ impl Drawer {
     }
 
     pub fn metadata(mut self, key: impl Into<String>, value: impl serde::Serialize) -> Self {
-        self.metadata.insert(key.into(), serde_json::to_value(value).unwrap_or_default());
+        self.metadata
+            .insert(key.into(), serde_json::to_value(value).unwrap_or_default());
         self
     }
 }
@@ -482,22 +483,14 @@ pub trait MemoryProvider: Send + Sync + 'static {
 
     /// Convenience: file content directly with a kind and scope.
     /// Shorthand for `add_drawer(Drawer::new(content).kind(kind).wing(wing))`.
-    async fn remember(
-        &self,
-        content: String,
-        scope: MemoryScope,
-    ) -> anyhow::Result<DrawerId>;
+    async fn remember(&self, content: String, scope: MemoryScope) -> anyhow::Result<DrawerId>;
 
     /// Remove a drawer by ID. Returns `true` if the drawer existed.
     async fn forget(&self, id: &DrawerId) -> anyhow::Result<bool>;
 
     /// Search using natural-language query. Embeds the query, runs ANN,
     /// and returns ranked results.
-    async fn search(
-        &self,
-        query: &str,
-        scope: &SearchScope,
-    ) -> anyhow::Result<Vec<SearchHit>>;
+    async fn search(&self, query: &str, scope: &SearchScope) -> anyhow::Result<Vec<SearchHit>>;
 
     /// Search using a pre-computed embedding vector. Useful when the
     /// caller has already embedded (e.g. jcode's own embedder) and
@@ -611,11 +604,7 @@ impl MemoryProvider for Palace {
         Ok(n > 0)
     }
 
-    async fn search(
-        &self,
-        query: &str,
-        scope: &SearchScope,
-    ) -> anyhow::Result<Vec<SearchHit>> {
+    async fn search(&self, query: &str, scope: &SearchScope) -> anyhow::Result<Vec<SearchHit>> {
         let vec = self.embedder.embed(query).await?;
         self.search_with_embedding(&vec, scope).await
     }

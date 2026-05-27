@@ -76,7 +76,7 @@ pub mod mine_pid_guard;
 #[doc(hidden)]
 pub mod normalize;
 #[doc(hidden)]
-pub mod onnx_embed;
+
 #[doc(hidden)]
 pub mod palace_db;
 #[doc(hidden)]
@@ -117,9 +117,8 @@ pub use embed::{embedder_from_env, resolve_embedder, DEFAULT_EMBED_MODEL};
 pub use embed::{Embedder, EmbeddingManifest, ManifestMismatch, NullEmbedder};
 
 pub use event_capture::{
-    EventCapture, EventCaptureBox, MultiEventCapture, NoOpEventCapture,
-    EmbedderEvent, MemoryWriteEvent, PostToolEvent, PreToolEvent,
-    SessionStartEvent, StopEvent, UserPromptEvent,
+    EmbedderEvent, EventCapture, EventCaptureBox, MemoryWriteEvent, MultiEventCapture,
+    NoOpEventCapture, PostToolEvent, PreToolEvent, SessionStartEvent, StopEvent, UserPromptEvent,
 };
 
 // =====================================================================
@@ -128,8 +127,8 @@ pub use event_capture::{
 
 pub mod palace;
 pub use palace::{
-    Drawer, DrawerId, DrawerKind, MemoryProvider, MemoryScope,
-    Palace, PalaceBuilder, SearchHit, SearchScope, StoreTier,
+    Drawer, DrawerId, DrawerKind, MemoryProvider, MemoryScope, Palace, PalaceBuilder, SearchHit,
+    SearchScope, StoreTier,
 };
 // PalaceConfig lives in the builder module; re-export from here for ergonomic public API.
 pub use palace::builder::PalaceConfig;

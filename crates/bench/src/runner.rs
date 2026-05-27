@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::Instant;
 
-use mempalace_core::onnx_embed::OnnxModel;
+use mempalace_core::embed::resolve_embedder;
 use mempalace_core::palace_db::EmbeddingDb;
 
 use crate::dataset::{build_session_corpus, build_turn_corpus, BenchmarkEntry, Granularity};
@@ -89,22 +89,22 @@ impl BenchmarkResults {
     }
 }
 
-fn rank_corpus(
+async fn rank_corpus(
     query: &str,
     corpus_documents: &[String],
     n_results: usize,
-    embedder: &Arc<OnnxModel>,
+    embedder: Arc<dyn mempalace_core::embed::Embedder>,
 ) -> Result<Vec<usize>> {
-    let mut db = EmbeddingDb::with_embedder(embedder.clone(), 384)?;
+    let mut db = EmbeddingDb::with_embedder(embedder)?;
 
     let items: Vec<(String, String)> = corpus_documents
         .iter()
         .enumerate()
         .map(|(i, doc)| (format!("doc_{}", i), doc.clone()))
         .collect();
-    db.add_batch(&items)?;
+    db.add_batch(&items).await?;
 
-    let results = db.query(query, n_results)?;
+    let results = db.query(query, n_results).await?;
 
     let ranked_indices: Vec<usize> = results.into_iter().map(|(_, idx)| idx).collect();
 
@@ -115,7 +115,8 @@ pub async fn run_benchmark(
     entries: &[BenchmarkEntry],
     config: &BenchmarkConfig,
 ) -> Result<BenchmarkResults> {
-    let embedder = Arc::new(OnnxModel::load()?);
+    let embedder: Arc<dyn mempalace_core::embed::Embedder> =
+        (resolve_embedder(&config.embed_model).map_err(anyhow::Error::msg)?).into();
 
     let mut metrics = BenchmarkMetrics::new(config.ks.clone());
     let mut per_type_results: std::collections::HashMap<_, _> = Default::default();
@@ -127,10 +128,12 @@ pub async fn run_benchmark(
         if let Some(dur) = run_single_question(
             entry,
             config,
-            &embedder,
+            embedder.clone(),
             &mut metrics,
             &mut per_type_results,
-        )? {
+        )
+        .await?
+        {
             durations_ms.push(dur);
         } else {
             skipped += 1;
@@ -146,10 +149,10 @@ pub async fn run_benchmark(
     })
 }
 
-fn run_single_question(
+async fn run_single_question(
     entry: &BenchmarkEntry,
     config: &BenchmarkConfig,
-    embedder: &Arc<OnnxModel>,
+    embedder: Arc<dyn mempalace_core::embed::Embedder>,
     metrics: &mut BenchmarkMetrics,
     per_type_results: &mut std::collections::HashMap<String, BenchmarkMetrics>,
 ) -> Result<Option<u64>> {
@@ -169,7 +172,8 @@ fn run_single_question(
         &corpus_documents,
         config.n_results,
         embedder,
-    )?;
+    )
+    .await?;
 
     let correct_session_ids: std::collections::HashSet<&str> = entry
         .answer_session_ids
@@ -217,23 +221,24 @@ fn run_single_question(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_rank_corpus_returns_sorted_indices() {
-        let embedder = match OnnxModel::load() {
-            Ok(e) => Arc::new(e),
-            Err(e) => {
-                eprintln!("OnnxModel not available (Python/chromadb required): {}", e);
-                return;
-            }
-        };
+    #[tokio::test]
+    async fn test_rank_corpus_returns_sorted_indices() {
+        let embedder: Arc<dyn mempalace_core::embed::Embedder> =
+            match (resolve_embedder("all-MiniLM-L6-v2").map_err(anyhow::Error::msg)?).into() {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("embedder not available: {}", e);
+                    return;
+                }
+            };
         let docs = vec![
             "I worked on the auth migration today".to_string(),
             "I still remember the happy high school experiences".to_string(),
         ];
 
-        let result = rank_corpus("high school", &docs, 2, &embedder);
+        let result = rank_corpus("high school", &docs, 2, embedder).await;
         if let Err(e) = result {
-            eprintln!("rank_corpus failed (Python subprocess issue): {}", e);
+            eprintln!("rank_corpus failed: {}", e);
             return;
         }
         let indices = result.unwrap();

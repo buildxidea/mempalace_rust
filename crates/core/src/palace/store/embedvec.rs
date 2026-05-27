@@ -32,10 +32,9 @@ use crate::palace::{Drawer, DrawerId, PalaceStore, SearchHit, SearchScope, Store
 /// Wraps the existing `EmbeddingDb` (embedvec HNSW + VectorStorage) behind
 /// the `PalaceStore` trait.
 ///
-/// Construction: `EmbedvecStore::new()` loads the legacy `OnnxModel`
-/// embedder (384-dim, MiniLM-L6-v2). For the new trait-based API where
-/// the embedder is injected via `PalaceBuilder::embedder`, use
-/// `EmbedvecStore::with_embedder(Arc<dyn Embedder>)` instead.
+/// Construction: `EmbedvecStore::new(embedder)` takes an injected
+/// `Arc<dyn Embedder>` and uses `embedder.dim()` to size the vector
+/// storage.
 ///
 /// ## Note on embedding
 ///
@@ -48,18 +47,14 @@ pub struct EmbedvecStore {
 }
 
 impl EmbedvecStore {
-    /// New store with a fresh `OnnxModel` (384-dim MiniLM-L6-v2).
-    /// Uses the legacy embedder path — for new code prefer
-    /// `with_embedder(Arc<dyn Embedder>)` with `fastembed-rs`.
-    pub fn new() -> anyhow::Result<Self> {
-        let inner = crate::palace_db::EmbeddingDb::new(384)?;
+    /// Construct with an injected embedder.
+    pub async fn new(embedder: Arc<dyn crate::embed::Embedder>) -> anyhow::Result<Self> {
+        let inner = crate::palace_db::EmbeddingDb::with_embedder(embedder)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(inner)),
         })
     }
 
-    /// Access the raw `EmbeddingDb` for cases that need embedvec internals
-    /// (e.g. calling `add_batch` directly during bulk mining).
     pub fn raw(&self) -> Arc<Mutex<crate::palace_db::EmbeddingDb>> {
         self.inner.clone()
     }
@@ -67,7 +62,7 @@ impl EmbedvecStore {
 
 impl Default for EmbedvecStore {
     fn default() -> Self {
-        Self::new().expect("EmbedvecStore::default: failed to load OnnxModel")
+        unimplemented!("EmbedvecStore::default requires an embedder; use EmbedvecStore::new(embedder).await")
     }
 }
 
@@ -78,18 +73,18 @@ impl PalaceStore for EmbedvecStore {
             return Ok(());
         }
         let mut inner = self.inner.lock().await;
-        // Convert drawers to (id, text) pairs for add_batch.
-        // IDs are generated as sequential indices; the actual drawer
-        // content + metadata is stored in the JSON layer (PalaceDb).
         let items: Vec<(String, String)> = drawers
             .into_iter()
             .enumerate()
             .map(|(i, d)| {
-                let id = d.id.map(|di| di.0).unwrap_or_else(|| format!("drawer-{}", i));
+                let id = d
+                    .id
+                    .map(|di| di.0)
+                    .unwrap_or_else(|| format!("drawer-{}", i));
                 (id, d.content)
             })
             .collect();
-        inner.add_batch(&items)?;
+        inner.add_batch(&items).await?;
         Ok(())
     }
 
@@ -118,10 +113,7 @@ impl PalaceStore for EmbedvecStore {
             // Note: if the store was opened from a file with existing
             // drawers, those aren't re-embedded. This path is for new
             // writes via add_batch only.
-            let text = inner
-                .nth_text(idx)
-                .unwrap_or_default()
-                .to_string();
+            let text = inner.nth_text(idx).unwrap_or_default().to_string();
             let similarity = 1.0 - dist;
             hits.push(SearchHit {
                 text,

@@ -480,6 +480,7 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
 // ServerHandler impl
 // ---------------------------------------------------------------------------
 
+#[non_exhaustive]
 pub struct MempalaceServer {
     state: Arc<AppState>,
 }

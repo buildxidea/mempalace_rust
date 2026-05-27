@@ -421,6 +421,7 @@ fn _cache_is_warm() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PalaceGraph {
     nodes: HashMap<String, GraphNode>,
     edges: Vec<GraphEdge>,

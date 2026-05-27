@@ -12,6 +12,7 @@ use std::path::Path;
 //
 // If you add a new code path that accesses conn from a background thread
 // without going through Palace's locking, you MUST add a mutex there.
+#[non_exhaustive]
 pub struct KnowledgeGraph {
     conn: Connection,
 }

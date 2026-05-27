@@ -39,16 +39,21 @@
 
 use async_trait::async_trait;
 
+#[doc(hidden)]
 pub mod manifest;
+#[doc(hidden)]
 pub mod null;
 
 #[cfg(feature = "embed-fastembed")]
+#[doc(hidden)]
 pub mod fastembed;
 
 #[cfg(feature = "embed-model2vec")]
+#[doc(hidden)]
 pub mod model2vec;
 
 #[cfg(feature = "embed-tract")]
+#[doc(hidden)]
 pub mod tract;
 
 pub use manifest::{EmbeddingManifest, ManifestMismatch};

@@ -45,11 +45,17 @@ pub mod null;
 #[cfg(feature = "embed-fastembed")]
 pub mod fastembed;
 
+#[cfg(feature = "embed-model2vec")]
+pub mod model2vec;
+
 pub use manifest::{EmbeddingManifest, ManifestMismatch};
 pub use null::NullEmbedder;
 
 #[cfg(feature = "embed-fastembed")]
 pub use fastembed::FastEmbedEmbedder;
+
+#[cfg(feature = "embed-model2vec")]
+pub use model2vec::Model2VecEmbedder;
 
 /// Pluggable embedding backend. Hosts can inject their own.
 ///
@@ -115,23 +121,28 @@ mod tests {
 /// the human-facing accepted-list error message: the canonical
 /// short name appears first for each fastembed model.
 const MODEL_ALIASES: &[(&str, &str)] = &[
-    // BGE family — default first
+    // BGE family — default first (fastembed)
     ("bge-small-en-v15", "BGESmallENV15"),
     ("bge-small-en", "BGESmallENV15"),
     ("bge-base-en", "BGEBaseENV15"),
     ("bge-base-en-v15", "BGEBaseENV15"),
     ("bge-large-en", "BGELargeENV15"),
     ("bge-large-en-v15", "BGELargeENV15"),
-    // Multilingual E5
+    // Multilingual E5 (fastembed)
     ("multilingual-e5-small", "MultilingualE5Small"),
     ("multilingual-e5-base", "MultilingualE5Base"),
     ("multilingual-e5-large", "MultilingualE5Large"),
-    // Nomic / MxBai
+    // Nomic / MxBai (fastembed)
     ("nomic-embed-text-v15", "NomicEmbedTextV15"),
     ("mxbai-embed-large", "MxbaiEmbedLargeV1"),
-    // Legacy compat with the Python ONNX embedder default
+    // Legacy compat with the Python ONNX embedder default (fastembed)
     ("all-minilm-l6-v2", "AllMiniLML6V2"),
     ("all-minilm-l12-v2", "AllMiniLML12V2"),
+    // Model2Vec models (embed-model2vec)
+    ("potion-base-8M", "M2V:potion-base-8M"),
+    ("potion-base-4M", "M2V:potion-base-4M"),
+    ("potion-base-2M", "M2V:potion-base-2M"),
+    ("potion-multilingual-128M", "M2V:potion-multilingual-128M"),
 ];
 
 /// Default short name used when `MEMPALACE_EMBED_MODEL` is unset.
@@ -190,11 +201,24 @@ pub fn resolve_embedder(name: &str) -> anyhow::Result<Box<dyn Embedder>> {
     construct_embedder(target)
 }
 
-/// Construct the concrete embedder for a resolved fastembed enum
-/// identifier. Split out so [`resolve_embedder`] can validate the name
+/// Construct the concrete embedder for a resolved model alias.
+/// Split out so [`resolve_embedder`] can validate the name
 /// independently of the (feature-gated) backend wiring.
 #[cfg(feature = "embed-fastembed")]
-fn construct_embedder(target: &'static str) -> anyhow::Result<Box<dyn Embedder>> {
+fn construct_embedder(target: &str) -> anyhow::Result<Box<dyn Embedder>> {
+    if target.starts_with("M2V:") {
+        #[cfg(feature = "embed-model2vec")]
+        {
+            return construct_model2vec_embedder(target);
+        }
+        #[cfg(not(feature = "embed-model2vec"))]
+        {
+            anyhow::bail!(
+                "model2vec backend not compiled in. Enable `embed-model2vec` feature \
+                 or use one of the fastembed models: bge-small-en-v15, bge-base-en, etc."
+            );
+        }
+    }
     use ::fastembed::EmbeddingModel;
 
     let model = match target {
@@ -217,16 +241,29 @@ fn construct_embedder(target: &'static str) -> anyhow::Result<Box<dyn Embedder>>
     Ok(Box::new(embedder))
 }
 
+#[cfg(feature = "embed-model2vec")]
+fn construct_model2vec_embedder(target: &str) -> anyhow::Result<Box<dyn Embedder>> {
+    let model_name = target.strip_prefix("M2V:").unwrap_or(target);
+    let embedder = Model2VecEmbedder::with_model(model_name.to_owned(), None)?;
+    Ok(Box::new(embedder))
+}
+
 /// Without `embed-fastembed`, no concrete embedder can be wired up.
 /// Validation of the alias still works (so config errors surface even
 /// in a `--no-default-features` build) but loading fails with a
 /// pointer to the feature flag.
 #[cfg(not(feature = "embed-fastembed"))]
-fn construct_embedder(target: &'static str) -> anyhow::Result<Box<dyn Embedder>> {
+fn construct_embedder(target: &str) -> anyhow::Result<Box<dyn Embedder>> {
+    if target.starts_with("M2V:") {
+        #[cfg(feature = "embed-model2vec")]
+        {
+            return construct_model2vec_embedder(target);
+        }
+    }
     anyhow::bail!(
         "no embedder backend compiled in. Recognised alias '{target}' \
-         requires the `embed-fastembed` feature (the default). Rebuild \
-         with `--features embed-fastembed`."
+         requires the `embed-fastembed` or `embed-model2vec` feature. \
+         Rebuild with `--features embed-fastembed` or `--features embed-model2vec`."
     )
 }
 

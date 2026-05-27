@@ -19,6 +19,10 @@ default = ["embed-fastembed"]
 # for `MEMPALACE_EMBED_MODEL` env-var → `EmbeddingModel` enum mapping
 # (mp-012, mp-018).
 embed-fastembed = ["dep:fastembed"]
+# `model2vec-rs`. Pure-Rust static embedding (Model2Vec technique).
+# Lightweight alternative to fastembed for low-power machines.
+# Sub-ms inference. See `crates/core/src/embed/model2vec.rs` (mp-013).
+embed-model2vec = ["dep:model2vec-rs"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -47,12 +51,17 @@ unicode-script = "0.5"
 signal-hook = "0.3"
 async-trait = { workspace = true }
 
-# Optional: `fastembed-rs` powers `FastEmbedEmbedder` behind feature
+# `fastembed-rs` powers `FastEmbedEmbedder` behind feature
 # `embed-fastembed` (mp-012). Pulls in `ort` (C++ ONNX Runtime) and
 # `tokenizers`. Disable via `--no-default-features` for builds that
 # need a pure-Rust embedder (e.g. `embed-tract` from mp-014) or the
 # `NullEmbedder` test backend.
 fastembed = { version = "4", optional = true }
+
+# `model2vec-rs` powers `Model2VecEmbedder` behind feature
+# `embed-model2vec` (mp-013). Pure-Rust static embedding models.
+# Lightweight fallback for low-power machines (sub-ms inference).
+model2vec-rs = { version = "0.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

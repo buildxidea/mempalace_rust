@@ -847,7 +847,7 @@ mod tests {
             .unwrap();
         assert!(triple_id.starts_with("t_"));
 
-        let results = kg.query_entity("Max", None, "outgoing").unwrap();
+        let results = kg.query_entity("Max", None, None, "outgoing").unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].predicate, "child_of");
         assert_eq!(results[0].object, "Alice");
@@ -875,13 +875,13 @@ mod tests {
             None,
         )
         .unwrap();
-        let results = kg.query_entity("Max", None, "outgoing").unwrap();
+        let results = kg.query_entity("Max", None, None, "outgoing").unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].current);
 
         kg.invalidate("Max", "does", "swimming", Some("2025-06-01"))
             .unwrap();
-        let results = kg.query_entity("Max", None, "outgoing").unwrap();
+        let results = kg.query_entity("Max", None, None, "outgoing").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].predicate, "does");
         assert_eq!(results[0].object, "swimming");
@@ -889,12 +889,12 @@ mod tests {
         assert_eq!(results[0].valid_to.as_deref(), Some("2025-06-01"));
 
         let as_of_after = kg
-            .query_entity("Max", Some("2025-07-01"), "outgoing")
+            .query_entity("Max", Some("2025-07-01"), None, "outgoing")
             .unwrap();
         assert!(as_of_after.is_empty());
 
         let as_of_before = kg
-            .query_entity("Max", Some("2025-03-01"), "outgoing")
+            .query_entity("Max", Some("2025-03-01"), None, "outgoing")
             .unwrap();
         assert_eq!(as_of_before.len(), 1);
         assert_eq!(as_of_before[0].predicate, "does");
@@ -933,16 +933,16 @@ mod tests {
         .unwrap();
 
         let current = kg
-            .query_entity("Alice", Some("2026-01-15"), "outgoing")
+            .query_entity("Alice", Some("2026-01-15"), None, "outgoing")
             .unwrap();
         assert!(!current.is_empty());
 
         let after = kg
-            .query_entity("Alice", Some("2026-03-01"), "outgoing")
+            .query_entity("Alice", Some("2026-03-01"), None, "outgoing")
             .unwrap();
         assert!(after.is_empty());
 
-        let all = kg.query_entity("Alice", None, "outgoing").unwrap();
+        let all = kg.query_entity("Alice", None, None, "outgoing").unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].object, "Max injury");
         assert!(!all[0].current);
@@ -1033,7 +1033,7 @@ mod tests {
         .unwrap();
 
         // Query should find Alice at Acme
-        let results = kg.query_entity("Alice", None, "outgoing").unwrap();
+        let results = kg.query_entity("Alice", None, None, "outgoing").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].object, "Acme");
         assert!(results[0].current);
@@ -1054,13 +1054,13 @@ mod tests {
         .unwrap();
 
         let jan_2022 = kg
-            .query_entity("Alice", Some("2022-01-01"), "outgoing")
+            .query_entity("Alice", Some("2022-01-01"), None, "outgoing")
             .unwrap();
         assert_eq!(jan_2022.len(), 1);
         assert_eq!(jan_2022[0].object, "Acme");
 
         let jan_2024 = kg
-            .query_entity("Alice", Some("2024-01-01"), "outgoing")
+            .query_entity("Alice", Some("2024-01-01"), None, "outgoing")
             .unwrap();
         assert_eq!(jan_2024.len(), 1);
         assert_eq!(jan_2024[0].object, "NewCo");
@@ -1070,7 +1070,7 @@ mod tests {
         let timeline = kg.timeline(Some("Alice")).unwrap();
         assert_eq!(timeline.len(), 2);
 
-        let all = kg.query_entity("Alice", None, "outgoing").unwrap();
+        let all = kg.query_entity("Alice", None, None, "outgoing").unwrap();
         assert_eq!(all.len(), 2);
         assert!(all
             .iter()
@@ -1111,7 +1111,7 @@ mod tests {
         )
         .unwrap();
 
-        let results = kg.query_relationship("works_at", None).unwrap();
+        let results = kg.query_relationship("works_at", None, None).unwrap();
         assert_eq!(results.len(), 2);
         assert!(results
             .iter()
@@ -1242,7 +1242,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let outgoing = kg.query_entity("Alice", None, "outgoing").unwrap();
+        let outgoing = kg.query_entity("Alice", None, None, "outgoing").unwrap();
         assert_eq!(outgoing.len(), 1);
         assert_eq!(outgoing[0].source_drawer_id.as_deref(), Some("drawer_xyz"));
 
@@ -1793,7 +1793,7 @@ mod bitemporal_tests {
         )
         .unwrap();
 
-        let results = kg.query_entity("Grace", None, "outgoing").unwrap();
+        let results = kg.query_entity("Grace", None, None, "outgoing").unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             results[0].t_expired.is_none(),

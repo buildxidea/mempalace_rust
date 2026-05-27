@@ -224,18 +224,14 @@ mod tests {
     #[tokio::test]
     async fn test_rank_corpus_returns_sorted_indices() {
         let embedder: Arc<dyn mempalace_core::embed::Embedder> =
-            Arc::new(*resolve_embedder("all-MiniLM-L6-v2").map_err(anyhow::Error::msg)?);
+            Arc::from(resolve_embedder("all-MiniLM-L6-v2").map_err(anyhow::Error::msg).expect("resolve_embedder should succeed"));
         let docs = vec![
             "I worked on the auth migration today".to_string(),
             "I still remember the happy high school experiences".to_string(),
         ];
 
         let result = rank_corpus("high school", &docs, 2, embedder).await;
-        if let Err(e) = result {
-            eprintln!("rank_corpus failed: {}", e);
-            return;
-        }
-        let indices = result.unwrap();
+        let indices = result.expect("rank_corpus should succeed");
         assert_eq!(indices.len(), 2);
     }
 }

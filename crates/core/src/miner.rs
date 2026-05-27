@@ -1106,11 +1106,10 @@ mod tests {
 
     #[test]
     fn test_chunk_text_basic() {
-        let miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            std::path::Path::new("/tmp"),
-            "test",
-            vec![],
-        ));
+        let miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(std::path::Path::new("/tmp"), "test", vec![]))
+            .expect("failed to create miner");
 
         let text = "This is a test paragraph.\n\nThis is another paragraph.\n\nAnd another one here with enough content to be a chunk.";
         let chunks = miner.chunk_text(text, "test.txt");
@@ -1120,11 +1119,10 @@ mod tests {
 
     #[test]
     fn test_chunk_text_respects_min_size() {
-        let miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            std::path::Path::new("/tmp"),
-            "test",
-            vec![],
-        ));
+        let miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(std::path::Path::new("/tmp"), "test", vec![]))
+            .expect("failed to create miner");
 
         let text = "Short text";
         let chunks = miner.chunk_text(text, "test.txt");
@@ -1139,11 +1137,10 @@ mod tests {
             description: "Backend code".to_string(),
             keywords: vec!["backend".to_string()],
         }];
-        let miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            std::path::Path::new("/tmp"),
-            "test",
-            rooms,
-        ));
+        let miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(std::path::Path::new("/tmp"), "test", rooms))
+            .expect("failed to create miner");
 
         let room = miner.detect_room(std::path::Path::new("/tmp/unknown_file.txt"), "content");
         assert_eq!(room, "general");
@@ -1183,11 +1180,10 @@ mod tests {
             keywords: vec![],
         }];
 
-        let mut miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            &palace,
-            "wing",
-            rooms.clone(),
-        ));
+        let mut miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(&palace, "wing", rooms.clone()))
+            .expect("failed to create miner");
         let (first, skip) = miner.mine_file(&file).await.unwrap();
         assert!(first > 0);
         assert_eq!(skip, None);
@@ -1195,7 +1191,8 @@ mod tests {
 
         let remine = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(Miner::new(&palace, "wing", rooms));
+            .block_on(Miner::new(&palace, "wing", rooms))
+            .expect("failed to create miner");
         assert!(remine
             .palace_db
             .file_already_mined(&file.to_string_lossy(), true));
@@ -1236,11 +1233,10 @@ mod tests {
             description: "Backend code".to_string(),
             keywords: vec!["authentication".to_string(), "jwt".to_string()],
         }];
-        let miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            std::path::Path::new("/tmp"),
-            "test",
-            rooms,
-        ));
+        let miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(std::path::Path::new("/tmp"), "test", rooms))
+            .expect("failed to create miner");
 
         let room = miner.detect_room(
             std::path::Path::new("/tmp/project/backend/auth.py"),
@@ -1274,11 +1270,10 @@ mod tests {
             description: "View templates".to_string(),
             keywords: vec![],
         }];
-        let miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            std::path::Path::new("/tmp"),
-            "test",
-            rooms,
-        ));
+        let miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(std::path::Path::new("/tmp"), "test", rooms))
+            .expect("failed to create miner");
 
         let room = miner.detect_room(
             std::path::Path::new("/tmp/project/interviews/q1.py"),
@@ -1294,11 +1289,10 @@ mod tests {
             description: "Frontend code".to_string(),
             keywords: vec![],
         }];
-        let miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            std::path::Path::new("/tmp"),
-            "test",
-            rooms,
-        ));
+        let miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(std::path::Path::new("/tmp"), "test", rooms))
+            .expect("failed to create miner");
 
         let room = miner.detect_room(
             std::path::Path::new("/tmp/project/frontend-app/index.tsx"),
@@ -1712,6 +1706,7 @@ mod tests {
         let mut miner = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(Miner::new(&palace, "wing", rooms))
+            .expect("failed to create miner")
             .with_max_chunks_per_file(Some(test_cap));
 
         // Sanity: the chunker really would emit > cap before the cap
@@ -1819,11 +1814,10 @@ mod tests {
 
     #[test]
     fn test_chunk_text_multibyte_utf8_boundary() {
-        let miner = tokio::runtime::Runtime::new().unwrap().block_on(Miner::new(
-            std::path::Path::new("/tmp"),
-            "test",
-            vec![],
-        ));
+        let miner = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Miner::new(std::path::Path::new("/tmp"), "test", vec![]))
+            .expect("failed to create miner");
 
         let prefix = "a".repeat(CHUNK_SIZE - 1);
         let text = format!("{}this continues after the boundary", prefix);

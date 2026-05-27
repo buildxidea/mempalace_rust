@@ -565,7 +565,84 @@ pub struct DeepSearchStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palace::{DrawerId, MemoryScope, DrawerKind, MemoryTier, SearchScope, SearchHit, PalaceStore};
+    use crate::embed::Embedder;
+    use async_trait::async_trait;
     use tempfile::tempdir;
+
+    /// Test-only adapter so PalaceDb can satisfy `&dyn MemoryProvider` in Layer1::generate.
+    /// Layer1 only calls get_drawers, so other methods panic if called.
+    struct PalaceDbAdapter {
+        db: PalaceDb,
+    }
+
+    impl PalaceDbAdapter {
+        fn new(db: PalaceDb) -> Self {
+            Self { db }
+        }
+    }
+
+    #[async_trait]
+    impl MemoryProvider for PalaceDbAdapter {
+        async fn add_drawer(&self, _drawer: Drawer) -> anyhow::Result<DrawerId> {
+            panic!("add_drawer not implemented in test adapter")
+        }
+        async fn remember(&self, _content: String, _scope: MemoryScope) -> anyhow::Result<DrawerId> {
+            panic!("remember not implemented in test adapter")
+        }
+        async fn forget(&self, _id: &DrawerId) -> anyhow::Result<bool> {
+            panic!("forget not implemented in test adapter")
+        }
+        async fn search(&self, _query: &str, _scope: &SearchScope) -> anyhow::Result<Vec<SearchHit>> {
+            panic!("search not implemented in test adapter")
+        }
+        async fn search_with_embedding(&self, _query_vec: &[f32], _scope: &SearchScope) -> anyhow::Result<Vec<SearchHit>> {
+            panic!("search_with_embedding not implemented in test adapter")
+        }
+        async fn related(&self, _id: &DrawerId, _depth: usize) -> anyhow::Result<Vec<SearchHit>> {
+            panic!("related not implemented in test adapter")
+        }
+        async fn extract_from_transcript(&self, _transcript: &str, _session_id: &str) -> anyhow::Result<Vec<DrawerId>> {
+            panic!("extract_from_transcript not implemented in test adapter")
+        }
+        async fn graph_stats(&self) -> anyhow::Result<crate::knowledge_graph::KgStats> {
+            panic!("graph_stats not implemented in test adapter")
+        }
+        fn fingerprint(&self) -> &str {
+            "test-adapter"
+        }
+        fn embedder(&self) -> &dyn crate::embed::Embedder {
+            panic!("embedder not implemented in test adapter")
+        }
+        fn store(&self) -> &dyn PalaceStore {
+            panic!("store not implemented in test adapter")
+        }
+        async fn get_drawers(&self, scope: Option<&SearchScope>, limit: Option<usize>) -> anyhow::Result<Vec<Drawer>> {
+            let wing = scope.and_then(|s| s.wing.as_deref());
+            let room = scope.and_then(|s| s.room.as_deref());
+            let limit = limit.unwrap_or(usize::MAX);
+            let results = self.db.get_all(wing, room, limit);
+            let mut drawers = Vec::new();
+            for r in results {
+                for (i, id) in r.ids.iter().enumerate() {
+                    let content = r.documents.get(i).cloned().unwrap_or_default();
+                    let metadata = r.metadatas.get(i).cloned().unwrap_or_default();
+                    drawers.push(Drawer {
+                        id: Some(DrawerId(id.clone())),
+                        content,
+                        kind: DrawerKind::default(),
+                        tier: MemoryTier::default(),
+                        wing: metadata.get("wing").and_then(|v| v.as_str()).map(String::from),
+                        room: metadata.get("room").and_then(|v| v.as_str()).map(String::from),
+                        metadata,
+                        derived_from: Vec::new(),
+                    });
+                }
+            }
+            drawers.truncate(limit);
+            Ok(drawers)
+        }
+    }
 
     fn create_test_palace_db(temp_dir: &Path) -> PalaceDb {
         let palace_path = temp_dir.join("palace");
@@ -717,30 +794,32 @@ mod tests {
     }
 
     // Layer1 tests
-    #[test]
-    fn test_layer1_generate_empty_palace() {
+    #[tokio::test]
+    async fn test_layer1_generate_empty_palace() {
         let temp_dir = tempdir().unwrap();
         let palace_path = temp_dir.path().join("empty_palace");
         std::fs::create_dir_all(&palace_path).unwrap();
         let db = PalaceDb::open(&palace_path).unwrap();
+        let adapter = PalaceDbAdapter::new(db);
         let l1 = Layer1::new(None);
-        let text = l1.generate(&db);
+        let text = l1.generate(&adapter).await;
         assert!(text.contains("L1"));
     }
 
-    #[test]
-    fn test_layer1_generate_with_content() {
+    #[tokio::test]
+    async fn test_layer1_generate_with_content() {
         let temp_dir = tempdir().unwrap();
         let db = create_test_palace_db(temp_dir.path());
         let _palace_path = temp_dir.path().join("palace");
+        let adapter = PalaceDbAdapter::new(db);
         let l1 = Layer1::new(None);
-        let text = l1.generate(&db);
+        let text = l1.generate(&adapter).await;
         assert!(text.contains("L1 — ESSENTIAL STORY"));
         assert!(text.contains("[rust]") || text.contains("[personal]"));
     }
 
-    #[test]
-    fn test_layer1_respects_max_chars() {
+    #[tokio::test]
+    async fn test_layer1_respects_max_chars() {
         let temp_dir = tempdir().unwrap();
         let palace_path = temp_dir.path().join("palace");
         std::fs::create_dir_all(&palace_path).unwrap();
@@ -759,17 +838,19 @@ mod tests {
             ],
         )
         .unwrap();
+        let adapter = PalaceDbAdapter::new(db);
         let l1 = Layer1::new(None);
-        let text = l1.generate(&db);
+        let text = l1.generate(&adapter).await;
         assert!(text.contains("..."));
     }
 
-    #[test]
-    fn test_layer1_wing_filter() {
+    #[tokio::test]
+    async fn test_layer1_wing_filter() {
         let temp_dir = tempdir().unwrap();
         let db = create_test_palace_db(temp_dir.path());
+        let adapter = PalaceDbAdapter::new(db);
         let l1 = Layer1::new(Some("technical".to_string()));
-        let text = l1.generate(&db);
+        let text = l1.generate(&adapter).await;
         assert!(text.contains("rust") || text.contains("technical"));
     }
 

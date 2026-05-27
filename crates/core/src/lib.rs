@@ -28,78 +28,114 @@ pub mod searcher;
 // only renders the surface above. See research/04 P2 #19.
 
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod bm25;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod closet_llm;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod convo_miner;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod corpus_origin;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod dedup;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod dedup_window;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod diary_ingest;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod entity_detector;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod entity_registry;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod event_capture;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod exporter;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod general_extractor;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod hermes_integration;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod hooks_cli;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod i18n;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod instructions;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod languages;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod llm_client;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod llm_refine;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod migrate;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod mine_lock;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod mine_palace_lock;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod mine_pid_guard;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod normalize;
 #[doc(hidden)]
 
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod palace_db;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod palace_graph;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod privacy;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod project_scanner;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod query_sanitizer;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod repair;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod room_detector_local;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod script_aware;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod signal_handler;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod spellcheck;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod split_mega_files;
 #[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod sweeper;
 
 // =====================================================================

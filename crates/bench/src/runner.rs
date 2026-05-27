@@ -116,7 +116,7 @@ pub async fn run_benchmark(
     config: &BenchmarkConfig,
 ) -> Result<BenchmarkResults> {
     let embedder: Arc<dyn mempalace_core::embed::Embedder> =
-        (resolve_embedder(&config.embed_model).map_err(anyhow::Error::msg)?).into();
+        resolve_embedder(&config.embed_model).map_err(anyhow::Error::msg)?.into();
 
     let mut metrics = BenchmarkMetrics::new(config.ks.clone());
     let mut per_type_results: std::collections::HashMap<_, _> = Default::default();
@@ -224,8 +224,8 @@ mod tests {
     #[tokio::test]
     async fn test_rank_corpus_returns_sorted_indices() {
         let embedder: Arc<dyn mempalace_core::embed::Embedder> =
-            match (resolve_embedder("all-MiniLM-L6-v2").map_err(anyhow::Error::msg)?).into() {
-                Ok(e) => e,
+            match resolve_embedder("all-MiniLM-L6-v2").map_err(anyhow::Error::msg) {
+                Ok(e) => e.into(),
                 Err(e) => {
                     eprintln!("embedder not available: {}", e);
                     return;

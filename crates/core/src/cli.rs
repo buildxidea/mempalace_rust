@@ -2211,6 +2211,7 @@ mod tests {
             room,
             results,
             bm25: _,
+            fusion_mode: _,
         } = args.command
         {
             (query, wing, room, results)

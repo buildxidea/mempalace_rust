@@ -140,6 +140,14 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             CREATE INDEX IF NOT EXISTS idx_triples_object ON triples(object);
             CREATE INDEX IF NOT EXISTS idx_triples_predicate ON triples(predicate);
             CREATE INDEX IF NOT EXISTS idx_triples_valid ON triples(valid_from, valid_to);
+
+            CREATE TABLE IF NOT EXISTS episodes (
+                id TEXT PRIMARY KEY,
+                drawer_id TEXT NOT NULL,
+                query TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                feedback_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
             ",
         )?;
         self.migrate_schema()?;
@@ -167,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
         }
         if !names.iter().any(|n| n == "t_created") {
             self.conn.execute(
-                "ALTER TABLE triples ADD COLUMN t_created TEXT NOT NULL DEFAULT (datetime('now'))",
+                "ALTER TABLE triples ADD COLUMN t_created TEXT",
                 [],
             )?;
         }
@@ -375,9 +383,9 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                 }
             } else {
                 let mut stmt = self.conn.prepare(
-                    "SELECT t.*, e.name as obj_name FROM triples t JOIN entities e ON t.object = e.id WHERE t.subject = ?1 AND (t.valid_from IS NULL OR t.valid_from <= ?2) AND (t.valid_to IS NULL OR t.valid_to >= ?3)"
+                    "SELECT t.*, e.name as obj_name FROM triples t JOIN entities e ON t.object = e.id WHERE t.subject = ?1 AND (t.valid_from IS NULL OR t.valid_from <= ?2) AND (t.valid_to IS NULL OR t.valid_to >= ?3) AND (t.t_expired IS NULL OR t.t_expired > ?4)"
                 )?;
-                let mut rows = stmt.query(params![eid, date, date])?;
+                let mut rows = stmt.query(params![eid, date, date, date])?;
                 while let Some(row) = rows.next()? {
                     results.push(self.row_to_entity_result(row, "outgoing", eid)?);
                 }
@@ -426,9 +434,9 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                 }
             } else {
                 let mut stmt = self.conn.prepare(
-                    "SELECT t.*, e.name as sub_name FROM triples t JOIN entities e ON t.subject = e.id WHERE t.object = ?1 AND (t.valid_from IS NULL OR t.valid_from <= ?2) AND (t.valid_to IS NULL OR t.valid_to >= ?3)"
+                    "SELECT t.*, e.name as sub_name FROM triples t JOIN entities e ON t.subject = e.id WHERE t.object = ?1 AND (t.valid_from IS NULL OR t.valid_from <= ?2) AND (t.valid_to IS NULL OR t.valid_to >= ?3) AND (t.t_expired IS NULL OR t.t_expired > ?4)"
                 )?;
-                let mut rows = stmt.query(params![eid, date, date])?;
+                let mut rows = stmt.query(params![eid, date, date, date])?;
                 while let Some(row) = rows.next()? {
                     results.push(self.row_to_entity_result_incoming(row, "incoming", eid)?);
                 }
@@ -687,7 +695,7 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                  JOIN entities s ON t.subject = s.id \
                  JOIN entities o ON t.object = o.id \
                  WHERE (t.t_created IS NULL OR t.t_created <= ?1) \
-                 AND (t.t_expired IS NULL OR t.t_expired >= ?2) \
+                 AND (t.t_expired IS NULL OR t.t_expired > ?2) \
                  ORDER BY t.valid_from ASC LIMIT 100",
             )?;
             let rows = stmt.query_map(params![tt, tt], |row| {

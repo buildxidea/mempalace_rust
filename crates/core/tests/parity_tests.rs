@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use mempalace_core::knowledge_graph::KnowledgeGraph;
 use mempalace_core::mcp_server::is_mutation_tool;
 use mempalace_core::Config;

@@ -488,6 +488,7 @@ fn collect_corpus_for_refinement(directory: &Path) -> String {
     corpus_lines.join("\n")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_onboarding(
     directory: &Path,
     config_dir: &Path,

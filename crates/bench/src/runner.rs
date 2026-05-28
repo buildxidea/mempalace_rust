@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Instant;

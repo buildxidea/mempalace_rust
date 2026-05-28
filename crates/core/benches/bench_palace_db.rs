@@ -8,6 +8,7 @@
 //!
 //! Run with `cargo bench --bench bench_palace_db`. CI compiles via
 //! `cargo bench --no-run`.
+#![allow(deprecated)]
 
 use std::collections::HashMap;
 use std::time::Duration;

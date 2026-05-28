@@ -8,6 +8,7 @@
 //!
 //! Run with `cargo bench --bench bench_miner`. CI compiles via
 //! `cargo bench --no-run`.
+#![allow(deprecated)]
 
 use std::time::Duration;
 

@@ -1,6 +1,7 @@
 //! LongMemEval-S evaluation harness against `searcher::search_memories`
 //! (mp-003, Phase 0).
-//!
+#![allow(deprecated)]
+
 //! For every question in the dataset we:
 //!
 //! 1. Wipe a fresh palace under `target/longmemeval_palace/<question_id>/`.
@@ -116,7 +117,7 @@ fn render_session_content(session: &[crate::dataset::Turn]) -> String {
 /// already file-safe but we strip `/` defensively to keep the palace
 /// path layout flat.
 fn slug(id: &str) -> String {
-    id.replace('/', "_").replace('\\', "_")
+    id.replace(['/', '\\'], "_")
 }
 
 /// Mine one entry's haystack into a fresh palace.

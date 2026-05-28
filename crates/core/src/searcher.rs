@@ -128,6 +128,7 @@ pub async fn search_memories(
 }
 
 /// Search with optional BM25 reranking and PPR fusion mode.
+#[allow(clippy::too_many_arguments)]
 pub async fn search_memories_with_rerank(
     query: &str,
     palace_path: &Path,

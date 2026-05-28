@@ -273,6 +273,7 @@ pub fn delete_tunnel(tunnel_id: &str) -> bool {
 
 use std::sync::LazyLock;
 
+#[allow(clippy::type_complexity)]
 static _GRAPH_CACHE: LazyLock<
     RwLock<HashMap<PathBuf, GraphCache>>,
     fn() -> RwLock<HashMap<PathBuf, GraphCache>>,

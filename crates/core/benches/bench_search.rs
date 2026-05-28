@@ -7,6 +7,7 @@
 //!
 //! Run with `cargo bench --bench bench_search`. CI keeps these compiling
 //! via `cargo bench --no-run` only — the timed runs are local/manual.
+#![allow(deprecated)]
 
 use std::time::Duration;
 

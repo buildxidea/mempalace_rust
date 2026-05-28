@@ -21,10 +21,8 @@ impl Inner {
         let db_path = path.join("drawers.sqlite");
 
         let index = if index_path.exists() {
-            unsafe {
-                usearch::Index::restore(index_path.to_string_lossy().as_ref())
-                    .map_err(|e| anyhow::anyhow!("usearch restore: {e}"))?
-            }
+            usearch::Index::restore(index_path.to_string_lossy().as_ref())
+                .map_err(|e| anyhow::anyhow!("usearch restore: {e}"))?
         } else {
             let opts = usearch::IndexOptions {
                 dimensions: dim,
@@ -37,7 +35,7 @@ impl Inner {
             };
             let idx =
                 usearch::Index::new(&opts).map_err(|e| anyhow::anyhow!("usearch new: {e}"))?;
-            if idx.reserve(10_000).is_err() {}
+            let _ = idx.reserve(10_000).is_err();
             idx
         };
 
@@ -82,7 +80,7 @@ impl Inner {
     }
 
     fn search_index(&self, query: &[f32], limit: usize) -> anyhow::Result<Vec<(String, f32)>> {
-        let results = self.index.search(query, limit as usize)?;
+        let results = self.index.search(query, limit)?;
         let mut out = Vec::with_capacity(results.keys.len());
         for i in 0..results.keys.len() {
             out.push((results.keys[i].to_string(), results.distances[i]));

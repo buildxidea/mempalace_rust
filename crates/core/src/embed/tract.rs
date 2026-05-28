@@ -3,7 +3,7 @@
 //! Uses `tokio::task::spawn_blocking` to do CPU-bound ONNX inference without
 //! blocking the async reactor. HuggingFace `tokenizers` is used for tokenisation.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -180,7 +180,7 @@ impl Embedder for TractEmbedder {
         let dim = self.dim;
 
         tokio::task::spawn_blocking(move || {
-            run_embed_batch(&model_name, &tokenizer_path, &owned, dim)
+            run_embed_batch(&model_name, tokenizer_path.as_path(), &owned, dim)
         })
         .await
         .map_err(|e| anyhow::anyhow!("tract: spawn_blocking join error: {}", e))
@@ -191,7 +191,7 @@ impl Embedder for TractEmbedder {
 
 fn run_embed_batch(
     model_name: &str,
-    tokenizer_path: &PathBuf,
+    tokenizer_path: &Path,
     texts: &[String],
     dim: usize,
 ) -> anyhow::Result<Vec<Vec<f32>>> {

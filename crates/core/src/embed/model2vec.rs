@@ -190,8 +190,9 @@ mod tests {
         let e = Model2VecEmbedder::with_model("potion-base-8M".to_owned(), None)
             .expect("potion-base-8M loads");
         let inputs = ["hello world", "rust is fast", "memory palace"];
+        #[allow(clippy::iter_cloned_collect)]
         let vectors = e
-            .embed_batch(&inputs.iter().map(|s| *s).collect::<Vec<_>>())
+            .embed_batch(&inputs.iter().copied().collect::<Vec<_>>())
             .await
             .expect("embed_batch succeeds");
 

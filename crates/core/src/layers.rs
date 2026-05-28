@@ -565,8 +565,10 @@ pub struct DeepSearchStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palace::{DrawerId, MemoryScope, DrawerKind, MemoryTier, SearchScope, SearchHit, PalaceStore};
     use crate::embed::Embedder;
+    use crate::palace::{
+        DrawerId, DrawerKind, MemoryScope, MemoryTier, PalaceStore, SearchHit, SearchScope,
+    };
     use async_trait::async_trait;
     use tempfile::tempdir;
 
@@ -587,22 +589,38 @@ mod tests {
         async fn add_drawer(&self, _drawer: Drawer) -> anyhow::Result<DrawerId> {
             panic!("add_drawer not implemented in test adapter")
         }
-        async fn remember(&self, _content: String, _scope: MemoryScope) -> anyhow::Result<DrawerId> {
+        async fn remember(
+            &self,
+            _content: String,
+            _scope: MemoryScope,
+        ) -> anyhow::Result<DrawerId> {
             panic!("remember not implemented in test adapter")
         }
         async fn forget(&self, _id: &DrawerId) -> anyhow::Result<bool> {
             panic!("forget not implemented in test adapter")
         }
-        async fn search(&self, _query: &str, _scope: &SearchScope) -> anyhow::Result<Vec<SearchHit>> {
+        async fn search(
+            &self,
+            _query: &str,
+            _scope: &SearchScope,
+        ) -> anyhow::Result<Vec<SearchHit>> {
             panic!("search not implemented in test adapter")
         }
-        async fn search_with_embedding(&self, _query_vec: &[f32], _scope: &SearchScope) -> anyhow::Result<Vec<SearchHit>> {
+        async fn search_with_embedding(
+            &self,
+            _query_vec: &[f32],
+            _scope: &SearchScope,
+        ) -> anyhow::Result<Vec<SearchHit>> {
             panic!("search_with_embedding not implemented in test adapter")
         }
         async fn related(&self, _id: &DrawerId, _depth: usize) -> anyhow::Result<Vec<SearchHit>> {
             panic!("related not implemented in test adapter")
         }
-        async fn extract_from_transcript(&self, _transcript: &str, _session_id: &str) -> anyhow::Result<Vec<DrawerId>> {
+        async fn extract_from_transcript(
+            &self,
+            _transcript: &str,
+            _session_id: &str,
+        ) -> anyhow::Result<Vec<DrawerId>> {
             panic!("extract_from_transcript not implemented in test adapter")
         }
         async fn graph_stats(&self) -> anyhow::Result<crate::knowledge_graph::KgStats> {
@@ -617,7 +635,11 @@ mod tests {
         fn store(&self) -> &dyn PalaceStore {
             panic!("store not implemented in test adapter")
         }
-        async fn get_drawers(&self, scope: Option<&SearchScope>, limit: Option<usize>) -> anyhow::Result<Vec<Drawer>> {
+        async fn get_drawers(
+            &self,
+            scope: Option<&SearchScope>,
+            limit: Option<usize>,
+        ) -> anyhow::Result<Vec<Drawer>> {
             let wing = scope.and_then(|s| s.wing.as_deref());
             let room = scope.and_then(|s| s.room.as_deref());
             let limit = limit.unwrap_or(usize::MAX);
@@ -632,8 +654,14 @@ mod tests {
                         content,
                         kind: DrawerKind::default(),
                         tier: MemoryTier::default(),
-                        wing: metadata.get("wing").and_then(|v| v.as_str()).map(String::from),
-                        room: metadata.get("room").and_then(|v| v.as_str()).map(String::from),
+                        wing: metadata
+                            .get("wing")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        room: metadata
+                            .get("room")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
                         metadata,
                         derived_from: Vec::new(),
                     });

@@ -988,7 +988,10 @@ fn cmd_search(
         Some("vector") => Some(crate::palace::FusionMode::Vector),
         None => None,
         Some(other) => {
-            eprintln!("error: unknown fusion mode '{}' (expected: vector, ppr, hybrid)", other);
+            eprintln!(
+                "error: unknown fusion mode '{}' (expected: vector, ppr, hybrid)",
+                other
+            );
             return Err(anyhow::anyhow!("invalid fusion mode"));
         }
     };

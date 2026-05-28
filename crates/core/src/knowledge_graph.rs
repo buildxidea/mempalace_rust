@@ -174,10 +174,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                 .execute("ALTER TABLE triples ADD COLUMN adapter_name TEXT", [])?;
         }
         if !names.iter().any(|n| n == "t_created") {
-            self.conn.execute(
-                "ALTER TABLE triples ADD COLUMN t_created TEXT",
-                [],
-            )?;
+            self.conn
+                .execute("ALTER TABLE triples ADD COLUMN t_created TEXT", [])?;
         }
         if !names.iter().any(|n| n == "t_expired") {
             self.conn
@@ -403,7 +401,10 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                     let te: Option<String> = row.get("t_expired")?;
                     let vt: Option<String> = row.get("valid_to")?;
                     let tc: Option<String> = row.get("t_created")?;
-                    eprintln!("  ROW: t_created={:?}, t_expired={:?}, valid_to={:?}", tc, te, vt);
+                    eprintln!(
+                        "  ROW: t_created={:?}, t_expired={:?}, valid_to={:?}",
+                        tc, te, vt
+                    );
                     results.push(self.row_to_entity_result(row, "outgoing", eid)?);
                 }
                 eprintln!("TRACE: returned {} rows", cnt);
@@ -708,7 +709,7 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                      AND (t.t_expired IS NULL OR t.t_expired >= ?3) \
                      AND (t.valid_from IS NULL OR t.valid_from <= ?4) \
                      AND (t.valid_to IS NULL OR t.valid_to >= ?5) \
-                     ORDER BY t.valid_from ASC LIMIT 100"
+                     ORDER BY t.valid_from ASC LIMIT 100",
                 )?;
                 let rows = stmt.query_map(params![eid, now, now, now, now], |row| {
                     Ok(Triple {

@@ -199,8 +199,10 @@ pub async fn search_memories_with_rerank(
     let fusion = fusion_mode.unwrap_or(FusionMode::Vector);
     if fusion != FusionMode::Vector && !search_results.is_empty() {
         let graph = cached_graph(palace_path);
-        let ppr_scores: std::collections::HashMap<String, f64> =
-            graph.ppr_search(&sanitized.clean_query, 50).into_iter().collect();
+        let ppr_scores: std::collections::HashMap<String, f64> = graph
+            .ppr_search(&sanitized.clean_query, 50)
+            .into_iter()
+            .collect();
 
         for result in &mut search_results {
             let ppr_score = ppr_scores.get(&result.room).copied().unwrap_or(0.0_f64);

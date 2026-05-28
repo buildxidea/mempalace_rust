@@ -35,8 +35,8 @@ impl Inner {
                 expansion_search: 0,
                 multi: false,
             };
-            let idx = usearch::Index::new(&opts)
-                .map_err(|e| anyhow::anyhow!("usearch new: {e}"))?;
+            let idx =
+                usearch::Index::new(&opts).map_err(|e| anyhow::anyhow!("usearch new: {e}"))?;
             if idx.reserve(10_000).is_err() {}
             idx
         };
@@ -61,7 +61,7 @@ impl Inner {
     fn upsert_drawers(&self, drawers: Vec<Drawer>) -> anyhow::Result<()> {
         let mut stmt = self.db.prepare(
             "INSERT OR REPLACE INTO drawers (id, content, kind, tier, wing, room, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
         for drawer in drawers {
             let id = drawer.id.map(|d| d.0).unwrap_or_default();
@@ -91,7 +91,9 @@ impl Inner {
     }
 
     fn get_drawer_by_id(&self, id: &str) -> anyhow::Result<Option<Drawer>> {
-        let mut stmt = self.db.prepare("SELECT id, content, kind, tier, wing, room, metadata FROM drawers WHERE id = ?1")?;
+        let mut stmt = self.db.prepare(
+            "SELECT id, content, kind, tier, wing, room, metadata FROM drawers WHERE id = ?1",
+        )?;
         let mut rows = stmt.query(rusqlite::params![id])?;
         if let Some(row) = rows.next()? {
             let id_str: String = row.get(0)?;
@@ -114,13 +116,17 @@ impl Inner {
     }
 
     fn count_drawers(&self) -> anyhow::Result<usize> {
-        let n: i64 = self.db.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+        let n: i64 = self
+            .db
+            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
         Ok(n as usize)
     }
 
     fn all_drawers(&self, limit: Option<usize>) -> anyhow::Result<Vec<Drawer>> {
         let limit = limit.unwrap_or(1000) as i64;
-        let mut stmt = self.db.prepare("SELECT id, content, kind, tier, wing, room, metadata FROM drawers LIMIT ?1")?;
+        let mut stmt = self.db.prepare(
+            "SELECT id, content, kind, tier, wing, room, metadata FROM drawers LIMIT ?1",
+        )?;
         let mut rows = stmt.query(rusqlite::params![limit])?;
         let mut drawers = Vec::new();
         while let Some(row) = rows.next()? {
@@ -167,13 +173,23 @@ impl PalaceStore for UsearchSqliteStore {
         Ok(0)
     }
 
-    async fn search(&self, query: &[f32], scope: &SearchScope, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
+    async fn search(
+        &self,
+        query: &[f32],
+        scope: &SearchScope,
+        limit: usize,
+    ) -> anyhow::Result<Vec<SearchHit>> {
         let inner = self.inner.lock().await;
         let results = inner.search_index(query, limit)?;
         let mut hits = Vec::with_capacity(results.len());
         for (id, dist) in results {
             if let Some(d) = inner.get_drawer_by_id(&id)? {
-                let source_file = d.metadata.get("source_file").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let source_file = d
+                    .metadata
+                    .get("source_file")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 hits.push(SearchHit {
                     text: d.content,
                     wing: d.wing.or_else(|| scope.wing.clone()),
@@ -195,7 +211,10 @@ impl PalaceStore for UsearchSqliteStore {
 
     async fn flush(&self) -> anyhow::Result<()> {
         let inner = self.inner.lock().await;
-        inner.index.save("index.usearch").map_err(|e| anyhow::anyhow!("usearch save: {e}"))?;
+        inner
+            .index
+            .save("index.usearch")
+            .map_err(|e| anyhow::anyhow!("usearch save: {e}"))?;
         Ok(())
     }
 
@@ -203,7 +222,11 @@ impl PalaceStore for UsearchSqliteStore {
         StoreTier::Usearch
     }
 
-    async fn get_drawers(&self, _scope: Option<&SearchScope>, limit: Option<usize>) -> anyhow::Result<Vec<Drawer>> {
+    async fn get_drawers(
+        &self,
+        _scope: Option<&SearchScope>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<Drawer>> {
         let inner = self.inner.lock().await;
         inner.all_drawers(limit)
     }

@@ -100,7 +100,6 @@ pub mod mine_pid_guard;
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod normalize;
 #[doc(hidden)]
-
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod palace_db;

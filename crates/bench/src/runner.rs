@@ -115,8 +115,9 @@ pub async fn run_benchmark(
     entries: &[BenchmarkEntry],
     config: &BenchmarkConfig,
 ) -> Result<BenchmarkResults> {
-    let embedder: Arc<dyn mempalace_core::embed::Embedder> =
-        resolve_embedder(&config.embed_model).map_err(anyhow::Error::msg)?.into();
+    let embedder: Arc<dyn mempalace_core::embed::Embedder> = resolve_embedder(&config.embed_model)
+        .map_err(anyhow::Error::msg)?
+        .into();
 
     let mut metrics = BenchmarkMetrics::new(config.ks.clone());
     let mut per_type_results: std::collections::HashMap<_, _> = Default::default();
@@ -223,8 +224,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_rank_corpus_returns_sorted_indices() {
-        let embedder: Arc<dyn mempalace_core::embed::Embedder> =
-            Arc::from(resolve_embedder("all-MiniLM-L6-v2").map_err(anyhow::Error::msg).expect("resolve_embedder should succeed"));
+        let embedder: Arc<dyn mempalace_core::embed::Embedder> = Arc::from(
+            resolve_embedder("all-MiniLM-L6-v2")
+                .map_err(anyhow::Error::msg)
+                .expect("resolve_embedder should succeed"),
+        );
         let docs = vec![
             "I worked on the auth migration today".to_string(),
             "I still remember the happy high school experiences".to_string(),

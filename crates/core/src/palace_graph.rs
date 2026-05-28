@@ -273,8 +273,10 @@ pub fn delete_tunnel(tunnel_id: &str) -> bool {
 
 use std::sync::LazyLock;
 
-static _GRAPH_CACHE: LazyLock<RwLock<HashMap<PathBuf, GraphCache>>, fn() -> RwLock<HashMap<PathBuf, GraphCache>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+static _GRAPH_CACHE: LazyLock<
+    RwLock<HashMap<PathBuf, GraphCache>>,
+    fn() -> RwLock<HashMap<PathBuf, GraphCache>>,
+> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 static _GRAPH_BUILD_VERSION: AtomicU64 = AtomicU64::new(0);
 
@@ -631,9 +633,10 @@ impl PalaceGraph {
         } else {
             (room_b.to_string(), room_a.to_string())
         };
-        let already = self.edges.iter().any(|e| {
-            e.kind == "synonymy" && e.room == r_a && e.wing_a == r_b
-        });
+        let already = self
+            .edges
+            .iter()
+            .any(|e| e.kind == "synonymy" && e.room == r_a && e.wing_a == r_b);
         if !already {
             self.edges.push(GraphEdge {
                 room: r_a,

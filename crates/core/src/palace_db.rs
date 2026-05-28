@@ -779,7 +779,11 @@ fn pairwise_room_similarity(texts_a: &[&str], texts_b: &[&str]) -> f64 {
             }
             let intersection = words_a.intersection(&words_b).count() as f64;
             let union = words_a.union(&words_b).count() as f64;
-            let sim = if union > 0.0 { intersection / union } else { 0.0 };
+            let sim = if union > 0.0 {
+                intersection / union
+            } else {
+                0.0
+            };
             if sim > best_sim {
                 best_sim = sim;
             }

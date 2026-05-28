@@ -89,12 +89,10 @@ impl PalaceStore for EmbedvecStore {
             return Ok(());
         }
 
-        let needs_write = self.model_name.is_some()
-            && self.palace_path.is_some()
-            && {
-                let inner = self.inner.lock().await;
-                inner.len() == 0
-            };
+        let needs_write = self.model_name.is_some() && self.palace_path.is_some() && {
+            let inner = self.inner.lock().await;
+            inner.len() == 0
+        };
 
         if needs_write {
             let manifest = EmbeddingManifest::from_embedder(
@@ -111,10 +109,9 @@ impl PalaceStore for EmbedvecStore {
             .into_iter()
             .enumerate()
             .map(|(i, d)| {
-                let id = d
-                    .id
-                    .map(|di| di.0)
-                    .unwrap_or_else(|| format!("drawer-{}", i));
+                let id =
+                    d.id.map(|di| di.0)
+                        .unwrap_or_else(|| format!("drawer-{}", i));
                 (id, d.content)
             })
             .collect();

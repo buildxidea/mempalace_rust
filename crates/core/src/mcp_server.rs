@@ -2395,11 +2395,29 @@ fn tool_sketch_create(state: &AppState, args: JsonObject) -> Result<CallToolResu
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let project = input.wing.unwrap_or_else(|| "default".to_string());
+    let now = chrono::Utc::now().to_rfc3339();
+    let sketch_id = format!("sketch_{}", short_hash(&input.title, 8));
+    let steps = serde_json::json!([{"content": input.content, "order": 0}]);
+    let sketch = crate::palace_db::SketchRecord {
+        id: sketch_id.clone(),
+        title: input.title.clone(),
+        description: input.tags.clone().unwrap_or_default().join(", "),
+        steps: steps.to_string(),
+        project: project.clone(),
+        expires_at: chrono::Utc::now().checked_add_signed(chrono::Duration::days(7)).unwrap().to_rfc3339(),
+        created_at: now,
+    };
+    let mut db = fresh_db(state)?;
+    if let Err(e) = db.sketch_create(&sketch) {
+        return Err(ErrorData::invalid_request(format!("Failed to create sketch: {}", e), None));
+    }
     ok_json(serde_json::json!({
         "success": true,
-        "sketch_id": format!("sketch_{}", short_hash(&input.title, 8)),
+        "sketch_id": sketch_id,
         "title": input.title,
         "status": "draft",
+        "project": project,
     }))
 }
 
@@ -2415,6 +2433,10 @@ fn tool_sketch_promote(state: &AppState, args: JsonObject) -> Result<CallToolRes
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let mut db = fresh_db(state)?;
+    if let Err(e) = db.sketch_delete(&input.sketch_id) {
+        return Err(ErrorData::invalid_request(format!("Failed to promote sketch: {}", e), None));
+    }
     ok_json(serde_json::json!({
         "success": true,
         "sketch_id": input.sketch_id,
@@ -2430,16 +2452,51 @@ fn tool_crystallize(state: &AppState, args: JsonObject) -> Result<CallToolResult
         drawer_id: String,
         #[serde(default)]
         crystallize_type: Option<String>,
+        #[serde(default)]
+        action_ids: Option<Vec<String>>,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        narrative: Option<String>,
+        #[serde(default)]
+        outcomes: Option<String>,
+        #[serde(default)]
+        files_affected: Option<Vec<String>>,
+        #[serde(default)]
+        lessons: Option<String>,
+        #[serde(default)]
+        project: Option<String>,
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let crystal_id = format!("crystal_{}", short_hash(&input.drawer_id, 8));
+    let now = chrono::Utc::now().to_rfc3339();
+    let project = input.project.unwrap_or_else(|| "default".to_string());
+    let crystal = crate::palace_db::CrystalRecord {
+        id: crystal_id.clone(),
+        action_ids: input.action_ids.unwrap_or_default().join(","),
+        summary: input.summary.unwrap_or_default(),
+        narrative: input.narrative.unwrap_or_default(),
+        outcomes: input.outcomes.unwrap_or_default(),
+        files_affected: input.files_affected.unwrap_or_default().join(","),
+        lessons: input.lessons.unwrap_or_default(),
+        project: project.clone(),
+        session_id: format!("session_{}", short_hash(&now, 8)),
+        created_at: now,
+    };
+    let mut db = fresh_db(state)?;
+    if let Err(e) = db.crystal_create(&crystal) {
+        return Err(ErrorData::invalid_request(format!("Failed to create crystal: {}", e), None));
+    }
     ok_json(serde_json::json!({
         "success": true,
         "drawer_id": input.drawer_id,
+        "crystal_id": crystal_id,
         "crystallized": true,
         "crystal_type": input.crystallize_type.unwrap_or_else(|| "standard".to_string()),
+        "project": project,
     }))
 }
 
@@ -2474,6 +2531,22 @@ fn tool_facet_tag(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut db = fresh_db(state)?;
+    for tag in &input.tags {
+        let facet_id = format!("facet_{}", short_hash(&format!("{}_{}", input.drawer_id, tag), 8));
+        let facet = crate::palace_db::FacetRecord {
+            id: facet_id,
+            target_id: input.drawer_id.clone(),
+            target_type: "drawer".to_string(),
+            dimension: "tag".to_string(),
+            value: tag.clone(),
+            created_at: now.clone(),
+        };
+        if let Err(e) = db.facet_create(&facet) {
+            return Err(ErrorData::invalid_request(format!("Failed to create facet: {}", e), None));
+        }
+    }
     ok_json(serde_json::json!({
         "success": true,
         "drawer_id": input.drawer_id,
@@ -2496,11 +2569,23 @@ fn tool_facet_query(state: &AppState, args: JsonObject) -> Result<CallToolResult
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let db = fresh_db(state)?;
+    let facets = db.facet_list(None, None).map_err(|e| {
+        ErrorData::invalid_request(format!("Failed to query facets: {}", e), None)
+    })?;
+    let results: Vec<_> = facets.iter().map(|f| {
+        serde_json::json!({
+            "id": f.id,
+            "target_id": f.target_id,
+            "dimension": f.dimension,
+            "value": f.value,
+        })
+    }).collect();
     ok_json(serde_json::json!({
         "success": true,
         "query": input.query,
-        "results": [],
-        "total": 0,
+        "results": results,
+        "total": results.len(),
     }))
 }
 
@@ -2512,15 +2597,37 @@ fn tool_lesson_save(state: &AppState, args: JsonObject) -> Result<CallToolResult
         context: String,
         #[serde(default)]
         tags: Option<Vec<String>>,
+        #[serde(default)]
+        confidence: Option<f64>,
+        #[serde(default)]
+        project: Option<String>,
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let lesson_id = format!("lesson_{}", short_hash(&input.lesson, 8));
+    let now = chrono::Utc::now().to_rfc3339();
+    let project = input.project.unwrap_or_else(|| "default".to_string());
+    let lesson = crate::palace_db::LessonRecord {
+        id: lesson_id.clone(),
+        content: input.lesson.clone(),
+        context: input.context.clone(),
+        confidence: input.confidence.unwrap_or(0.8),
+        project: project.clone(),
+        tags: input.tags.clone().unwrap_or_default().join(","),
+        reinforced_at: now.clone(),
+        created_at: now,
+    };
+    let mut db = fresh_db(state)?;
+    if let Err(e) = db.lesson_create(&lesson) {
+        return Err(ErrorData::invalid_request(format!("Failed to save lesson: {}", e), None));
+    }
     ok_json(serde_json::json!({
         "success": true,
-        "lesson_id": format!("lesson_{}", short_hash(&input.lesson, 8)),
+        "lesson_id": lesson_id,
         "lesson": input.lesson,
+        "project": project,
         "saved_at": chrono::Utc::now().to_rfc3339(),
     }))
 }
@@ -2532,16 +2639,30 @@ fn tool_lesson_recall(state: &AppState, args: JsonObject) -> Result<CallToolResu
         query: String,
         #[serde(default)]
         limit: Option<usize>,
+        #[serde(default)]
+        project: Option<String>,
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let db = fresh_db(state)?;
+    let lessons = db.lesson_list(input.project.as_deref(), None).map_err(|e| {
+        ErrorData::invalid_request(format!("Failed to recall lessons: {}", e), None)
+    })?;
+    let results: Vec<_> = lessons.iter().map(|l| {
+        serde_json::json!({
+            "id": l.id,
+            "content": l.content,
+            "context": l.context,
+            "confidence": l.confidence,
+        })
+    }).collect();
     ok_json(serde_json::json!({
         "success": true,
         "query": input.query,
-        "lessons": [],
-        "total": 0,
+        "lessons": results,
+        "total": results.len(),
     }))
 }
 
@@ -2552,15 +2673,30 @@ fn tool_reflect(state: &AppState, args: JsonObject) -> Result<CallToolResult, Er
         topic: String,
         #[serde(default)]
         depth: Option<String>,
+        #[serde(default)]
+        context: Option<String>,
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let db = fresh_db(state)?;
+    let lessons = db.lesson_list(None, None).map_err(|e| {
+        ErrorData::invalid_request(format!("Failed to reflect: {}", e), None)
+    })?;
+    let reflections: Vec<_> = lessons.iter().filter(|l| {
+        l.content.to_lowercase().contains(&input.topic.to_lowercase())
+    }).map(|l| {
+        serde_json::json!({
+            "id": l.id,
+            "content": l.content,
+            "confidence": l.confidence,
+        })
+    }).collect();
     ok_json(serde_json::json!({
         "success": true,
         "topic": input.topic,
-        "reflections": [],
+        "reflections": reflections,
         "insights": [],
     }))
 }
@@ -2573,15 +2709,29 @@ fn tool_insight_list(state: &AppState, args: JsonObject) -> Result<CallToolResul
         wing: Option<String>,
         #[serde(default)]
         limit: Option<usize>,
+        #[serde(default)]
+        min_confidence: Option<f64>,
     }
-    let _input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
+    let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let db = fresh_db(state)?;
+    let insights = db.insight_list(input.wing.as_deref(), input.min_confidence).map_err(|e| {
+        ErrorData::invalid_request(format!("Failed to list insights: {}", e), None)
+    })?;
+    let results: Vec<_> = insights.iter().map(|i| {
+        serde_json::json!({
+            "id": i.id,
+            "content": i.content,
+            "confidence": i.confidence,
+            "cluster_id": i.cluster_id,
+        })
+    }).collect();
     ok_json(serde_json::json!({
         "success": true,
-        "insights": [],
-        "total": 0,
+        "insights": results,
+        "total": results.len(),
     }))
 }
 

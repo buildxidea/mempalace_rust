@@ -126,6 +126,10 @@ pub mod graph_retrieval;
 pub mod temporal_graph;
 pub mod relations;
 pub mod coordination;
+pub mod context;
+pub mod summarize;
+pub mod working_memory;
+pub mod slots;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod privacy;

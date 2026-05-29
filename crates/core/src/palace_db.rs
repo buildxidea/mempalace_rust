@@ -7,6 +7,8 @@ use std::sync::Mutex;
 
 use crate::dedup_window::{DedupVerdict, WindowedDedup};
 
+pub type DbErr = rusqlite::Error;
+
 pub const DEFAULT_COLLECTION_NAME: &str = "mempalace_drawers";
 pub const DEFAULT_COMPRESSED_COLLECTION_NAME: &str = "mempalace_compressed";
 
@@ -155,6 +157,13 @@ pub struct CoordinationDb {
     conn: Connection,
 }
 
+impl std::ops::Deref for CoordinationDb {
+    type Target = Connection;
+    fn deref(&self) -> &Self::Target {
+        &self.conn
+    }
+}
+
 unsafe impl Send for CoordinationDb {}
 unsafe impl Sync for CoordinationDb {}
 
@@ -202,6 +211,110 @@ pub struct Signal {
     pub reply_to: Option<String>,
     pub read: bool,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemorySlot {
+    pub id: String,
+    pub label: String,
+    pub content: String,
+    pub size_limit: i32,
+    pub description: String,
+    pub pinned: bool,
+    pub scope: String,
+    pub project: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SketchRecord {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub steps: String,
+    pub project: String,
+    pub expires_at: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CrystalRecord {
+    pub id: String,
+    pub action_ids: String,
+    pub summary: String,
+    pub narrative: String,
+    pub outcomes: String,
+    pub files_affected: String,
+    pub lessons: String,
+    pub project: String,
+    pub session_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FacetRecord {
+    pub id: String,
+    pub target_id: String,
+    pub target_type: String,
+    pub dimension: String,
+    pub value: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LessonRecord {
+    pub id: String,
+    pub content: String,
+    pub context: String,
+    pub confidence: f64,
+    pub project: String,
+    pub tags: String,
+    pub reinforced_at: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InsightRecord {
+    pub id: String,
+    pub content: String,
+    pub confidence: f64,
+    pub project: String,
+    pub cluster_id: String,
+    pub reinforced_count: i32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Sentinel {
+    pub id: String,
+    pub name: String,
+    pub watch_type: String,
+    pub trigger_condition: String,
+    pub action_id: Option<String>,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Checkpoint {
+    pub id: String,
+    pub name: String,
+    pub operation: String,
+    pub status: Option<String>,
+    pub checkpoint_type: String,
+    pub linked_action_ids: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TeamShare {
+    pub id: String,
+    pub item_id: String,
+    pub item_type: String,
+    pub project: String,
+    pub shared_at: String,
 }
 
 impl CoordinationDb {
@@ -256,12 +369,107 @@ impl CoordinationDb {
                 read INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sentinels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                watch_type TEXT NOT NULL,
+                trigger_condition TEXT NOT NULL,
+                action_id TEXT,
+                expires_at TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                status TEXT,
+                checkpoint_type TEXT NOT NULL DEFAULT 'manual',
+                linked_action_ids TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS team_shares (
+                id TEXT PRIMARY KEY,
+                item_id TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                project TEXT NOT NULL DEFAULT '',
+                shared_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status);
             CREATE INDEX IF NOT EXISTS idx_actions_project ON actions(project);
             CREATE INDEX IF NOT EXISTS idx_leases_action_id ON leases(action_id);
             CREATE INDEX IF NOT EXISTS idx_leases_status ON leases(status);
             CREATE INDEX IF NOT EXISTS idx_signals_to_agent ON signals(to_agent);
-            CREATE INDEX IF NOT EXISTS idx_signals_read ON signals(read);",
+            CREATE INDEX IF NOT EXISTS idx_signals_read ON signals(read);
+            CREATE TABLE IF NOT EXISTS slots (
+                id TEXT PRIMARY KEY,
+                label TEXT UNIQUE NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                size_limit INTEGER NOT NULL DEFAULT 2000,
+                description TEXT NOT NULL DEFAULT '',
+                pinned INTEGER NOT NULL DEFAULT 1,
+                scope TEXT NOT NULL DEFAULT 'project',
+                project TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_slots_label ON slots(label);
+            CREATE INDEX IF NOT EXISTS idx_slots_project ON slots(project);
+            CREATE TABLE IF NOT EXISTS sketches (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                steps TEXT NOT NULL DEFAULT '[]',
+                project TEXT NOT NULL DEFAULT '',
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS facets (
+                id TEXT PRIMARY KEY,
+                target_id TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                dimension TEXT NOT NULL,
+                value TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_facets_target ON facets(target_id, target_type);
+            CREATE INDEX IF NOT EXISTS idx_facets_dimension ON facets(dimension);
+            CREATE TABLE IF NOT EXISTS crystals (
+                id TEXT PRIMARY KEY,
+                action_ids TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                narrative TEXT NOT NULL DEFAULT '',
+                outcomes TEXT NOT NULL DEFAULT '',
+                files_affected TEXT NOT NULL DEFAULT '',
+                lessons TEXT NOT NULL DEFAULT '',
+                project TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_crystals_project ON crystals(project);
+            CREATE TABLE IF NOT EXISTS lessons (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL DEFAULT '',
+                context TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                project TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '',
+                reinforced_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_lessons_confidence ON lessons(confidence);
+            CREATE INDEX IF NOT EXISTS idx_lessons_project ON lessons(project);
+            CREATE TABLE IF NOT EXISTS insights (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0.0,
+                project TEXT NOT NULL DEFAULT '',
+                cluster_id TEXT NOT NULL DEFAULT '',
+                reinforced_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_insights_confidence ON insights(confidence);
+            CREATE INDEX IF NOT EXISTS idx_insights_project ON insights(project);",
         )?;
         Ok(Self { conn })
     }
@@ -457,6 +665,93 @@ impl CoordinationDb {
         Ok(())
     }
 
+    pub fn action_list_all(&self) -> anyhow::Result<Vec<Action>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.title, a.description, a.status, a.priority, a.project, a.tags, a.parent_id, a.created_at, a.updated_at
+             FROM actions a
+             ORDER BY a.created_at DESC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut actions = Vec::new();
+        while let Some(row) = rows.next()? {
+            actions.push(Action {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: row.get(3)?,
+                priority: row.get(4)?,
+                project: row.get(5)?,
+                tags: row.get(6)?,
+                parent_id: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            });
+        }
+        Ok(actions)
+    }
+
+    pub fn lease_list_all(&self) -> anyhow::Result<Vec<Lease>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, action_id, agent_id, status, result, ttl_ms, created_at, expires_at
+             FROM leases
+             ORDER BY created_at DESC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut leases = Vec::new();
+        while let Some(row) = rows.next()? {
+            leases.push(Lease {
+                id: row.get(0)?,
+                action_id: row.get(1)?,
+                agent_id: row.get(2)?,
+                status: row.get(3)?,
+                result: row.get(4)?,
+                ttl_ms: row.get(5)?,
+                created_at: row.get(6)?,
+                expires_at: row.get(7)?,
+            });
+        }
+        Ok(leases)
+    }
+
+    pub fn routine_list_all(&self) -> anyhow::Result<Vec<Routine>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, steps, created_at FROM routines ORDER BY created_at DESC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut routines = Vec::new();
+        while let Some(row) = rows.next()? {
+            routines.push(Routine {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                steps: row.get(2)?,
+                created_at: row.get(3)?,
+            });
+        }
+        Ok(routines)
+    }
+
+    pub fn signal_list_all(&self) -> anyhow::Result<Vec<Signal>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_agent, to_agent, content, signal_type, reply_to, read, created_at
+             FROM signals ORDER BY created_at DESC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut signals = Vec::new();
+        while let Some(row) = rows.next()? {
+            signals.push(Signal {
+                id: row.get(0)?,
+                from_agent: row.get(1)?,
+                to_agent: row.get(2)?,
+                content: row.get(3)?,
+                signal_type: row.get(4)?,
+                reply_to: row.get(5)?,
+                read: row.get(6)?,
+                created_at: row.get(7)?,
+            });
+        }
+        Ok(signals)
+    }
+
     pub fn routine_get(&self, id: &str) -> anyhow::Result<Option<Routine>> {
         let mut stmt = self.conn.prepare("SELECT id, name, steps, created_at FROM routines WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
@@ -532,6 +827,163 @@ impl CoordinationDb {
             .execute("UPDATE signals SET read = 1 WHERE id = ?1", params![id])?;
         Ok(rows > 0)
     }
+
+    pub fn sentinel_create(&self, sentinel: &Sentinel) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO sentinels (id, name, watch_type, trigger_condition, action_id, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                sentinel.id,
+                sentinel.name,
+                sentinel.watch_type,
+                sentinel.trigger_condition,
+                sentinel.action_id,
+                sentinel.expires_at,
+                sentinel.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn sentinel_list(&self) -> anyhow::Result<Vec<Sentinel>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, watch_type, trigger_condition, action_id, expires_at, created_at FROM sentinels ORDER BY created_at DESC"
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut sentinels = Vec::new();
+        while let Some(row) = rows.next()? {
+            sentinels.push(Sentinel {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                watch_type: row.get(2)?,
+                trigger_condition: row.get(3)?,
+                action_id: row.get(4)?,
+                expires_at: row.get(5)?,
+                created_at: row.get(6)?,
+            });
+        }
+        Ok(sentinels)
+    }
+
+    pub fn sentinel_get(&self, sentinel_id: &str) -> anyhow::Result<Option<Sentinel>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, watch_type, trigger_condition, action_id, expires_at, created_at FROM sentinels WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query(params![sentinel_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Sentinel {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                watch_type: row.get(2)?,
+                trigger_condition: row.get(3)?,
+                action_id: row.get(4)?,
+                expires_at: row.get(5)?,
+                created_at: row.get(6)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn sentinel_delete(&self, sentinel_id: &str) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM sentinels WHERE id = ?1", params![sentinel_id])?;
+        Ok(())
+    }
+
+    pub fn checkpoint_create(&self, checkpoint: &Checkpoint) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO checkpoints (id, name, operation, status, checkpoint_type, linked_action_ids, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                checkpoint.id,
+                checkpoint.name,
+                checkpoint.operation,
+                checkpoint.status,
+                checkpoint.checkpoint_type,
+                checkpoint.linked_action_ids,
+                checkpoint.created_at,
+                checkpoint.updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn checkpoint_resolve(&self, checkpoint_id: &str, status: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE checkpoints SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![status, checkpoint_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn checkpoint_list(&self) -> anyhow::Result<Vec<Checkpoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, operation, status, checkpoint_type, linked_action_ids, created_at, updated_at FROM checkpoints ORDER BY created_at DESC"
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut checkpoints = Vec::new();
+        while let Some(row) = rows.next()? {
+            checkpoints.push(Checkpoint {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                operation: row.get(2)?,
+                status: row.get(3)?,
+                checkpoint_type: row.get(4)?,
+                linked_action_ids: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            });
+        }
+        Ok(checkpoints)
+    }
+
+    pub fn team_share_create(&self, share: &TeamShare) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO team_shares (id, item_id, item_type, project, shared_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                share.id,
+                share.item_id,
+                share.item_type,
+                share.project,
+                share.shared_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn team_share_list(&self, project: Option<&str>) -> anyhow::Result<Vec<TeamShare>> {
+        let query = match project {
+            Some(_) => "SELECT id, item_id, item_type, project, shared_at FROM team_shares WHERE project = ?1 ORDER BY shared_at DESC",
+            None => "SELECT id, item_id, item_type, project, shared_at FROM team_shares ORDER BY shared_at DESC",
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let shares = if let Some(p) = project {
+            let mut rows = stmt.query(params![p])?;
+            let mut result = Vec::new();
+            while let Some(row) = rows.next()? {
+                result.push(TeamShare {
+                    id: row.get(0)?,
+                    item_id: row.get(1)?,
+                    item_type: row.get(2)?,
+                    project: row.get(3)?,
+                    shared_at: row.get(4)?,
+                });
+            }
+            result
+        } else {
+            let mut rows = stmt.query([])?;
+            let mut result = Vec::new();
+            while let Some(row) = rows.next()? {
+                result.push(TeamShare {
+                    id: row.get(0)?,
+                    item_id: row.get(1)?,
+                    item_type: row.get(2)?,
+                    project: row.get(3)?,
+                    shared_at: row.get(4)?,
+                });
+            }
+            result
+        };
+        Ok(shares)
+    }
 }
 
 impl EmbeddingDb {
@@ -575,6 +1027,569 @@ impl PalaceDb {
 
     pub fn coordination(&self) -> std::sync::MutexGuard<'_, CoordinationDb> {
         self.coordination.lock().unwrap()
+    }
+
+    pub fn slot_list(&self, project: Option<&str>) -> Result<Vec<MemorySlot>, DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        let query = if project.is_some() {
+            "SELECT id, label, content, size_limit, description, pinned, scope, project, created_at, updated_at FROM slots WHERE scope = 'global' OR project = ?1 ORDER BY pinned DESC, label ASC"
+        } else {
+            "SELECT id, label, content, size_limit, description, pinned, scope, project, created_at, updated_at FROM slots WHERE scope = 'global' ORDER BY pinned DESC, label ASC"
+        };
+        let mut stmt = conn.prepare(query)?;
+        let project_val = project.unwrap_or("");
+        let mut rows = if project.is_some() {
+            stmt.query(params![project_val])?
+        } else {
+            stmt.query([])?
+        };
+        let mut slots = Vec::new();
+        while let Some(row) = rows.next()? {
+            slots.push(MemorySlot {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                content: row.get(2)?,
+                size_limit: row.get(3)?,
+                description: row.get(4)?,
+                pinned: row.get::<_, i32>(5)? != 0,
+                scope: row.get(6)?,
+                project: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            });
+        }
+        Ok(slots)
+    }
+
+    pub fn slot_get(&self, label: &str) -> Result<Option<MemorySlot>, DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, label, content, size_limit, description, pinned, scope, project, created_at, updated_at FROM slots WHERE label = ?1",
+        )?;
+        let mut rows = stmt.query(params![label])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(MemorySlot {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                content: row.get(2)?,
+                size_limit: row.get(3)?,
+                description: row.get(4)?,
+                pinned: row.get::<_, i32>(5)? != 0,
+                scope: row.get(6)?,
+                project: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn slot_create(&mut self, slot: &MemorySlot) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute(
+            "INSERT INTO slots (id, label, content, size_limit, description, pinned, scope, project, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                slot.id,
+                slot.label,
+                slot.content,
+                slot.size_limit,
+                slot.description,
+                slot.pinned as i32,
+                slot.scope,
+                slot.project,
+                slot.created_at,
+                slot.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn slot_append(&mut self, label: &str, text: &str) -> Result<i32, DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT content, size_limit FROM slots WHERE label = ?1",
+        )?;
+        let mut rows = stmt.query(params![label])?;
+        let (current_content, size_limit): (String, i32) = match rows.next()? {
+            Some(row) => (row.get(0)?, row.get(1)?),
+            None => return Err(rusqlite::Error::QueryReturnedNoRows),
+        };
+        let new_content = format!("{}{}", current_content, text);
+        if new_content.len() as i32 > size_limit {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE slots SET content = ?1, updated_at = ?2 WHERE label = ?3",
+            params![new_content, now, label],
+        )?;
+        Ok(new_content.len() as i32)
+    }
+
+    pub fn slot_replace(&mut self, label: &str, content: &str) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT size_limit FROM slots WHERE label = ?1")?;
+        let mut rows = stmt.query(params![label])?;
+        let size_limit: i32 = match rows.next()? {
+            Some(row) => row.get(0)?,
+            None => return Err(rusqlite::Error::QueryReturnedNoRows),
+        };
+        if content.len() as i32 > size_limit {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE slots SET content = ?1, updated_at = ?2 WHERE label = ?3",
+            params![content, now, label],
+        )?;
+        Ok(())
+    }
+
+    pub fn slot_delete(&mut self, label: &str) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute("DELETE FROM slots WHERE label = ?1", params![label])?;
+        Ok(())
+    }
+
+    pub fn sketch_create(&mut self, sketch: &SketchRecord) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sketches (id, title, description, steps, project, expires_at, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                sketch.id,
+                sketch.title,
+                sketch.description,
+                sketch.steps,
+                sketch.project,
+                sketch.expires_at,
+                sketch.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn sketch_list(&self, project: Option<&str>) -> Result<Vec<SketchRecord>, DbErr> {
+        let conn = self.coordination.lock().unwrap();
+        let mut sketches = Vec::new();
+        match project {
+            Some(p) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, title, description, steps, project, expires_at, created_at
+                     FROM sketches WHERE project = ?1 ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![p], |row| {
+                    Ok(SketchRecord {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        description: row.get(2)?,
+                        steps: row.get(3)?,
+                        project: row.get(4)?,
+                        expires_at: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                })?;
+                for sketch in rows {
+                    sketches.push(sketch?);
+                }
+            }
+            None => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, title, description, steps, project, expires_at, created_at
+                     FROM sketches ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(SketchRecord {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        description: row.get(2)?,
+                        steps: row.get(3)?,
+                        project: row.get(4)?,
+                        expires_at: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                })?;
+                for sketch in rows {
+                    sketches.push(sketch?);
+                }
+            }
+        };
+        Ok(sketches)
+    }
+
+    pub fn sketch_delete(&mut self, id: &str) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute("DELETE FROM sketches WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn sketch_cleanup_expired(&mut self) -> Result<usize, DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let count = conn.execute("DELETE FROM sketches WHERE expires_at < ?1", params![now])?;
+        Ok(count)
+    }
+
+    pub fn crystal_create(&mut self, crystal: &CrystalRecord) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute(
+            "INSERT INTO crystals (id, action_ids, summary, narrative, outcomes, files_affected, lessons, project, session_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                crystal.id,
+                crystal.action_ids,
+                crystal.summary,
+                crystal.narrative,
+                crystal.outcomes,
+                crystal.files_affected,
+                crystal.lessons,
+                crystal.project,
+                crystal.session_id,
+                crystal.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn crystal_list(&self, project: Option<&str>) -> Result<Vec<CrystalRecord>, DbErr> {
+        let conn = self.coordination.lock().unwrap();
+        let mut crystals = Vec::new();
+        match project {
+            Some(p) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, action_ids, summary, narrative, outcomes, files_affected, lessons, project, session_id, created_at
+                     FROM crystals WHERE project = ?1 ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![p], |row| {
+                    Ok(CrystalRecord {
+                        id: row.get(0)?,
+                        action_ids: row.get(1)?,
+                        summary: row.get(2)?,
+                        narrative: row.get(3)?,
+                        outcomes: row.get(4)?,
+                        files_affected: row.get(5)?,
+                        lessons: row.get(6)?,
+                        project: row.get(7)?,
+                        session_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                    })
+                })?;
+                for crystal in rows {
+                    crystals.push(crystal?);
+                }
+            }
+            None => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, action_ids, summary, narrative, outcomes, files_affected, lessons, project, session_id, created_at
+                     FROM crystals ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(CrystalRecord {
+                        id: row.get(0)?,
+                        action_ids: row.get(1)?,
+                        summary: row.get(2)?,
+                        narrative: row.get(3)?,
+                        outcomes: row.get(4)?,
+                        files_affected: row.get(5)?,
+                        lessons: row.get(6)?,
+                        project: row.get(7)?,
+                        session_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                    })
+                })?;
+                for crystal in rows {
+                    crystals.push(crystal?);
+                }
+            }
+        };
+        Ok(crystals)
+    }
+
+    pub fn facet_create(&mut self, facet: &FacetRecord) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute(
+            "INSERT INTO facets (id, target_id, target_type, dimension, value, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                facet.id,
+                facet.target_id,
+                facet.target_type,
+                facet.dimension,
+                facet.value,
+                facet.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn facet_list(&self, target_id: Option<&str>, dimension: Option<&str>) -> Result<Vec<FacetRecord>, DbErr> {
+        let conn = self.coordination.lock().unwrap();
+        let mut facets = Vec::new();
+        match (target_id, dimension) {
+            (Some(tid), Some(dim)) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, target_id, target_type, dimension, value, created_at
+                     FROM facets WHERE target_id = ?1 AND dimension = ?2 ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![tid, dim], |row| {
+                    Ok(FacetRecord {
+                        id: row.get(0)?,
+                        target_id: row.get(1)?,
+                        target_type: row.get(2)?,
+                        dimension: row.get(3)?,
+                        value: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?;
+                for facet in rows {
+                    facets.push(facet?);
+                }
+            }
+            (Some(tid), None) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, target_id, target_type, dimension, value, created_at
+                     FROM facets WHERE target_id = ?1 ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![tid], |row| {
+                    Ok(FacetRecord {
+                        id: row.get(0)?,
+                        target_id: row.get(1)?,
+                        target_type: row.get(2)?,
+                        dimension: row.get(3)?,
+                        value: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?;
+                for facet in rows {
+                    facets.push(facet?);
+                }
+            }
+            (None, Some(dim)) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, target_id, target_type, dimension, value, created_at
+                     FROM facets WHERE dimension = ?1 ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![dim], |row| {
+                    Ok(FacetRecord {
+                        id: row.get(0)?,
+                        target_id: row.get(1)?,
+                        target_type: row.get(2)?,
+                        dimension: row.get(3)?,
+                        value: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?;
+                for facet in rows {
+                    facets.push(facet?);
+                }
+            }
+            (None, None) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, target_id, target_type, dimension, value, created_at
+                     FROM facets ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(FacetRecord {
+                        id: row.get(0)?,
+                        target_id: row.get(1)?,
+                        target_type: row.get(2)?,
+                        dimension: row.get(3)?,
+                        value: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?;
+                for facet in rows {
+                    facets.push(facet?);
+                }
+            }
+        };
+        Ok(facets)
+    }
+
+    pub fn facet_delete(&mut self, id: &str) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute("DELETE FROM facets WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn lesson_create(&mut self, lesson: &LessonRecord) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute(
+            "INSERT INTO lessons (id, content, context, confidence, project, tags, reinforced_at, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                lesson.id,
+                lesson.content,
+                lesson.context,
+                lesson.confidence,
+                lesson.project,
+                lesson.tags,
+                lesson.reinforced_at,
+                lesson.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn lesson_list(&self, project: Option<&str>, min_confidence: Option<f64>) -> Result<Vec<LessonRecord>, DbErr> {
+        let conn = self.coordination.lock().unwrap();
+        let mut lessons = Vec::new();
+        match (project, min_confidence) {
+            (Some(p), Some(conf)) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, content, context, confidence, project, tags, reinforced_at, created_at
+                     FROM lessons WHERE project = ?1 AND confidence >= ?2 ORDER BY confidence DESC, created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![p, conf], |row| {
+                    Ok(LessonRecord {
+                        id: row.get(0)?,
+                        content: row.get(1)?,
+                        context: row.get(2)?,
+                        confidence: row.get(3)?,
+                        project: row.get(4)?,
+                        tags: row.get(5)?,
+                        reinforced_at: row.get(6)?,
+                        created_at: row.get(7)?,
+                    })
+                })?;
+                for lesson in rows {
+                    lessons.push(lesson?);
+                }
+            }
+            (Some(p), None) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, content, context, confidence, project, tags, reinforced_at, created_at
+                     FROM lessons WHERE project = ?1 ORDER BY confidence DESC, created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![p], |row| {
+                    Ok(LessonRecord {
+                        id: row.get(0)?,
+                        content: row.get(1)?,
+                        context: row.get(2)?,
+                        confidence: row.get(3)?,
+                        project: row.get(4)?,
+                        tags: row.get(5)?,
+                        reinforced_at: row.get(6)?,
+                        created_at: row.get(7)?,
+                    })
+                })?;
+                for lesson in rows {
+                    lessons.push(lesson?);
+                }
+            }
+            (None, Some(conf)) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, content, context, confidence, project, tags, reinforced_at, created_at
+                     FROM lessons WHERE confidence >= ?1 ORDER BY confidence DESC, created_at DESC",
+                )?;
+                let rows = stmt.query_map(params![conf], |row| {
+                    Ok(LessonRecord {
+                        id: row.get(0)?,
+                        content: row.get(1)?,
+                        context: row.get(2)?,
+                        confidence: row.get(3)?,
+                        project: row.get(4)?,
+                        tags: row.get(5)?,
+                        reinforced_at: row.get(6)?,
+                        created_at: row.get(7)?,
+                    })
+                })?;
+                for lesson in rows {
+                    lessons.push(lesson?);
+                }
+            }
+            (None, None) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, content, context, confidence, project, tags, reinforced_at, created_at
+                     FROM lessons ORDER BY confidence DESC, created_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(LessonRecord {
+                        id: row.get(0)?,
+                        content: row.get(1)?,
+                        context: row.get(2)?,
+                        confidence: row.get(3)?,
+                        project: row.get(4)?,
+                        tags: row.get(5)?,
+                        reinforced_at: row.get(6)?,
+                        created_at: row.get(7)?,
+                    })
+                })?;
+                for lesson in rows {
+                    lessons.push(lesson?);
+                }
+            }
+        };
+        Ok(lessons)
+    }
+
+    pub fn lesson_reinforce(&mut self, id: &str) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE lessons SET reinforced_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn insight_create(&mut self, insight: &InsightRecord) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute(
+            "INSERT INTO insights (id, content, confidence, project, cluster_id, reinforced_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                insight.id,
+                insight.content,
+                insight.confidence,
+                insight.project,
+                insight.cluster_id,
+                insight.reinforced_count,
+                insight.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn insight_list(&self, project: Option<&str>, min_confidence: Option<f64>) -> Result<Vec<InsightRecord>, DbErr> {
+        let conn = self.coordination.lock().unwrap();
+        let mut insights = Vec::new();
+        let sql = match (project, min_confidence) {
+            (Some(_), Some(_)) => "SELECT id, content, confidence, project, cluster_id, reinforced_count, created_at FROM insights WHERE project = ?1 AND confidence >= ?2 ORDER BY confidence DESC, created_at DESC",
+            (Some(_), None) => "SELECT id, content, confidence, project, cluster_id, reinforced_count, created_at FROM insights WHERE project = ?1 ORDER BY confidence DESC, created_at DESC",
+            (None, Some(_)) => "SELECT id, content, confidence, project, cluster_id, reinforced_count, created_at FROM insights WHERE confidence >= ?1 ORDER BY confidence DESC, created_at DESC",
+            (None, None) => "SELECT id, content, confidence, project, cluster_id, reinforced_count, created_at FROM insights ORDER BY confidence DESC, created_at DESC",
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let mut rows = match (project, min_confidence) {
+            (Some(p), Some(conf)) => stmt.query(params![p, conf])?,
+            (Some(p), None) => stmt.query(params![p])?,
+            (None, Some(conf)) => stmt.query(params![conf])?,
+            (None, None) => stmt.query([])?,
+        };
+        while let Some(row) = rows.next()? {
+            insights.push(InsightRecord {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                confidence: row.get(2)?,
+                project: row.get(3)?,
+                cluster_id: row.get(4)?,
+                reinforced_count: row.get(5)?,
+                created_at: row.get(6)?,
+            });
+        }
+        Ok(insights)
+    }
+
+    pub fn insight_reinforce(&mut self, id: &str) -> Result<(), DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        conn.execute(
+            "UPDATE insights SET reinforced_count = reinforced_count + 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
     }
 
     /// Embedder-aware open path (mp-016 / ADR-8).

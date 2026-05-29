@@ -121,6 +121,10 @@ pub mod palace_db;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod palace_graph;
+pub mod graph_extraction;
+pub mod graph_retrieval;
+pub mod temporal_graph;
+pub mod relations;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod privacy;

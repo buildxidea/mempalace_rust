@@ -751,21 +751,41 @@ pub struct GraphNode {
     pub name: String,
     pub node_type: GraphNodeType,
     pub properties: HashMap<String, serde_json::Value>,
+    pub source_observation_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub valid_from: Option<DateTime<Utc>>,
     pub valid_to: Option<DateTime<Utc>>,
+    pub aliases: Vec<String>,
+    pub stale: bool,
 }
 
 /// Edge connecting knowledge graph nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphEdge {
+    pub id: String,
     pub from_id: String,
     pub to_id: String,
     pub edge_type: GraphEdgeType,
     pub weight: f64,
+    pub source_observation_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub valid_from: Option<DateTime<Utc>>,
     pub valid_to: Option<DateTime<Utc>>,
+    pub context: Option<EdgeContext>,
+    pub version: u32,
+    pub superseded_by: Option<String>,
+    pub is_latest: bool,
+    pub stale: bool,
+}
+
+/// Additional context for a graph edge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeContext {
+    pub reasoning: Option<String>,
+    pub sentiment: Option<String>,
+    pub alternatives: Vec<String>,
+    pub situational_factors: Vec<String>,
+    pub confidence: Option<f64>,
 }
 
 /// Image data attached to observations.

@@ -272,6 +272,18 @@ pub enum ActionEdgeType {
     Supersedes,
 }
 
+impl std::fmt::Display for ActionEdgeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Blocks => write!(f, "blocks"),
+            Self::BlockedBy => write!(f, "blocked_by"),
+            Self::DependsOn => write!(f, "depends_on"),
+            Self::RelatesTo => write!(f, "relates_to"),
+            Self::Supersedes => write!(f, "supersedes"),
+        }
+    }
+}
+
 /// Lifecycle status of an action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -281,6 +293,35 @@ pub enum ActionStatus {
     Completed,
     Failed,
     Cancelled,
+    Blocked,
+}
+
+impl std::fmt::Display for ActionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::InProgress => write!(f, "in_progress"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+            Self::Blocked => write!(f, "blocked"),
+        }
+    }
+}
+
+impl std::str::FromStr for ActionStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "in_progress" => Ok(Self::InProgress),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            "blocked" | "Blocked" => Ok(Self::Blocked),
+            _ => Err(format!("unknown ActionStatus: {s}")),
+        }
+    }
 }
 
 /// Types of inter-agent signals.

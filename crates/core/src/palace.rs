@@ -46,6 +46,7 @@ pub mod store;
 pub use builder::PalaceBuilder;
 pub use store::embedvec::EmbedvecStore;
 pub use store::StoreTier;
+pub use crate::session::SessionStore;
 
 // ---------------------------------------------------------------------------
 // Public types (mirroring the §3 Concrete API Sketch)
@@ -569,6 +570,10 @@ pub struct Palace {
     // All internal state is behind Arcs so Palace is Send + Sync.
     embedder: Arc<dyn super::embed::Embedder>,
     store: Arc<dyn PalaceStore>,
+    /// LLM provider for compression and image description (Phase 0 / bead 0.2).
+    pub llm: Option<Arc<dyn crate::llm::LlmProvider>>,
+    /// Session store for lifecycle observations (Phase 0 / bead 0.3).
+    pub sessions: Option<Arc<crate::session::SessionStore>>,
 }
 
 impl std::fmt::Debug for Palace {

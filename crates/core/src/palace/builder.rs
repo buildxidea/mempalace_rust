@@ -25,7 +25,7 @@
 // both standalone (global palace) and library (per-project palace)
 // modes.
 
-use super::{Palace, PalaceStore};
+use super::Palace;
 use std::sync::Arc;
 
 /// Configuration for a palace instance (ADR-7).
@@ -81,7 +81,9 @@ impl Default for PalaceConfig {
 pub struct PalaceBuilder {
     config: Option<PalaceConfig>,
     embedder: Option<Arc<dyn crate::embed::Embedder>>,
-    store: Option<Arc<dyn PalaceStore>>,
+    store: Option<Arc<dyn super::PalaceStore>>,
+    llm: Option<Arc<dyn crate::llm::LlmProvider>>,
+    session_store: Option<Arc<crate::session::SessionStore>>,
 }
 
 impl std::fmt::Debug for PalaceBuilder {
@@ -101,6 +103,8 @@ impl PalaceBuilder {
             config: None,
             embedder: None,
             store: None,
+            llm: None,
+            session_store: None,
         }
     }
 
@@ -128,8 +132,25 @@ impl PalaceBuilder {
     /// up to ~5 k drawers with no configuration. Tier promotion
     /// (embedvec → hnsw_rs → usearch → lancedb) is handled by `mpr doctor`
     /// and the migration tools in Phase 5.
-    pub fn store(mut self, store: Arc<dyn PalaceStore>) -> Self {
+    pub fn store(mut self, store: Arc<dyn super::PalaceStore>) -> Self {
         self.store = Some(store);
+        self
+    }
+
+    /// Set the LLM provider (optional).
+    ///
+    /// When set, enables LLM-assisted compression and image description.
+    /// When `None`, the palace operates without LLM capabilities.
+    pub fn llm(mut self, provider: Arc<dyn crate::llm::LlmProvider>) -> Self {
+        self.llm = Some(provider);
+        self
+    }
+
+    /// Set the session store (optional).
+    ///
+    /// When set, enables session tracking and observation storage.
+    pub fn session_store(mut self, store: Arc<crate::session::SessionStore>) -> Self {
+        self.session_store = Some(store);
         self
     }
 
@@ -201,7 +222,12 @@ impl PalaceBuilder {
             )
         };
 
-        Ok(Palace { embedder, store })
+        Ok(Palace {
+            embedder,
+            store,
+            llm: self.llm,
+            sessions: self.session_store,
+        })
     }
 }
 

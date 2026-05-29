@@ -19,6 +19,10 @@ pub mod mcp_server;
 pub mod miner;
 pub mod onboarding;
 pub mod searcher;
+pub mod types;
+pub mod llm;
+pub mod session;
+pub mod prompts;
 
 // =====================================================================
 // Internal modules — hidden from docs.rs (mp-006)

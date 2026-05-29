@@ -32,6 +32,8 @@ jobs:
 
       - name: Test (all features)
         if: runner.os != 'Windows'
+        env:
+          MEMPALACE_SKIP_NETWORK_TESTS: "1"
         run: cargo test --workspace --all-features
 
       - name: Test (default features)

@@ -175,6 +175,39 @@ pub mod split_mega_files;
 pub mod sweeper;
 
 // =====================================================================
+// Phase 8 — AgentMemory MCP expansion (internal, evolving)
+// =====================================================================
+
+#[doc(hidden)]
+pub mod observe;
+#[doc(hidden)]
+pub mod access_tracker;
+#[doc(hidden)]
+pub mod branch_aware;
+#[doc(hidden)]
+pub mod claude_bridge;
+#[doc(hidden)]
+pub mod enrich;
+#[doc(hidden)]
+pub mod file_index;
+#[doc(hidden)]
+pub mod governance;
+#[doc(hidden)]
+pub mod replay;
+#[doc(hidden)]
+pub mod skill_extract;
+#[doc(hidden)]
+pub mod sliding_window;
+#[doc(hidden)]
+pub mod compress_file;
+#[doc(hidden)]
+pub mod verify;
+#[doc(hidden)]
+pub mod heal;
+#[doc(hidden)]
+pub mod obsidian_export;
+
+// =====================================================================
 // New-architecture surface (mp-010 onwards) — Embedder trait
 // =====================================================================
 //

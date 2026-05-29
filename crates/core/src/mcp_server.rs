@@ -214,6 +214,10 @@ const MUTATION_TOOLS: &[&str] = &[
     "mempalace_kg_add",
     "mempalace_kg_invalidate",
     "mempalace_diary_write",
+    "mempalace_heal",
+    "mempalace_governance_delete",
+    "mempalace_obsidian_export",
+    "mempalace_compress_file",
 ];
 
 /// Whether a tool mutates state and should be excluded from `tools/list` in
@@ -312,6 +316,13 @@ fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject) -> DynResu
                 "mempalace_graph_stats" => tool_graph_stats(&state, args),
                 "mempalace_diary_read" => tool_diary_read(&state, args),
                 "mempalace_diary_write" => tool_diary_write(&state, args),
+                "mempalace_heal" => tool_heal(&state, args),
+                "mempalace_verify" => tool_verify(&state, args),
+                "mempalace_governance_delete" => tool_governance_delete(&state, args),
+                "mempalace_obsidian_export" => tool_obsidian_export(&state, args),
+                "mempalace_compress_file" => tool_compress_file(&state, args),
+                "mempalace_detect_worktree" => tool_detect_worktree(&state, args),
+                "mempalace_replay_import" => tool_replay_import(&state, args),
                 // Aliases aligned with @modelcontextprotocol/server-memory (one minor release)
                 "memory_search" | "memory_list" => tool_search(&state, args),
                 "memory_list_wings" => tool_list_wings(&state, args),
@@ -472,6 +483,48 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Diary Read",
             "Read your recent diary entries (in AAAK). See what past versions of yourself recorded — your journal across sessions.",
             serde_json::json!({ "type": "object", "properties": { "agent_name": { "type": "string", "description": "Your name — each agent gets their own diary wing" }, "last_n": { "type": "integer", "description": "Number of recent entries to read (default: 10)" }, "wing": { "type": "string", "description": "Optional wing filter. If omitted, returns diary entries across every wing for this agent." } }, "required": ["agent_name"] }),
+        ),
+        tool(
+            "mempalace_heal",
+            "Heal Palace",
+            "Auto-fix blocked actions and expired leases in the palace. Repairs broken dependency chains and cleans up stale resource leases.",
+            serde_json::json!({ "type": "object", "properties": { "dry_run": { "type": "boolean", "description": "Preview what would be fixed without making changes (default: false)" } } }),
+        ),
+        tool(
+            "mempalace_verify",
+            "Verify Memory",
+            "Verify a memory or observation by tracing its citation chain back to source. Returns confidence score and any issues found.",
+            serde_json::json!({ "type": "object", "properties": { "target_id": { "type": "string", "description": "ID of the memory or observation to verify" }, "target_type": { "type": "string", "description": "Type of target: 'memory' or 'observation'" } }, "required": ["target_id", "target_type"] }),
+        ),
+        tool(
+            "mempalace_governance_delete",
+            "Governance Delete",
+            "Delete memories from the palace based on governance policies: age, strength, type, project, or access patterns. Includes audit trail.",
+            serde_json::json!({ "type": "object", "properties": { "max_age_days": { "type": "integer", "description": "Delete memories older than N days" }, "min_strength": { "type": "number", "description": "Delete memories below strength threshold (0-1)" }, "memory_type": { "type": "string", "description": "Filter by memory type (semantic, procedural, etc.)" }, "project": { "type": "string", "description": "Filter by project name" }, "not_accessed_since_days": { "type": "integer", "description": "Delete memories not accessed in N days" }, "reason": { "type": "string", "description": "Reason for deletion (required, for audit)" }, "type": { "type": "string", "description": "Alias for memory_type" } } }),
+        ),
+        tool(
+            "mempalace_obsidian_export",
+            "Obsidian Export",
+            "Export memories or observations to an Obsidian-compatible markdown vault.",
+            serde_json::json!({ "type": "object", "properties": { "export_type": { "type": "string", "description": "What to export: 'memories' or 'observations'" }, "output_dir": { "type": "string", "description": "Output directory for exported markdown files (default: ./memory-export)" }, "include_frontmatter": { "type": "boolean", "description": "Include YAML frontmatter in exported files (default: true)" }, "include_tags": { "type": "boolean", "description": "Include tags in exported files (default: true)" } }, "required": ["export_type"] }),
+        ),
+        tool(
+            "mempalace_compress_file",
+            "Compress File",
+            "Compress a markdown file by removing redundant whitespace and formatting. Creates a backup of the original.",
+            serde_json::json!({ "type": "object", "properties": { "file_path": { "type": "string", "description": "Path to the markdown file to compress" }, "dry_run": { "type": "boolean", "description": "Preview compression without modifying the file (default: false)" } }, "required": ["file_path"] }),
+        ),
+        tool(
+            "mempalace_detect_worktree",
+            "Detect Worktree",
+            "Detect which git worktree the current or given project path is in, and list all worktrees. Returns branch, path, and whether each is the current one.",
+            serde_json::json!({ "type": "object", "properties": { "project_path": { "type": "string", "description": "Path to the project directory to check (optional, defaults to current working directory)" } } }),
+        ),
+        tool(
+            "mempalace_replay_import",
+            "Replay Import",
+            "Scan ~/.claude/projects for Claude Code session JSONL files and import them as observations. Returns imported session IDs, observation counts, and project names.",
+            serde_json::json!({ "type": "object", "properties": { "project_filter": { "type": "string", "description": "Only import sessions from this project name (optional)" } } }),
         ),
     ]
 }
@@ -1211,6 +1264,315 @@ fn tool_graph_stats(state: &AppState, _args: JsonObject) -> Result<CallToolResul
         "total_edges": stats.total_edges,
         "rooms_per_wing": stats.rooms_per_wing,
         "top_tunnels": stats.top_tunnels,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 tool handlers
+// ---------------------------------------------------------------------------
+
+fn tool_heal(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    read_only_guard(state)?;
+    #[derive(Deserialize)]
+    struct Input {
+        dry_run: Option<bool>,
+    }
+    let input: Input = parse_args(args)?;
+
+    let db = fresh_db(state)?;
+    let all_entries = db.get_all(None, None, usize::MAX);
+
+    let mut actions: Vec<crate::types::Action> = Vec::new();
+    let mut leases: Vec<crate::types::Lease> = Vec::new();
+
+    for entry in &all_entries {
+        if let Some(meta) = entry.metadatas.first() {
+            let action_type = meta.get("type").and_then(|v| v.as_str());
+            if action_type == Some("action") {
+                if let Some(doc) = entry.documents.first() {
+                    if let Ok(action) = serde_json::from_str::<crate::types::Action>(doc) {
+                        actions.push(action);
+                    }
+                }
+            } else if action_type == Some("lease") {
+                if let Some(doc) = entry.documents.first() {
+                    if let Ok(lease) = serde_json::from_str::<crate::types::Lease>(doc) {
+                        leases.push(lease);
+                    }
+                }
+            }
+        }
+    }
+
+    let empty_edges: Vec<crate::types::ActionEdge> = Vec::new();
+
+    let result = crate::heal::heal_all(
+        &mut actions,
+        &empty_edges,
+        &mut leases,
+        input.dry_run.unwrap_or(false),
+    )
+    .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({
+        "fixed": result.fixed,
+        "failed": result.failed,
+        "dry_run": result.dry_run,
+        "actions_healed": result.fixed.iter().filter(|s| s.starts_with("action:")).count(),
+        "leases_healed": result.fixed.iter().filter(|s| s.starts_with("lease:")).count(),
+    }))
+}
+
+fn tool_verify(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    if collection_missing(state) {
+        return ok_json(no_palace());
+    }
+    #[derive(Deserialize)]
+    struct Input {
+        target_id: String,
+        target_type: String,
+    }
+    let input: Input = parse_args(args)?;
+
+    let db = fresh_db(state)?;
+    let all_entries = db.get_all(None, None, usize::MAX);
+
+    let memories: Vec<crate::types::Memory> = all_entries
+        .iter()
+        .filter_map(|entry| {
+            entry.documents.first().and_then(|doc| {
+                serde_json::from_str::<crate::types::Memory>(doc).ok()
+            })
+        })
+        .collect();
+
+    let observations: Vec<crate::types::CompressedObservation> = all_entries
+        .iter()
+        .filter_map(|entry| {
+            entry.documents.first().and_then(|doc| {
+                serde_json::from_str::<crate::types::CompressedObservation>(doc).ok()
+            })
+        })
+        .collect();
+
+    let session_ids: Vec<String> = all_entries
+        .iter()
+        .filter_map(|entry| {
+            entry.metadatas.first()?.get("session_id")?.as_str().map(String::from)
+        })
+        .collect();
+
+    let verify_result = if input.target_type == "memory" {
+        crate::verify::verify_memory(&input.target_id, &memories, &observations)
+    } else {
+        crate::verify::verify_observation(&input.target_id, &observations, &session_ids)
+    }
+    .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({
+        "id": verify_result.id,
+        "verified": verify_result.verified,
+        "confidence": verify_result.confidence,
+        "chain": verify_result.chain,
+        "issues": verify_result.issues,
+    }))
+}
+
+fn tool_governance_delete(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    read_only_guard(state)?;
+    #[derive(Deserialize)]
+    struct Input {
+        max_age_days: Option<u64>,
+        min_strength: Option<f64>,
+        memory_type: Option<String>,
+        project: Option<String>,
+        not_accessed_since_days: Option<u64>,
+        reason: String,
+        #[serde(rename = "type")]
+        memory_type_field: Option<String>,
+    }
+    let input: Input = parse_args(args)?;
+
+    let db = fresh_db(state)?;
+    let all_entries = db.get_all(None, None, usize::MAX);
+
+    let mut memories: Vec<crate::types::Memory> = all_entries
+        .iter()
+        .filter_map(|entry| {
+            entry.documents.first().and_then(|doc| {
+                serde_json::from_str::<crate::types::Memory>(doc).ok()
+            })
+        })
+        .collect();
+
+    let filter = crate::governance::GovernanceFilter {
+        max_age_days: input.max_age_days,
+        min_strength: input.min_strength,
+        memory_type: input.memory_type.or(input.memory_type_field),
+        project: input.project,
+        tags: Vec::new(),
+        not_accessed_since_days: input.not_accessed_since_days,
+    };
+
+    let result = crate::governance::governance_delete(&mut memories, &filter, &input.reason);
+
+    if !result.deleted_ids.is_empty() {
+        let mut db = fresh_db(state)?;
+        for id in &result.deleted_ids {
+            let _ = db.delete_id(id);
+        }
+        db.flush().map_err(|e| internal_error_safe(&e))?;
+    }
+
+    ok_json(serde_json::json!({
+        "deleted_ids": result.deleted_ids,
+        "count": result.count,
+        "reason": result.reason,
+    }))
+}
+
+fn tool_obsidian_export(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    read_only_guard(state)?;
+    #[derive(Deserialize)]
+    struct Input {
+        export_type: String,
+        output_dir: Option<String>,
+        include_frontmatter: Option<bool>,
+        include_tags: Option<bool>,
+    }
+    let input: Input = parse_args(args)?;
+
+    let db = fresh_db(state)?;
+    let all_entries = db.get_all(None, None, usize::MAX);
+
+    let config = crate::obsidian_export::ObsidianExportConfig {
+        output_dir: input.output_dir.unwrap_or_else(|| "./memory-export".to_string()),
+        include_frontmatter: input.include_frontmatter.unwrap_or(true),
+        include_tags: input.include_tags.unwrap_or(true),
+        include_links: true,
+        tag_prefix: "memory/".to_string(),
+        date_format: "%Y-%m-%d %H:%M".to_string(),
+    };
+
+    let export_result = if input.export_type == "observations" {
+        let observations: Vec<crate::types::CompressedObservation> = all_entries
+            .iter()
+            .filter_map(|entry| {
+                entry.documents.first().and_then(|doc| {
+                    serde_json::from_str::<crate::types::CompressedObservation>(doc).ok()
+                })
+            })
+            .collect();
+        crate::obsidian_export::export_observations(&observations, &config)
+    } else {
+        let memories: Vec<crate::types::Memory> = all_entries
+            .iter()
+            .filter_map(|entry| {
+                entry.documents.first().and_then(|doc| {
+                    serde_json::from_str::<crate::types::Memory>(doc).ok()
+                })
+            })
+            .collect();
+        crate::obsidian_export::export_memories(&memories, &config)
+    }
+    .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({
+        "exported_count": export_result.exported_count,
+        "output_dir": export_result.output_dir,
+        "files": export_result.files,
+    }))
+}
+
+fn tool_compress_file(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    read_only_guard(state)?;
+    #[derive(Deserialize)]
+    struct Input {
+        file_path: String,
+        dry_run: Option<bool>,
+    }
+    let input: Input = parse_args(args)?;
+
+    let path = std::path::PathBuf::from(&input.file_path);
+    let result = crate::compress_file::compress_markdown_file(&path)
+        .map_err(|e| internal_error_safe(&e))?;
+
+    if input.dry_run.unwrap_or(false) {
+        ok_json(serde_json::json!({
+            "would_compress": true,
+            "original_size": result.original_size,
+            "compressed_size": result.compressed_size,
+            "reduction_pct": result.reduction_pct,
+            "message": "dry_run=true — no changes made",
+        }))
+    } else {
+        ok_json(serde_json::json!({
+            "original_path": result.original_path,
+            "backup_path": result.backup_path,
+            "original_size": result.original_size,
+            "compressed_size": result.compressed_size,
+            "reduction_pct": result.reduction_pct,
+        }))
+    }
+}
+
+fn tool_detect_worktree(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    struct Input {
+        project_path: Option<String>,
+    }
+    let input: Input = parse_args(args)?;
+
+    let path = input
+        .project_path
+        .as_deref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| state.palace_path.clone());
+
+    let worktrees = crate::branch_aware::list_worktrees(&path)
+        .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({
+        "worktrees": worktrees,
+        "count": worktrees.len(),
+    }))
+}
+
+fn tool_replay_import(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    struct Input {
+        project_filter: Option<String>,
+    }
+    let input: Input = parse_args(args)?;
+
+    let sessions = crate::replay::load_all_sessions()
+        .map_err(|e| internal_error_safe(&e))?;
+
+    let filtered: Vec<_> = if let Some(ref proj) = input.project_filter {
+        sessions
+            .into_iter()
+            .filter(|s| s.project == *proj)
+            .collect()
+    } else {
+        sessions
+    };
+
+    let summaries: Vec<serde_json::Value> = filtered
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "project": s.project,
+                "message_count": s.message_count,
+                "observation_count": s.observations.len(),
+            })
+        })
+        .collect();
+
+    ok_json(serde_json::json!({
+        "sessions": summaries,
+        "count": summaries.len(),
+        "project_filter": input.project_filter,
     }))
 }
 

@@ -28,6 +28,10 @@ pub mod compress_synthetic;
 pub mod consolidation;
 pub mod consolidation_pipeline;
 pub mod memory_lifecycle;
+pub mod retention;
+pub mod auto_forget;
+pub mod evict;
+pub mod search;
 
 // =====================================================================
 // Internal modules — hidden from docs.rs (mp-006)

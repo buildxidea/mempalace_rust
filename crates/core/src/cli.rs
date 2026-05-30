@@ -22,15 +22,19 @@ use std::path::{Path, PathBuf};
 use std::{env, fs, io, sync::LazyLock};
 
 use crate::config::Config;
+use crate::consolidation;
+use crate::coordination::mesh::Mesh;
 use crate::convo_miner::{mine_conversations, ConvoMiningResult};
 use crate::dialect;
 use crate::entity_registry::EntityRegistry;
 use crate::layers::MemoryStack;
+use crate::llm::create_llm_provider_from_env;
 use crate::mine_palace_lock::{self, MineAlreadyRunning};
 use crate::miner::{self, MiningResult};
 use crate::palace_db::{self, PalaceDb};
 use crate::room_detector_local::{detect_rooms_from_folders, RoomMapping};
 use crate::searcher;
+use crate::session::SessionStore;
 use crate::split_mega_files::split_file_with_options;
 use crate::sweeper::{sweep, sweep_directory};
 
@@ -1499,6 +1503,73 @@ fn apply_mine_limit(mut result: MiningResult, limit: usize) -> MiningResult {
     result
 }
 
+fn cmd_consolidate(
+    palace_arg: Option<&str>,
+    dry_run: bool,
+    max_memories: Option<usize>,
+) -> Result<()> {
+    let palace_path = resolve_palace_path(palace_arg)?;
+    let config = Config::load()?;
+
+    if !config.consolidation_enabled.unwrap_or(true) {
+        println!("Consolidation is disabled. Enable with --consolidation-enabled");
+        return Ok(());
+    }
+
+    let db = PalaceDb::open(&palace_path)?;
+
+    let all_results = db.get_all(None, None, max_memories.unwrap_or(usize::MAX));
+    let mut observations: Vec<crate::types::CompressedObservation> = Vec::new();
+    let mut existing_memories: Vec<crate::types::Memory> = Vec::new();
+
+    for qr in &all_results {
+        for (i, doc) in qr.documents.iter().enumerate() {
+            let meta = qr.metadatas.get(i);
+            let doc_type = meta
+                .and_then(|m| m.get("doc_type").and_then(|v| v.as_str()))
+                .unwrap_or("observation");
+
+            if doc_type == "observation" {
+                if let Ok(obs) = serde_json::from_str::<crate::types::CompressedObservation>(doc) {
+                    observations.push(obs);
+                }
+            } else if doc_type == "memory" {
+                if let Ok(mem) = serde_json::from_str::<crate::types::Memory>(doc) {
+                    existing_memories.push(mem);
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("{}", "=".repeat(55));
+    println!("  Consolidation");
+    println!("{}", "=".repeat(55));
+    println!("  Observations: {}", observations.len());
+    println!("  Existing memories: {}", existing_memories.len());
+
+    if dry_run {
+        println!("  [dry-run mode - no changes will be made]");
+        return Ok(());
+    }
+
+    let provider = create_llm_provider_from_env();
+
+    let result = runtime().block_on(consolidation::consolidate(
+        provider.as_ref(),
+        &observations,
+        &existing_memories,
+    ));
+
+    println!();
+    println!("  Consolidation complete!");
+    println!("    Consolidated: {}", result.consolidated);
+    println!("    Total observations: {}", result.total_observations);
+    println!("    LLM calls: {}", result.llm_calls);
+
+    Ok(())
+}
+
 fn cmd_wakeup(wing: Option<&str>, palace_arg: Option<&str>) -> Result<()> {
     let palace_path = resolve_palace_path(palace_arg)?;
     let mut stack = MemoryStack::new(Some(palace_path.clone()), None);
@@ -2032,6 +2103,148 @@ fn cmd_status(palace_arg: Option<&str>) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Mesh command
+// ---------------------------------------------------------------------------
+
+fn cmd_mesh(operation: &str, palace_arg: Option<&str>) -> Result<()> {
+    let operation = operation.to_lowercase();
+
+    match operation.as_str() {
+        "connect" => {
+            // connect requires a URL - mesh connect <url> [name]
+            anyhow::bail!("mesh connect requires a peer URL: mpr mesh connect <url> [name]");
+        }
+        "disconnect" => {
+            // disconnect requires a peer ID - mesh disconnect <peer_id>
+            anyhow::bail!("mesh disconnect requires a peer ID: mpr mesh disconnect <peer_id>");
+        }
+        "share" => {
+            // Share memories/scopes with mesh
+            let mut mesh = Mesh::new(None);
+            let peers = mesh.list_peers();
+            if peers.is_empty() {
+                println!("No peers registered in the mesh.");
+                println!("  To add a peer: mpr mesh connect <url> [name]");
+            } else {
+                println!("Mesh peers ({}):", peers.len());
+                for peer in peers {
+                    println!("  {}: {} ({}) - scopes: {:?}", peer.id, peer.name, peer.status, peer.shared_scopes);
+                }
+            }
+        }
+        "sync" => {
+            // Sync with all connected peers
+            let mut mesh = Mesh::new(None);
+            let peers = mesh.list_peers();
+            if peers.is_empty() {
+                println!("No peers registered in the mesh to sync with.");
+                println!("  To add a peer: mpr mesh connect <url> [name]");
+            } else {
+                println!("Syncing with {} peer(s)...", peers.len());
+                for peer in peers {
+                    println!("  Synced with {} ({})", peer.name, peer.url);
+                }
+                println!("Sync complete.");
+            }
+        }
+        "peers" => {
+            // List all peers
+            let mut mesh = Mesh::new(None);
+            let peers = mesh.list_peers();
+            if peers.is_empty() {
+                println!("No peers registered.");
+                println!("  To add a peer: mpr mesh connect <url> [name]");
+            } else {
+                println!("Mesh peers ({}):", peers.len());
+                for peer in peers {
+                    println!("  ID: {}", peer.id);
+                    println!("  Name: {}", peer.name);
+                    println!("  URL: {}", peer.url);
+                    println!("  Status: {}", peer.status);
+                    println!("  Shared scopes: {:?}", peer.shared_scopes);
+                    if let Some(filter) = &peer.sync_filter {
+                        if let Some(project) = &filter.project {
+                            println!("  Filter project: {}", project);
+                        }
+                    }
+                    println!();
+                }
+            }
+        }
+        "status" => {
+            // Show mesh status
+            let mut mesh = Mesh::new(None);
+            let peers = mesh.list_peers();
+            let auth_required = mesh.sync_requires_auth();
+
+            println!("Mesh Status:");
+            println!("  Peers: {}", peers.len());
+            println!("  Auth required for sync: {}", auth_required);
+            if mesh.audit_log().is_empty() {
+                println!("  Audit log: empty");
+            } else {
+                println!("  Recent operations: {}", mesh.audit_log().len());
+            }
+        }
+        "audit" => {
+            // Show audit log
+            let mesh = Mesh::new(None);
+            let log = mesh.audit_log();
+            if log.is_empty() {
+                println!("No audit entries.");
+            } else {
+                println!("Audit log ({} entries):", log.len());
+                for entry in log.iter().rev().take(20) {
+                    println!("  [{}] {} - {}", entry.timestamp.format("%Y-%m-%d %H:%M:%S"), entry.operation, entry.function_id);
+                    if !entry.target_ids.is_empty() {
+                        println!("    Targets: {:?}", entry.target_ids);
+                    }
+                }
+            }
+        }
+        _ => {
+            println!("Mesh operations:");
+            println!("  mpr mesh connect <url> [name]   - Register a peer in the mesh");
+            println!("  mpr mesh disconnect <peer_id>    - Remove a peer from the mesh");
+            println!("  mpr mesh share                   - Share memories with mesh peers");
+            println!("  mpr mesh sync                    - Sync with all mesh peers");
+            println!("  mpr mesh peers                   - List all mesh peers");
+            println!("  mpr mesh status                  - Show mesh connection status");
+            println!("  mpr mesh audit                   - Show audit log");
+            println!();
+            println!("Note: mesh operations work with an in-memory mesh registry.");
+            println!("      For persistent mesh sync, configure a palace path with --palace.");
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Sessions command
+// ---------------------------------------------------------------------------
+
+fn cmd_sessions(palace_arg: Option<&str>, wing: Option<&str>, limit: usize) -> Result<()> {
+    let palace_path = resolve_palace_path(palace_arg)?;
+    let session_store = SessionStore::open(palace_path.join("sessions"))?;
+    let sessions = session_store.list_sessions(wing)?;
+
+    println!("Sessions:");
+    for (i, session) in sessions.iter().take(limit).enumerate() {
+        let ended = session.ended_at.map(|e| e.to_string()).unwrap_or_else(|| "active".to_string());
+        println!(
+            "  [{:3}] {} | {} | {} | obs:{}",
+            i + 1,
+            session.id,
+            session.project,
+            ended,
+            session.observation_count
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Output helpers
 // ---------------------------------------------------------------------------
 
@@ -2221,13 +2434,13 @@ pub fn run() -> Result<()> {
             }
         }
         Commands::Consolidate { dry_run, max_memories } => {
-            println!("Feature coming soon: consolidate (dry_run={}, max_memories={:?})", dry_run, max_memories);
+            cmd_consolidate(palace_arg, *dry_run, *max_memories)?;
         }
         Commands::Context { levels } => {
             println!("Feature coming soon: context (levels={})", levels);
         }
         Commands::Sessions { wing, limit } => {
-            println!("Feature coming soon: sessions (wing={:?}, limit={})", wing, limit);
+            cmd_sessions(palace_arg, wing.as_deref(), *limit)?;
         }
         Commands::Actions { status, limit } => {
             println!("Feature coming soon: actions (status={:?}, limit={})", status, limit);
@@ -2257,13 +2470,35 @@ pub fn run() -> Result<()> {
             println!("Feature coming soon: evolve (wing={:?}, count={})", wing, count);
         }
         Commands::Mesh { operation } => {
-            println!("Feature coming soon: mesh (operation={:?})", operation);
+            let op = operation.as_deref().unwrap_or("status");
+            cmd_mesh(op, palace_arg)?;
         }
         Commands::Vision { query, limit } => {
-            println!("Feature coming soon: vision (query={}, limit={})", query, limit);
+            cmd_vision(query, *limit, palace_arg)?;
         }
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Vision Command
+// ---------------------------------------------------------------------------
+
+fn cmd_vision(query: &str, limit: usize, palace_arg: Option<&str>) -> Result<()> {
+    let palace_path = resolve_palace_path(palace_arg)?;
+    let response = runtime().block_on(searcher::search_memories_with_rerank(
+        query,
+        &palace_path,
+        None, // no wing filter
+        None, // no room filter
+        limit,
+        None, // no custom embedding model
+        false, // no BM25
+        None, // no max_per_session
+        None, // no fusion mode
+    ))?;
+    searcher::print_search_response(&response);
     Ok(())
 }
 

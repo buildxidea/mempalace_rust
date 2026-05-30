@@ -42,6 +42,7 @@ async-trait = "0.1"
 base64 = "0.22"
 dirs = "6.0"
 filetime = "0.2"
+bm25 = "2.3"
 
 # Additional workspace dependencies for embed-tract feature
 tokenizers = "0.21"

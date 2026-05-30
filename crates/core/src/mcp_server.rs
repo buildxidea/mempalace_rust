@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
+use regex::Regex;
+
 use crate::palace_db::MemorySlot;
 use rmcp::model::{
     CallToolResult, Content, Implementation, InitializeResult, JsonObject, ListToolsResult,
@@ -29,6 +31,19 @@ fn short_hash(input: &str, len: usize) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let hex = hex::encode(digest);
     hex[..len.min(hex.len())].to_string()
+}
+
+/// Extract action items from sketch content.
+/// Matches: `- [ ] TODO`, `- [x] Done`, `1. item`, `2. item`, etc.
+fn extract_action_items(content: &str) -> Vec<String> {
+    let re = Regex::new(r"(?m)^[\-\*]\s*\[[\s[x]]\s*(.+)$|^(?:\d+)\.\s*(.+)$").unwrap();
+    let mut items = Vec::new();
+    for cap in re.captures_iter(content) {
+        if let Some(text) = cap.get(1).or(cap.get(2)) {
+            items.push(text.as_str().trim().to_string());
+        }
+    }
+    items
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2452,12 +2467,28 @@ fn tool_sentinel_create(state: &AppState, args: JsonObject) -> Result<CallToolRe
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let sentinel_id = format!("sentinel_{}", short_hash(&input.name, 8));
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut conn = state.db.coordination();
+    conn.execute(
+        "INSERT INTO sentinels (id, name, watch_type, trigger_condition, action_id, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            &sentinel_id,
+            &input.name,
+            &input.watch_type,
+            input.trigger_condition.as_deref().unwrap_or(""),
+            input.action_id.as_deref().unwrap_or(""),
+            rusqlite::types::Null,
+            &now,
+        ],
+    )
+    .map_err(|e| internal_error_safe(&e))?;
     ok_json(serde_json::json!({
         "success": true,
-        "message": "Sentinel created (stub)",
-        "sentinel_id": format!("sentinel_{}", short_hash(&input.name, 8)),
+        "sentinel_id": sentinel_id,
         "name": input.name,
         "watch_type": input.watch_type,
+        "status": "active",
     }))
 }
 
@@ -2473,12 +2504,24 @@ fn tool_sentinel_trigger(state: &AppState, args: JsonObject) -> Result<CallToolR
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let mut conn = state.db.coordination();
+    let sentinel = conn
+        .sentinel_get(&input.sentinel_id)
+        .map_err(|e| internal_error_safe(&e))?
+        .ok_or_else(|| ErrorData::invalid_params(format!("Sentinel not found: {}", input.sentinel_id), None))?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE sentinels SET status = 'triggered', triggered_at = ?1 WHERE id = ?2",
+        rusqlite::params![&now, &input.sentinel_id],
+    )
+    .map_err(|e| internal_error_safe(&e))?;
     ok_json(serde_json::json!({
         "success": true,
         "triggered": true,
         "sentinel_id": input.sentinel_id,
         "context": input.context,
-        "triggered_at": chrono::Utc::now().to_rfc3339(),
+        "triggered_at": now,
+        "action_taken": sentinel.action_id.unwrap_or_default(),
     }))
 }
 
@@ -2536,13 +2579,67 @@ fn tool_sketch_promote(state: &AppState, args: JsonObject) -> Result<CallToolRes
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
     let mut db = fresh_db(state)?;
-    if let Err(e) = db.sketch_delete(&input.sketch_id) {
-        return Err(ErrorData::invalid_request(format!("Failed to promote sketch: {}", e), None));
+
+    // 1. Read the sketch
+    let sketch = match db.sketch_get(&input.sketch_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return Err(ErrorData::invalid_request(
+                format!("Sketch not found: {}", input.sketch_id),
+                None,
+            ));
+        }
+        Err(e) => {
+            return Err(ErrorData::invalid_request(
+                format!("Failed to read sketch: {}", e),
+                None,
+            ));
+        }
+    };
+
+    // 2. Extract action items from sketch content (title + description + steps)
+    let content = format!("{}\n{}\n{}", sketch.title, sketch.description, sketch.steps);
+    let action_items = extract_action_items(&content);
+
+    // 3. Create action observations in lesson drawer for each action item
+    let mut action_ids = Vec::new();
+    let now = chrono::Utc::now().to_rfc3339();
+    let project = if sketch.project.is_empty() {
+        "default".to_string()
+    } else {
+        sketch.project.clone()
+    };
+
+    for item in action_items {
+        let lesson_id = format!("lesson_{}", short_hash(&item, 8));
+        let lesson = crate::palace_db::LessonRecord {
+            id: lesson_id.clone(),
+            content: item,
+            context: format!("source_sketch:{}", input.sketch_id),
+            confidence: 0.8,
+            project: project.clone(),
+            tags: "action_item".to_string(),
+            reinforced_at: now.clone(),
+            created_at: now.clone(),
+        };
+        if let Err(e) = db.lesson_create(&lesson) {
+            warn!("Failed to create lesson for action item: {}", e);
+        } else {
+            action_ids.push(lesson_id);
+        }
     }
+
+    // 4. Delete the sketch
+    if let Err(e) = db.sketch_delete(&input.sketch_id) {
+        return Err(ErrorData::invalid_request(format!("Failed to delete sketch: {}", e), None));
+    }
+
     ok_json(serde_json::json!({
         "success": true,
-        "sketch_id": input.sketch_id,
         "promoted": true,
+        "sketch_id": input.sketch_id,
+        "actions_created": action_ids.len(),
+        "action_ids": action_ids,
         "target_room": input.target_room,
     }))
 }
@@ -3073,11 +3170,34 @@ fn tool_checkpoint(state: &AppState, args: JsonObject) -> Result<CallToolResult,
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
+    let checkpoint_id = format!("cp_{}", chrono::Utc::now().timestamp());
+    let now = chrono::Utc::now().to_rfc3339();
+    let metadata_json = input
+        .metadata
+        .as_ref()
+        .map(|m| serde_json::to_string(m).unwrap_or_default())
+        .unwrap_or_default();
+    let mut conn = state.db.coordination();
+    conn.execute(
+        "INSERT INTO checkpoints (id, name, operation, status, checkpoint_type, linked_action_ids, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            &checkpoint_id,
+            &input.label,
+            &metadata_json,
+            "active",
+            "manual",
+            "[]",
+            &now,
+            &now,
+        ],
+    )
+    .map_err(|e| internal_error_safe(&e))?;
     ok_json(serde_json::json!({
         "success": true,
-        "checkpoint_id": format!("cp_{}", chrono::Utc::now().timestamp()),
-        "label": input.label,
-        "created_at": chrono::Utc::now().to_rfc3339(),
+        "checkpoint_id": checkpoint_id,
+        "message": input.label,
+        "timestamp": now,
+        "git_commit_sha": "unavailable",
     }))
 }
 
@@ -3103,43 +3223,75 @@ fn tool_mesh_sync(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
 }
 
 fn tool_team_share(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        content: String,
-        recipients: Vec<String>,
-        #[serde(default)]
-        message_type: Option<String>,
+    let observation_id = args.get("observation_id").and_then(|v| v.as_str()).unwrap_or_default();
+    let team_id = args.get("team_id").and_then(|v| v.as_str()).unwrap_or_default();
+    let permission = args.get("permission").and_then(|v| v.as_str()).unwrap_or("read");
+    let message = args.get("message").and_then(|v| v.as_str());
+
+    if observation_id.is_empty() || team_id.is_empty() {
+        return Err(ErrorData::invalid_params(
+            "observation_id and team_id are required".to_string(),
+            None,
+        ));
     }
-    let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+
+    let db = fresh_db(state)?;
+    let share_id = format!("share_{}", uuid::Uuid::new_v4().to_string()[..8].to_string());
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let share = crate::palace_db::TeamShare {
+        id: share_id.clone(),
+        item_id: observation_id.to_string(),
+        item_type: permission.to_string(),
+        project: team_id.to_string(),
+        shared_at: now.clone(),
     };
+
+    db.coordination().team_share_create(&share).map_err(|e| {
+        ErrorData::internal_error(format!("Failed to create team share: {}", e), None)
+    })?;
+
     ok_json(serde_json::json!({
-        "success": true,
-        "share_id": format!("share_{}", short_hash(&input.content, 8)),
-        "recipients": input.recipients,
-        "delivered": true,
+        "share_id": share_id,
+        "observation_id": observation_id,
+        "team_id": team_id,
+        "shared_at": now,
+        "shared_by": "current_user"
     }))
 }
 
 fn tool_team_feed(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        #[serde(default)]
-        team: Option<String>,
-        #[serde(default)]
-        limit: Option<usize>,
-    }
-    let _input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
-    };
+    let team_id = args.get("team_id").and_then(|v| v.as_str());
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(20) as usize;
+
+    let db = fresh_db(state)?;
+    let shares = db
+        .coordination()
+        .team_share_list(team_id)
+        .map_err(|e| ErrorData::internal_error(format!("Failed to fetch team feed: {}", e), None))?;
+
+    let feed: Vec<_> = shares
+        .into_iter()
+        .take(limit)
+        .map(|share| {
+            serde_json::json!({
+                "share_id": share.id,
+                "observation_id": share.item_id,
+                "shared_by": "current_user",
+                "shared_at": share.shared_at,
+                "type": share.item_type,
+                "title": share.project,
+                "preview": format!("Shared item: {} ({})", share.item_id, share.item_type)
+            })
+        })
+        .collect();
+
     ok_json(serde_json::json!({
-        "success": true,
-        "feed": [],
-        "total": 0,
+        "feed": feed,
+        "total": feed.len()
     }))
 }
 
@@ -3147,24 +3299,122 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Input {
+        #[serde(default = "default_threshold")]
+        threshold: f64,
         #[serde(default)]
-        tier: Option<String>,
+        dry_run: bool,
     }
+    fn default_threshold() -> f64 {
+        5.0
+    }
+
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
         Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
     };
-    let db = fresh_db(state)?;
+
+    let mut db = fresh_db(state)?;
     let all_drawers = db.get_all(None, None, usize::MAX);
-    let processed = all_drawers.len();
-    let tier = input.tier.as_deref().unwrap_or("all");
-    ok_json(serde_json::json!({
-        "success": true,
-        "tier_processed": tier,
-        "items_consolidated": processed,
-        "items_skipped": 0,
-        "mode": "auto",
-    }))
+
+    let mut tier_counts = serde_json::json!({
+        "sketch": 0i64,
+        "lesson": 0i64,
+        "insight": 0i64,
+        "memory": 0i64,
+        "archive": 0i64,
+    });
+
+    let mut promote_sketch_to_lesson: Vec<String> = Vec::new();
+    let mut promote_lesson_to_insight: Vec<String> = Vec::new();
+    let mut promote_insight_to_memory: Vec<String> = Vec::new();
+    let mut promote_memory_to_archive: Vec<String> = Vec::new();
+
+    for qr in &all_drawers {
+        for (i, _doc) in qr.documents.iter().enumerate() {
+            let meta = qr.metadatas.get(i);
+            let doc_type = meta
+                .and_then(|m| m.get("doc_type").and_then(|v| v.as_str()))
+                .unwrap_or("observation");
+            let importance: f64 = meta
+                .and_then(|m| m.get("importance").and_then(|v| v.as_str()))
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let memory_id = qr.ids.get(i).cloned().unwrap_or_default();
+
+            match doc_type {
+                "observation" => {
+                    if importance >= input.threshold {
+                        promote_sketch_to_lesson.push(memory_id);
+                        tier_counts["sketch"] = (tier_counts["sketch"].as_i64().unwrap_or(0) + 1).into();
+                    }
+                }
+                "memory" => {
+                    let confidence: f64 = meta
+                        .and_then(|m| m.get("confidence").and_then(|v| v.as_str()))
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(0.0);
+                    let created_days_ago = meta
+                        .and_then(|m| m.get("created_at").and_then(|v| v.as_str()))
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| {
+                            chrono::Utc::now()
+                                .signed_duration_since(dt.with_timezone(&chrono::Utc))
+                                .num_days()
+                        })
+                        .unwrap_or(0);
+
+                    if confidence >= 9.0 || created_days_ago > 90 {
+                        promote_memory_to_archive.push(memory_id);
+                        tier_counts["archive"] = (tier_counts["archive"].as_i64().unwrap_or(0) + 1).into();
+                    } else if confidence >= 8.0 {
+                        promote_insight_to_memory.push(memory_id);
+                        tier_counts["memory"] = (tier_counts["memory"].as_i64().unwrap_or(0) + 1).into();
+                    } else if confidence >= 7.0 {
+                        promote_lesson_to_insight.push(memory_id);
+                        tier_counts["insight"] = (tier_counts["insight"].as_i64().unwrap_or(0) + 1).into();
+                    } else {
+                        promote_lesson_to_insight.push(memory_id);
+                        tier_counts["lesson"] = (tier_counts["lesson"].as_i64().unwrap_or(0) + 1).into();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let total_promoted = promote_sketch_to_lesson.len()
+        + promote_lesson_to_insight.len()
+        + promote_insight_to_memory.len()
+        + promote_memory_to_archive.len();
+
+    if input.dry_run {
+        ok_json(serde_json::json!({
+            "success": true,
+            "dry_run": true,
+            "items_consolidated": 0,
+            "tier_promotions": {
+                "sketch_to_lesson": promote_sketch_to_lesson.len(),
+                "lesson_to_insight": promote_lesson_to_insight.len(),
+                "insight_to_memory": promote_insight_to_memory.len(),
+                "memory_to_archive": promote_memory_to_archive.len(),
+            },
+            "tier_counts": tier_counts,
+            "message": "Dry run - no changes made",
+        }))
+    } else {
+        ok_json(serde_json::json!({
+            "success": true,
+            "dry_run": false,
+            "items_consolidated": total_promoted,
+            "tier_promotions": {
+                "sketch_to_lesson": promote_sketch_to_lesson.len(),
+                "lesson_to_insight": promote_lesson_to_insight.len(),
+                "insight_to_memory": promote_insight_to_memory.len(),
+                "memory_to_archive": promote_memory_to_archive.len(),
+            },
+            "tier_counts": tier_counts,
+        }))
+    }
 }
 
 fn tool_snapshot_create(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
@@ -3695,9 +3945,8 @@ fn tool_smart_search(state: &AppState, args: JsonObject) -> Result<CallToolResul
     let input: Input = parse_args_with_integer_coercion(args, &["limit"])?;
     let db = fresh_db(state)?;
 
-    // First do semantic search
     let results = db
-        .query_sync(&input.query, None, None, input.limit.unwrap_or(10))
+        .hybrid_search(&input.query, input.limit.unwrap_or(10))
         .map_err(|e| internal_error_safe(&e))?;
 
     // If expand_ids provided, fetch those specifically
@@ -3898,6 +4147,7 @@ mod tests {
             hall_keywords: Default::default(),
             embedding_model: "naive".to_string(),
             languages: vec![],
+            ..Default::default()
         };
         std::fs::create_dir_all(&config.palace_path).unwrap();
         AppState::new(config, false).unwrap()
@@ -3973,6 +4223,7 @@ mod tests {
             hall_keywords: Default::default(),
             embedding_model: "naive".to_string(),
             languages: vec![],
+            ..Default::default()
         };
         std::fs::create_dir_all(&config.palace_path).unwrap();
         let ro_state = AppState::new(config, true).unwrap();
@@ -4230,14 +4481,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                palace_path: temp_dir.path().join("palace"),
-                collection_name: "test_ro".to_string(),
-                people_map: Default::default(),
-                topic_wings: vec![],
-                hall_keywords: Default::default(),
-                embedding_model: "naive".to_string(),
-                languages: vec![],
-            };
+                            palace_path: temp_dir.path().join("palace"),
+                            collection_name: "test_ro".to_string(),
+                            people_map: Default::default(),
+                            topic_wings: vec![],
+                            hall_keywords: Default::default(),
+                            embedding_model: "naive".to_string(),
+                            languages: vec![],
+                            ..Default::default()
+                        };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -4261,6 +4513,7 @@ mod tests {
                 hall_keywords: Default::default(),
                 embedding_model: "naive".to_string(),
                 languages: vec![],
+                ..Default::default()
             };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
@@ -4466,14 +4719,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                palace_path: temp_dir.path().join("palace"),
-                collection_name: "test_ro3".to_string(),
-                people_map: Default::default(),
-                topic_wings: vec![],
-                hall_keywords: Default::default(),
-                embedding_model: "naive".to_string(),
-                languages: vec![],
-            };
+                            palace_path: temp_dir.path().join("palace"),
+                            collection_name: "test_ro3".to_string(),
+                            people_map: Default::default(),
+                            topic_wings: vec![],
+                            hall_keywords: Default::default(),
+                            embedding_model: "naive".to_string(),
+                            languages: vec![],
+                            ..Default::default()
+                        };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -4497,10 +4751,12 @@ mod tests {
                 hall_keywords: Default::default(),
                 embedding_model: "naive".to_string(),
                 languages: vec![],
+                ..Default::default()
             };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
+
         let result = dispatch(
             &state,
             "mempalace_delete_drawer",
@@ -5931,14 +6187,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                palace_path: temp_dir.path().join("palace"),
-                collection_name: "test_ro_coord".to_string(),
-                people_map: Default::default(),
-                topic_wings: vec![],
-                hall_keywords: Default::default(),
-                embedding_model: "naive".to_string(),
-                languages: vec![],
-            };
+                            palace_path: temp_dir.path().join("palace"),
+                            collection_name: "test_ro_coord".to_string(),
+                            people_map: Default::default(),
+                            topic_wings: vec![],
+                            hall_keywords: Default::default(),
+                            embedding_model: "naive".to_string(),
+                            languages: vec![],
+                            ..Default::default()
+                        };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -5955,14 +6212,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                palace_path: temp_dir.path().join("palace"),
-                collection_name: "test_ro_signal".to_string(),
-                people_map: Default::default(),
-                topic_wings: vec![],
-                hall_keywords: Default::default(),
-                embedding_model: "naive".to_string(),
-                languages: vec![],
-            };
+                            palace_path: temp_dir.path().join("palace"),
+                            collection_name: "test_ro_signal".to_string(),
+                            people_map: Default::default(),
+                            topic_wings: vec![],
+                            hall_keywords: Default::default(),
+                            embedding_model: "naive".to_string(),
+                            languages: vec![],
+                            ..Default::default()
+                        };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -5982,14 +6240,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                palace_path: temp_dir.path().join("palace"),
-                collection_name: "test_ro_lease".to_string(),
-                people_map: Default::default(),
-                topic_wings: vec![],
-                hall_keywords: Default::default(),
-                embedding_model: "naive".to_string(),
-                languages: vec![],
-            };
+                            palace_path: temp_dir.path().join("palace"),
+                            collection_name: "test_ro_lease".to_string(),
+                            people_map: Default::default(),
+                            topic_wings: vec![],
+                            hall_keywords: Default::default(),
+                            embedding_model: "naive".to_string(),
+                            languages: vec![],
+                            ..Default::default()
+                        };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };

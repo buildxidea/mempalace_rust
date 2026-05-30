@@ -128,6 +128,10 @@ fn default_collection_name() -> String {
     DEFAULT_COLLECTION_NAME.to_string()
 }
 
+fn default_embedding_model() -> String {
+    "naive".to_string()
+}
+
 fn default_topic_wings() -> Vec<String> {
     vec![
         "emotions",
@@ -237,12 +241,42 @@ pub struct Config {
     /// "all-MiniLM-L6-v2" = fast English embeddings
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
-    #[serde(default)]
+#[serde(default)]
     pub languages: Vec<String>,
-}
-
-fn default_embedding_model() -> String {
-    "naive".to_string()
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    #[serde(default)]
+    pub llm_model: Option<String>,
+    #[serde(default)]
+    pub consolidation_enabled: Option<bool>,
+    #[serde(default)]
+    pub auto_compress: Option<bool>,
+    #[serde(default)]
+    pub graph_extraction_enabled: Option<bool>,
+    #[serde(default)]
+    pub rerank_enabled: Option<bool>,
+    #[serde(default)]
+    pub snapshot_enabled: Option<bool>,
+    #[serde(default)]
+    pub vision_enabled: Option<bool>,
+    #[serde(default)]
+    pub token_budget: Option<usize>,
+    #[serde(default)]
+    pub max_obs_per_session: Option<usize>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub agent_scope: Option<String>,
+    #[serde(default)]
+    pub team_id: Option<String>,
+    #[serde(default)]
+    pub team_mode: Option<bool>,
+    #[serde(default)]
+    pub bm25_weight: Option<f64>,
+    #[serde(default)]
+    pub vector_weight: Option<f64>,
+    #[serde(default)]
+    pub graph_weight: Option<f64>,
 }
 
 #[cfg(unix)]
@@ -312,6 +346,23 @@ impl Default for Config {
             hall_keywords: default_hall_keywords(),
             embedding_model: default_embedding_model(),
             languages: Vec::new(),
+            llm_provider: None,
+            llm_model: None,
+            consolidation_enabled: None,
+            auto_compress: None,
+            graph_extraction_enabled: None,
+            rerank_enabled: None,
+            snapshot_enabled: None,
+            vision_enabled: None,
+            token_budget: None,
+            max_obs_per_session: None,
+            agent_id: None,
+            agent_scope: None,
+            team_id: None,
+            team_mode: None,
+            bm25_weight: None,
+            vector_weight: None,
+            graph_weight: None,
         }
     }
 }
@@ -369,6 +420,7 @@ impl Config {
                     .get("languages")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default(),
+                ..Default::default()
             })
         } else {
             Ok(Config::default())
@@ -645,6 +697,23 @@ mod tests {
             hall_keywords: default_hall_keywords(),
             embedding_model: default_embedding_model(),
             languages: vec![],
+            llm_provider: None,
+            llm_model: None,
+            consolidation_enabled: None,
+            auto_compress: None,
+            graph_extraction_enabled: None,
+            rerank_enabled: None,
+            snapshot_enabled: None,
+            vision_enabled: None,
+            token_budget: None,
+            max_obs_per_session: None,
+            agent_id: None,
+            agent_scope: None,
+            team_id: None,
+            team_mode: None,
+            bm25_weight: None,
+            vector_weight: None,
+            graph_weight: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -684,6 +753,23 @@ mod tests {
             hall_keywords: default_hall_keywords(),
             embedding_model: default_embedding_model(),
             languages: vec![],
+            llm_provider: None,
+            llm_model: None,
+            consolidation_enabled: None,
+            auto_compress: None,
+            graph_extraction_enabled: None,
+            rerank_enabled: None,
+            snapshot_enabled: None,
+            vision_enabled: None,
+            token_budget: None,
+            max_obs_per_session: None,
+            agent_id: None,
+            agent_scope: None,
+            team_id: None,
+            team_mode: None,
+            bm25_weight: None,
+            vector_weight: None,
+            graph_weight: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

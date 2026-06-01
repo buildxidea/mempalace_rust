@@ -26,12 +26,12 @@ already-implemented items as missing. This revision lists only **genuine** gaps.
 | Hook kinds (CLI) | 12 | 11 wired (`mpr hook --kind …`) | ✅ ~92% | `cli.rs:445,1427-1437` |
 | Hook shell wrappers | 12 | 3 (`save`, `precompact`, generic `mempal_hook.sh <kind>`) | ✅ 100% | `hooks/` |
 | Internal modules | 64 | 64+ (all ported, incl. branch_aware/cascade/flow_compress) | ✅ ~100% | `lib.rs` |
-| Embedding providers | ~10 | 3 local (FastEmbed, model2vec, tract) + null + OpenAI-compatible (feature `embed-openai`) | ✅ ~40% | `embed/mod.rs`, `embed/openai_remote.rs` |
+| Embedding providers | ~10 | 3 local (FastEmbed, model2vec, tract) + null + OpenAI-compatible + Cohere + Voyage + Gemini + OpenRouter (4 features) | ✅ ~80% | `embed/mod.rs`, `embed/openai_remote.rs`, `embed/{cohere,voyage,gemini,openrouter}_remote.rs` |
 | LLM providers | 7 | openai_compat, anthropic, noop, fallback_chain (+circuit breaker) | ✅ ~85% | `llm/mod.rs` |
 | Prompt templates | 7 | 6 modular + 2 inline (reflect/summary) | ✅ ~95% | `prompts/` |
 | Benchmarks (harness) | 4 | LongMemEval harness + 3 Criterion benches | ✅ ~80% | `crates/bench/` |
-| Benchmark (reproduced score) | 95.2% R@5 verified | mainline wired to vector embedder; Rust R@5 reproduction pending | ⚠️ | see G1 follow-up |
-| Viewer (web UI) | Full HTML at `:3113` | minimal `/viewer` (status JSON in dark page) | ✅ partial | `rest_api.rs:821` |
+| Benchmark (reproduced score) | 95.2% R@5 verified | mainline wired to vector embedder; partial R@5=0.083 on 12/500 single-session-user (vs naive 0.143) — see `docs/research/06_phase0_longmemeval_baseline.md` §"Re-measure attempt" | ⚠️ partial | `docs/research/06_…` |
+| Viewer (web UI) | Full HTML at `:3113` | `/viewer` SPA shell (HTML+JS+CSS embedded); full live-graph force layout + SSE is the next iteration | ✅ partial | `crates/core/src/viewer/`, `rest_api.rs` (viewer_handler / viewer_app_handler / viewer_styles_handler) |
 | Background tasks | all execute | all execute: auto-forget, insight-decay, index-persist, consolidation, lesson decay | ✅ 100% | `background.rs` |
 
 **Overall functional parity: ~90–95%** (corrected from the earlier, incorrect ~65%).
@@ -171,11 +171,49 @@ are retained below for audit trail; the **status** field is the truth.
 ## Implementation Priority — follow-ups to the resolved gaps
 
 ```
-Pri  Follow-up                              Scope    Where
-─────────────────────────────────────────────────────────────────────
-P0   Re-run bench + record Rust R@5 in       small    crates/bench + docs/research/06_…
-     docs/research/06_…_baseline.md
-P2   G5 full live-graph viewer (SPA)         large    rest_api.rs + new web/ crate
-P3   Add Cohere / Voyage / Gemini /          small    embed/ (mirror openai_remote.rs
-     OpenRouter embedders                          for each provider, reuse /v1/embeddings)
+Pri  Follow-up                              Status (2026-06-01)            Where
+─────────────────────────────────────────────────────────────────────────────────
+P0   Re-run bench + record Rust R@5 in       ✅ PARTIAL — 12/500q (single-  crates/bench + docs/research/06_…
+     docs/research/06_…_baseline.md         session-user only); full run
+                                             needs concurrency in the
+                                             harness (single-threaded
+                                             today, ~4.5h wall-clock).
+                                             Recorded R@5=0.083 vs old
+                                             naive R@5=0.143 on same type
+                                             (worse — BGE-small at 384-d
+                                             does not capture temporal
+                                             anchoring). See doc §"Re-
+                                             measure attempt".
+P2   G5 full live-graph viewer (SPA)         ✅ MVP SHIPPED — index.html/   crates/core/src/viewer/ + rest_api.rs
+                                             app.js/styles.css embedded via
+                                             include_str!; routes /viewer,
+                                             /viewer/app.js,
+                                             /viewer/styles.css. SPA renders
+                                             an SVG with nodes+edges from
+                                             /api/graph/data when those
+                                             endpoints are wired; force
+                                             layout, search, and SSE live
+                                             updates are the next iteration.
+P3   Add Cohere / Voyage / Gemini /          ✅ DONE — 4 providers shipped:  crates/core/src/embed/
+     OpenRouter embedders                    cohere_remote.rs, voyage_remote.rs,
+                                             gemini_remote.rs, openrouter_remote.rs
+                                             behind features embed-cohere,
+                                             embed-voyage, embed-gemini,
+                                             embed-openrouter. Each mirrors
+                                             openai_remote.rs (reqwest +
+                                             blocking runtime, known-dim
+                                             table, fingerprint, MODEL_ALIASES).
+                                             24/24 tests pass per feature;
+                                             default build (no extra
+                                             features) compiles cleanly.
+                                             Total: 4 new files, 4 new
+                                             features, 4 new alias tables.
 ```
+
+### New follow-up opened by this round
+
+- **Add concurrency to the bench harness.** The doc claims
+  `--concurrency` exists, the bin doesn't implement it. With BGE-small
+  at ~2 GB RAM per palace, N=4 should land a 500-question run in
+  ~10 min. After that, bump `HARNESS_VERSION` to `mp-003.v2` and rerun
+  for the defensible Rust R@5 to put in `README.md`.

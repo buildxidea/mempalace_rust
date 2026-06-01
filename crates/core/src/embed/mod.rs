@@ -56,8 +56,43 @@ pub mod model2vec;
 #[doc(hidden)]
 pub mod tract;
 
+#[cfg(feature = "embed-openai")]
+#[doc(hidden)]
+pub mod openai_remote;
+
+#[cfg(feature = "embed-voyage")]
+#[doc(hidden)]
+pub mod voyage_remote;
+
+#[cfg(feature = "embed-openrouter")]
+#[doc(hidden)]
+pub mod openrouter_remote;
+
+#[cfg(feature = "embed-gemini")]
+#[doc(hidden)]
+pub mod gemini_remote;
+
+#[cfg(feature = "embed-cohere")]
+#[doc(hidden)]
+pub mod cohere_remote;
+
 pub use manifest::{EmbeddingManifest, ManifestMismatch};
 pub use null::NullEmbedder;
+
+#[cfg(feature = "embed-openai")]
+pub use openai_remote::OpenAIRemoteEmbedder;
+
+#[cfg(feature = "embed-voyage")]
+pub use voyage_remote::VoyageRemoteEmbedder;
+
+#[cfg(feature = "embed-openrouter")]
+pub use openrouter_remote::OpenRouterRemoteEmbedder;
+
+#[cfg(feature = "embed-gemini")]
+pub use gemini_remote::GeminiRemoteEmbedder;
+
+#[cfg(feature = "embed-cohere")]
+pub use cohere_remote::CohereRemoteEmbedder;
 
 #[cfg(feature = "embed-fastembed")]
 pub use fastembed::FastEmbedEmbedder;
@@ -151,6 +186,50 @@ const MODEL_ALIASES: &[(&str, &str)] = &[
     ("potion-multilingual-128M", "M2V:potion-multilingual-128M"),
     ("potion-base-8M-tract", "TRACT:potion-base-8M"),
     ("potion-base-4M-tract", "TRACT:potion-base-4M"),
+    // Remote OpenAI-compatible models (feature `embed-openai`).
+    ("openai-3-small", "OPENAI:text-embedding-3-small"),
+    ("text-embedding-3-small", "OPENAI:text-embedding-3-small"),
+    ("openai-3-large", "OPENAI:text-embedding-3-large"),
+    ("text-embedding-3-large", "OPENAI:text-embedding-3-large"),
+    ("openai-ada-002", "OPENAI:text-embedding-ada-002"),
+    ("text-embedding-ada-002", "OPENAI:text-embedding-ada-002"),
+    // Remote Voyage AI models (feature `embed-voyage`).
+    ("voyage-3", "VOYAGE:voyage-3"),
+    ("voyage-3-lite", "VOYAGE:voyage-3-lite"),
+    ("voyage-large", "VOYAGE:voyage-large-2"),
+    ("voyage-code", "VOYAGE:voyage-code-3"),
+    // Remote OpenRouter models (feature `embed-openrouter`). OpenRouter
+    // proxies many upstream models; the full model string (with vendor
+    // prefix) is preserved in the fingerprint so manifests written via
+    // openrouter are distinguishable from manifests written via direct
+    // openai.
+    (
+        "openrouter-3-small",
+        "OPENROUTER:openai/text-embedding-3-small",
+    ),
+    ("or-3-small", "OPENROUTER:openai/text-embedding-3-small"),
+    (
+        "openrouter-3-large",
+        "OPENROUTER:openai/text-embedding-3-large",
+    ),
+    ("or-3-large", "OPENROUTER:openai/text-embedding-3-large"),
+    (
+        "openrouter-ada-002",
+        "OPENROUTER:openai/text-embedding-ada-002",
+    ),
+    ("or-ada-002", "OPENROUTER:openai/text-embedding-ada-002"),
+    // Remote Google Gemini models (feature `embed-gemini`).
+    ("gemini-text-004", "GEMINI:text-embedding-004"),
+    ("gemini-001", "GEMINI:embedding-001"),
+    ("text-embedding-004", "GEMINI:text-embedding-004"),
+    // Remote Cohere models (feature `embed-cohere`).
+    ("cohere-english-v3", "COHERE:embed-english-v3.0"),
+    ("cohere-multilingual-v3", "COHERE:embed-multilingual-v3.0"),
+    ("cohere-english-light", "COHERE:embed-english-light-v3.0"),
+    (
+        "cohere-multilingual-light",
+        "COHERE:embed-multilingual-light-v3.0",
+    ),
 ];
 
 /// Default short name used when `MEMPALACE_EMBED_MODEL` is unset.
@@ -209,11 +288,138 @@ pub fn resolve_embedder(name: &str) -> anyhow::Result<Box<dyn Embedder>> {
     construct_embedder(target)
 }
 
+/// Try to construct an OpenAI-compatible remote embedder for an `OPENAI:`
+/// target. Returns `None` for non-OpenAI targets so callers can fall through.
+/// Feature-gated body lives here so both `construct_embedder` variants share it.
+fn try_construct_openai(target: &str) -> Option<anyhow::Result<Box<dyn Embedder>>> {
+    let model = target.strip_prefix("OPENAI:")?;
+    #[cfg(feature = "embed-openai")]
+    {
+        Some(
+            openai_remote::OpenAIRemoteEmbedder::from_env(model)
+                .map(|e| Box::new(e) as Box<dyn Embedder>),
+        )
+    }
+    #[cfg(not(feature = "embed-openai"))]
+    {
+        let _ = model;
+        Some(Err(anyhow::anyhow!(
+            "openai remote embedder not compiled in. Enable the `embed-openai` feature \
+             (e.g. `--features embed-openai`) to use OpenAI-compatible embedding models."
+        )))
+    }
+}
+
+/// Try to construct a Voyage AI remote embedder for a `VOYAGE:`
+/// target. Returns `None` for non-Voyage targets so callers can fall through.
+/// Feature-gated body lives here so both `construct_embedder` variants share it.
+fn try_construct_voyage(target: &str) -> Option<anyhow::Result<Box<dyn Embedder>>> {
+    let model = target.strip_prefix("VOYAGE:")?;
+    #[cfg(feature = "embed-voyage")]
+    {
+        Some(
+            voyage_remote::VoyageRemoteEmbedder::from_env(model)
+                .map(|e| Box::new(e) as Box<dyn Embedder>),
+        )
+    }
+    #[cfg(not(feature = "embed-voyage"))]
+    {
+        let _ = model;
+        Some(Err(anyhow::anyhow!(
+            "voyage remote embedder not compiled in. Enable the `embed-voyage` feature \
+             (e.g. `--features embed-voyage`) to use Voyage AI embedding models."
+        )))
+    }
+}
+
+/// Try to construct an OpenRouter remote embedder for an `OPENROUTER:`
+/// target. Returns `None` for non-OpenRouter targets so callers can fall through.
+/// Feature-gated body lives here so both `construct_embedder` variants share it.
+fn try_construct_openrouter(target: &str) -> Option<anyhow::Result<Box<dyn Embedder>>> {
+    let model = target.strip_prefix("OPENROUTER:")?;
+    #[cfg(feature = "embed-openrouter")]
+    {
+        Some(
+            openrouter_remote::OpenRouterRemoteEmbedder::from_env(model)
+                .map(|e| Box::new(e) as Box<dyn Embedder>),
+        )
+    }
+    #[cfg(not(feature = "embed-openrouter"))]
+    {
+        let _ = model;
+        Some(Err(anyhow::anyhow!(
+            "openrouter remote embedder not compiled in. Enable the `embed-openrouter` feature \
+             (e.g. `--features embed-openrouter`) to use OpenRouter embedding models."
+        )))
+    }
+}
+
+/// Try to construct a Cohere remote embedder for a `COHERE:`
+/// target. Returns `None` for non-Cohere targets so callers can fall through.
+/// Feature-gated body lives here so both `construct_embedder` variants share it.
+fn try_construct_cohere(target: &str) -> Option<anyhow::Result<Box<dyn Embedder>>> {
+    let model = target.strip_prefix("COHERE:")?;
+    #[cfg(feature = "embed-cohere")]
+    {
+        Some(
+            cohere_remote::CohereRemoteEmbedder::from_env(model)
+                .map(|e| Box::new(e) as Box<dyn Embedder>),
+        )
+    }
+    #[cfg(not(feature = "embed-cohere"))]
+    {
+        let _ = model;
+        Some(Err(anyhow::anyhow!(
+            "cohere remote embedder not compiled in. Enable the `embed-cohere` feature \
+             (e.g. `--features embed-cohere`) to use Cohere embedding models."
+        )))
+    }
+}
+
+/// Try to construct a Google Gemini remote embedder for a `GEMINI:`
+/// target. Returns `None` for non-Gemini targets so callers can fall through.
+/// Feature-gated body lives here so both `construct_embedder` variants share it.
+fn try_construct_gemini(target: &str) -> Option<anyhow::Result<Box<dyn Embedder>>> {
+    let model = target.strip_prefix("GEMINI:")?;
+    #[cfg(feature = "embed-gemini")]
+    {
+        Some(match gemini_remote::GeminiRemoteEmbedder::from_env(model) {
+            Some(e) => Ok(Box::new(e) as Box<dyn Embedder>),
+            None => Err(anyhow::anyhow!(
+                "GEMINI_API_KEY (or GOOGLE_API_KEY) is required for the gemini remote embedder"
+            )),
+        })
+    }
+    #[cfg(not(feature = "embed-gemini"))]
+    {
+        let _ = model;
+        Some(Err(anyhow::anyhow!(
+            "gemini remote embedder not compiled in. Enable the `embed-gemini` feature \
+             (e.g. `--features embed-gemini`) to use Google Gemini embedding models."
+        )))
+    }
+}
+
 /// Construct the concrete embedder for a resolved model alias.
 /// Split out so [`resolve_embedder`] can validate the name
 /// independently of the (feature-gated) backend wiring.
 #[cfg(feature = "embed-fastembed")]
 fn construct_embedder(target: &str) -> anyhow::Result<Box<dyn Embedder>> {
+    if let Some(res) = try_construct_openai(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_openrouter(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_voyage(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_gemini(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_cohere(target) {
+        return res;
+    }
     if target.starts_with("M2V:") {
         #[cfg(feature = "embed-model2vec")]
         {
@@ -282,6 +488,21 @@ fn construct_tract_embedder(target: &str) -> anyhow::Result<Box<dyn Embedder>> {
 /// pointer to the feature flag.
 #[cfg(not(feature = "embed-fastembed"))]
 fn construct_embedder(target: &str) -> anyhow::Result<Box<dyn Embedder>> {
+    if let Some(res) = try_construct_openai(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_openrouter(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_voyage(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_gemini(target) {
+        return res;
+    }
+    if let Some(res) = try_construct_cohere(target) {
+        return res;
+    }
     if target.starts_with("M2V:") {
         #[cfg(feature = "embed-model2vec")]
         {

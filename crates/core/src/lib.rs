@@ -8,31 +8,31 @@
 // Adding a module here is a SemVer commitment — see docs/research/04
 // "Stability assessment" before promoting an internal module.
 
+pub mod auto_forget;
 pub mod cli;
+pub mod compress;
+pub mod compress_synthetic;
 pub mod config;
+pub mod consolidation;
+pub mod consolidation_pipeline;
 pub mod constants;
 pub mod dialect;
 pub mod doctor;
+pub mod evict;
 pub mod knowledge_graph;
 pub mod layers;
-pub mod mcp_server;
+pub mod llm;
 pub mod mcp;
+pub mod mcp_server;
+pub mod memory_lifecycle;
 pub mod miner;
 pub mod onboarding;
-pub mod searcher;
-pub mod types;
-pub mod llm;
-pub mod session;
 pub mod prompts;
-pub mod compress;
-pub mod compress_synthetic;
-pub mod consolidation;
-pub mod consolidation_pipeline;
-pub mod memory_lifecycle;
 pub mod retention;
-pub mod auto_forget;
-pub mod evict;
 pub mod search;
+pub mod searcher;
+pub mod session;
+pub mod types;
 
 // =====================================================================
 // Internal modules — hidden from docs.rs (mp-006)
@@ -43,18 +43,22 @@ pub mod search;
 // of the curated public API. Hidden via `#[doc(hidden)]` so docs.rs
 // only renders the surface above. See research/04 P2 #19.
 
+pub mod audit;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod bm25;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod closet_llm;
+pub mod context;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod convo_miner;
+pub mod coordination;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod corpus_origin;
+pub mod crystallize;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod dedup;
@@ -73,12 +77,16 @@ pub mod entity_registry;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod event_capture;
+pub mod export;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod exporter;
+pub mod facets;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod general_extractor;
+pub mod graph_extraction;
+pub mod graph_retrieval;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod hermes_integration;
@@ -88,12 +96,14 @@ pub mod hooks_cli;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod i18n;
+pub mod insight_store;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod instructions;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod languages;
+pub mod lessons;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod llm_client;
@@ -122,37 +132,19 @@ pub mod palace_db;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod palace_graph;
-pub mod graph_extraction;
-pub mod graph_retrieval;
-pub mod temporal_graph;
-pub mod relations;
-pub mod coordination;
-pub mod context;
-pub mod summarize;
-pub mod working_memory;
-pub mod slots;
-pub mod vision;
-pub mod export;
-pub mod profile;
-pub mod timeline;
 pub mod patterns;
-pub mod reflect;
-pub mod crystallize;
-pub mod lessons;
-pub mod insight_store;
-pub mod sketches;
-pub mod facets;
-pub mod sentinels;
-pub mod audit;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod privacy;
+pub mod profile;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod project_scanner;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod query_sanitizer;
+pub mod reflect;
+pub mod relations;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod repair;
@@ -162,37 +154,81 @@ pub mod room_detector_local;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod script_aware;
+pub mod sentinels;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod signal_handler;
+pub mod sketches;
+pub mod slots;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod spellcheck;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod split_mega_files;
+pub mod summarize;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod sweeper;
+pub mod temporal_graph;
+pub mod timeline;
+pub mod vision;
+pub mod working_memory;
+
+// =====================================================================
+// Health monitoring (feature-gated)
+// =====================================================================
+//
+// Wires the HealthMonitor into the REST API /healthz and /livez endpoints.
+// Default-off to avoid pulling in sysinfo for pure-CLI builds.
+
+#[cfg(feature = "health")]
+pub mod health;
+
+#[cfg(feature = "health")]
+pub use health::{
+    get_health_monitor, init_health_monitor, HealthMonitor, HealthReport,
+    HealthStatus, CheckResult, HealthCheck,
+};
+
+// Telemetry — Prometheus metrics via the `metrics` façade (D1).
+// Feature-gated behind `telemetry`. Default-off to avoid pulling in
+// prometheus-exporter for pure-CLI builds.
+
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
+
+#[cfg(feature = "telemetry")]
+pub use telemetry::{init, render, shutdown};
 
 // =====================================================================
 // Phase 8 — AgentMemory MCP expansion (internal, evolving)
 // =====================================================================
 
 #[doc(hidden)]
-pub mod observe;
-#[doc(hidden)]
 pub mod access_tracker;
 #[doc(hidden)]
 pub mod branch_aware;
 #[doc(hidden)]
+pub mod cascade;
+#[doc(hidden)]
 pub mod claude_bridge;
+#[doc(hidden)]
+pub mod compress_file;
 #[doc(hidden)]
 pub mod enrich;
 #[doc(hidden)]
 pub mod file_index;
 #[doc(hidden)]
+pub mod flow_compress;
+#[doc(hidden)]
 pub mod governance;
+#[doc(hidden)]
+pub mod heal;
+#[doc(hidden)]
+pub mod observe;
+#[doc(hidden)]
+pub mod obsidian_export;
 #[doc(hidden)]
 pub mod replay;
 #[doc(hidden)]
@@ -200,17 +236,7 @@ pub mod skill_extract;
 #[doc(hidden)]
 pub mod sliding_window;
 #[doc(hidden)]
-pub mod compress_file;
-#[doc(hidden)]
 pub mod verify;
-#[doc(hidden)]
-pub mod heal;
-#[doc(hidden)]
-pub mod obsidian_export;
-#[doc(hidden)]
-pub mod flow_compress;
-#[doc(hidden)]
-pub mod cascade;
 
 // =====================================================================
 // Background task runner (internal)
@@ -259,6 +285,22 @@ pub use embed::FastEmbedEmbedder;
 
 #[cfg(feature = "embed-model2vec")]
 pub use embed::Model2VecEmbedder;
+
+// =====================================================================
+// Live-graph viewer SPA (internal — REMAINING.md G5 follow-up)
+// =====================================================================
+//
+// Serves a self-contained HTML+JS+CSS SPA from /viewer/ on the REST API.
+// The assets are embedded at compile time via `include_str!` so the
+// binary ships as a single file. The frontend is a minimal stub that
+// fetches /api/graph/stats + /api/graph/data when present, and best-
+// effort connects to /api/graph/stream (SSE) — when those endpoints
+// land (separate follow-up), the SPA gains live updates without any
+// binary change.
+
+#[doc(hidden)]
+pub mod viewer;
+pub use viewer::{viewer_app_js, viewer_html, viewer_styles_css};
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {

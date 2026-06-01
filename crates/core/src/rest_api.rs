@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -33,6 +33,8 @@ pub struct HttpServerState {
     pub app_state: Arc<AppState>,
     pub read_only: bool,
     pub disk_size_manager: Arc<Mutex<DiskSizeManager>>,
+    #[cfg(feature = "health")]
+    pub embedder: std::sync::Arc<dyn crate::embed::Embedder>,
 }
 
 type SharedState = Arc<Mutex<HttpServerState>>;
@@ -168,6 +170,22 @@ async fn health_handler() -> Json<serde_json::Value> {
         "status": "ok",
         "service": "mempalace-rest-api",
     }))
+}
+
+/// Full health report — all 6 checks aggregated.
+/// Requires the `health` feature. Returns 503 if any check is Critical.
+#[cfg(feature = "health")]
+async fn healthz_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    let monitor = crate::health::get_health_monitor();
+    let report = monitor.run_all().await;
+    let status_code = monitor.to_http_status(&report);
+    (StatusCode::from_u16(status_code).expect("valid HTTP status code"), Json(report))
+}
+
+/// Lightweight liveness probe — confirms the process is alive.
+/// No `health` feature required.
+async fn livez_handler() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({"status": "alive"})))
 }
 
 async fn list_tools_handler(
@@ -815,6 +833,34 @@ async fn status_handler(
     let args = json!({}).as_object().unwrap().clone();
     let result = invoke_tool(&state_guard, "mempalace_status", args).await?;
     Ok(Json(text_content_to_json(result)))
+}
+
+/// Live-graph viewer SPA shell. Served at `GET /viewer/`.
+/// The HTML, CSS, and JS are embedded at compile time via `include_str!`
+/// in `viewer::mod`, so the binary ships as a single file with no
+/// external asset directory. The full live-graph SPA (force layout,
+/// search, SSE live updates) is the G5 follow-up in REMAINING.md.
+async fn viewer_handler() -> impl IntoResponse {
+    Html(mempalace_core::viewer_html())
+}
+
+/// SPA stylesheet. Served at `GET /viewer/styles.css`.
+async fn viewer_styles_handler() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        mempalace_core::viewer_styles_css(),
+    )
+}
+
+/// SPA logic. Served at `GET /viewer/app.js`.
+async fn viewer_app_handler() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        mempalace_core::viewer_app_js(),
+    )
 }
 
 async fn context_build_handler(
@@ -1921,6 +1967,8 @@ fn build_router(state: SharedState) -> Router {
     Router::new()
         // Health & info
         .route("/health", get(health_handler))
+        .route("/healthz", get(healthz_handler))
+        .route("/livez", get(livez_handler))
         .route("/tools", get(list_tools_handler))
         // Memories
         .route("/memories", get(list_memories_handler))
@@ -2066,6 +2114,11 @@ fn build_router(state: SharedState) -> Router {
         .route("/branch/sessions", get(branch_sessions_handler))
         .route("/branch/worktrees", get(branch_worktrees_handler))
         .route("/vision/embed", post(vision_embed_handler))
+        // Live-graph viewer SPA (REMAINING.md G5 follow-up).
+        .route("/viewer", get(viewer_handler))
+        .route("/viewer/", get(viewer_handler))
+        .route("/viewer/app.js", get(viewer_app_handler))
+        .route("/viewer/styles.css", get(viewer_styles_handler))
         // SSE Transport (P13)
         .route("/sse", get(sse_handler))
         .route("/mcp", post(mcp_handler))
@@ -2074,12 +2127,44 @@ fn build_router(state: SharedState) -> Router {
 }
 
 /// Start the HTTP server on the specified port.
+#[cfg(feature = "health")]
+pub async fn run_http_server(
+    app_state: Arc<AppState>,
+    read_only: bool,
+    port: u16,
+    embedder: std::sync::Arc<dyn crate::embed::Embedder>,
+) -> anyhow::Result<()> {
+    crate::health::init_health_monitor(
+        app_state.palace_path.clone(),
+        Arc::clone(&embedder),
+        100, // default worker limit
+    );
+
+    let disk_size_manager = DiskSizeManager::new(10 * 1024 * 1024 * 1024);
+    let state = Arc::new(Mutex::new(HttpServerState {
+        app_state,
+        read_only,
+        disk_size_manager: Arc::new(Mutex::new(disk_size_manager)),
+        embedder,
+    }));
+
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!("REST API server listening on http://{}", addr);
+
+    let router = build_router(state);
+    axum::serve(listener, router).await?;
+
+    Ok(())
+}
+
+/// Start the HTTP server on the specified port (no-op health monitoring).
+#[cfg(not(feature = "health"))]
 pub async fn run_http_server(
     app_state: Arc<AppState>,
     read_only: bool,
     port: u16,
 ) -> anyhow::Result<()> {
-    // Default 10GB disk quota for the REST API disk size tracker
     let disk_size_manager = DiskSizeManager::new(10 * 1024 * 1024 * 1024);
     let state = Arc::new(Mutex::new(HttpServerState {
         app_state,

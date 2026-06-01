@@ -13,6 +13,23 @@ store-usearch = ["dep:usearch"]
 embed-fastembed = ["dep:fastembed"]
 embed-model2vec = ["dep:model2vec-rs"]
 embed-tract = ["dep:tract-onnx", "dep:tokenizers", "dep:ndarray"]
+# Remote OpenAI-compatible embedding provider (G2). Uses the already-present
+# `reqwest` dep; gated so builds opt in to outbound embedding API calls.
+embed-openai = []
+# Voyage AI remote embedding provider. Reuses `reqwest`; gated so builds
+# opt in to outbound embedding API calls.
+embed-voyage = []
+# Remote OpenRouter embedding provider. OpenRouter exposes an
+# OpenAI-compatible `/embeddings` endpoint that proxies to many upstream
+# models (OpenAI, Cohere, Voyage, ...). Uses the already-present
+# `reqwest` dep; gated so builds opt in to outbound embedding API calls.
+embed-openrouter = []
+# Remote Google Gemini embedding provider. Uses the already-present
+# `reqwest` dep; gated so builds opt in to outbound embedding API calls.
+embed-gemini = []
+# Remote Cohere embedding provider. Uses the already-present
+# `reqwest` dep; gated so builds opt in to outbound embedding API calls.
+embed-cohere = []
 # embed-clip disabled due to ort version conflict with fastembed (requires ort 2.0.0-rc.5 but fastembed needs 2.0.0-rc.12)
 # To enable: add open_clip_inference and image deps when ort conflict is resolved
 sync = []
@@ -22,6 +39,9 @@ coordination = []
 vision = []
 rerank = []
 full = ["llm-openai", "llm-anthropic", "coordination", "vision", "rerank"]
+# OpenTelemetry-compatible metrics via Prometheus text format.
+# Gates the `metrics` + `metrics-exporter-prometheus` crates.
+telemetry = ["dep:metrics-exporter-prometheus", "dep:metrics"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -53,6 +73,12 @@ base64 = { workspace = true }
 dirs = { workspace = true }
 filetime = { workspace = true }
 bm25 = { version = "2.3", default-features = false, features = ["default_tokenizer"] }
+sysinfo = "0.32"
+
+# Prometheus exporter for metrics (telemetry feature).
+metrics-exporter-prometheus = { version = "0.16", optional = true }
+# metrics facade 0.24 — the public API surface.
+metrics = { version = "0.24", optional = true }
 
 # `fastembed-rs` powers `FastEmbedEmbedder` behind feature
 # `embed-fastembed` (mp-012). Pulls in `ort` (C++ ONNX Runtime) and

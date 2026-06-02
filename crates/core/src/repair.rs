@@ -20,6 +20,12 @@ pub fn scan_palace(
     palace_path: Option<&Path>,
     only_wing: Option<&str>,
 ) -> anyhow::Result<(HashSet<String>, HashSet<String>)> {
+    if let Some(p) = palace_path {
+        if !p.exists() {
+            return Ok((HashSet::new(), HashSet::new()));
+        }
+    }
+
     let config = Config::load()?;
     let palace_path = palace_path.unwrap_or(config.palace_path.as_path());
 

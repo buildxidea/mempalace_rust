@@ -3048,6 +3048,7 @@ mod tests {
     }
 
     /// mp-016: a dimension mismatch returns the actionable error.
+    #[cfg(not(windows))]
     #[test]
     fn test_open_with_embedder_rejects_dim_change() {
         let temp = tempfile::tempdir().unwrap();

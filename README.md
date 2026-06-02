@@ -423,45 +423,77 @@ Future retrievals blend semantic similarity with historical helpfulness — memo
 
 ---
 
-## CI/CD Workflow
+## Memory Storage Pipeline
 
 ```
-┌──────────────┐   push / PR   ┌────────────────────────────────────┐
-│  developer   │ ────────────► │  GitHub Actions: .github/workflows │
-│  git push    │                │           ci.yml                   │
-└──────────────┘                └───────────────┬────────────────┘
-                                                │
-                  ┌─────────────────────────────┼─────────────────────────────┐
-                  ▼                             ▼                             ▼
-         ┌────────────────┐            ┌────────────────┐            ┌────────────────┐
-         │ ubuntu-latest  │            │ macos-latest   │            │ windows-latest │
-         │   test+clippy  │            │   test+clippy  │            │  clippy default│
-         └────────┬───────┘            └────────┬───────┘            └────────┬───────┘
-                  │                             │                             │
-                  └─────────────────────────────┼─────────────────────────────┘
-                                                ▼
-                                ┌───────────────────────────────┐
-                                │   fmt → build → test → bench  │
-                                │   (gate: agentmemory 1:1 +    │
-                                │    green CI on all 3 OS)     │
-                                └───────────────────────────────┘
+                     ┌──────────────────────────────────────────────────────────┐
+                     │                    SOURCE STREAMS                      │
+                     ├────────────┬────────────┬──────────────┬───────────────┤
+                     │ mpr mine   │  MCP tool  │  plugin/     │  REST API     │
+                     │ (scans src)│ (add_drawer)│ hooks/*.mjs   │ (POST /memory)│
+                     └─────┬──────┴──────┬─────┴──────┬───────┴───────┬───────┘
+                           │            │            │               │
+                           └────────────┴─────┬──────┴───────────────┘
+                                              ▼
+                    ┌─────────────────────────────────────────────┐
+                    │           AAAK COMPRESSION                 │
+                    │   ┌─────────────────────────────────┐     │
+                    │   │  LLM (Minimax/Anthropic/OpenAI)  │     │
+                    │   │  ↓ facts / narrative / concepts │     │
+                    │   │  ↓ title / importance / files   │     │
+                    │   └─────────────────────────────────┘     │
+                    │   CompressedObservation {type, title,    │
+                    │     facts, narrative, concepts, files,  │
+                    │     importance 0-10, source_observation}│
+                    └──────────────────────┬──────────────────┘
+                                           ▼
+                    ┌──────────────────────────────────────────────┐
+                    │             STORAGE LAYERS                    │
+                    ├──────────────────────────────────────────────┤
+                    │ ┌──────────────┐  ┌──────────────┐ ┌────────┐│
+                    │ │ SQLite       │  │ Vector Index │ │ KG     ││
+                    │ │ palace.db    │  │ (FastEmbed)  │ │(b25.rs││
+                    │ │              │  │              │ │ etc)   ││
+                    │ │ - drawers    │  │ - embeddings │ │        ││
+                    │ │ - wings      │  │ - ANN search │ │        ││
+                    │ │ - sessions   │  │              │ │        ││
+                    │ └──────────────┘  └──────────────┘ └────────┘│
+                    └──────────────────────┬───────────────────────┘
+                                           ▼
+                    ┌──────────────────────────────────────────────┐
+                    │            RETRIEVAL (mpr search)            │
+                    ├──────────────────────────────────────────────┤
+                    │  query ──┬──► BM25 (with synonym expansion)  │
+                    │          ├──► Vector search (cosine)         │
+                    │          └──► Graph BFS (KG traverse)       │
+                    │                    │                        │
+                    │                    ▼                        │
+                    │          Reciprocal Rank Fusion (RRF)       │
+                    │          bm25_weight = 0.7 (from synonyms) │
+                    │                    │                        │
+                    │                    ▼                        │
+                    │          Ranked results → MCP/REST response │
+                    └──────────────────────────────────────────────┘
 ```
 
-| Step | What it does | Why |
-|------|--------------|-----|
-| `cargo fmt --all -- --check` | Whitespace gate | Prevents rustfmt debt |
-| `cargo clippy --all-targets [--all-features]` | Lint gate (no `-D warnings` — see note) | Catches dead code, wrong cfg gates |
-| `cargo test --workspace [--all-features]` | Run 1000+ lib tests | Catches runtime regressions |
-| `cargo bench --no-run` | Compile-only benches | Catches API drift in benchmark harness |
+| Stage | What happens | Where |
+|-------|--------------|-------|
+| **Source** | Code, MCP calls, agent hooks, REST writes | `mpr mine`, `mempalace_add_drawer`, `plugin/scripts/*.mjs`, REST API |
+| **AAAK** | LLM extracts facts, narrative, concepts, importance | `crates/core/src/compress.rs`, `compress_synthetic.rs` |
+| **Storage** | 3 indexes — SQLite, vector, KG | `palace_db.rs`, `vector index`, `knowledge_graph.rs` |
+| **Retrieval** | BM25 + vector + graph → RRF fusion | `palace_db.rs::hybrid_search`, `search/rrf.rs` |
+| **Serve** | Top-K returned via MCP tool or REST | `mcp_server.rs`, `rest_api.rs` |
 
-**Note on `-D warnings`**: dropped from clippy (commit `ced4350`) because the
-pre-existing backlog of mechanical lints (unused imports, `sort_by_key`,
-`is_empty`, etc. across 50+ files) was masking real CI signal. New code
-should still be warning-free; the gate is enforced implicitly via `cargo
-build` + the test suite. Future cleanup: re-enable after a sweep.
+**Why 3 indexes?**
+- **SQLite (palace.db)** — exact lookup by id, wing, room, session
+- **Vector (FastEmbed)** — semantic similarity via embeddings (384-d default)
+- **KG (knowledge_graph.rs)** — entity relationships, temporal facts
 
-**Plugin deployment pattern** (`plugin/` folder at repo root, copy of
-agentmemory's layout):
+RRF fuses them: a hit in any 2 of 3 ranks higher than 3 hits in 1.
+`SYNONYM_BM25_WEIGHT = 0.7` (from `search/synonyms.rs`) lifts synonym
+matches above exact matches — matches the agentmemory reference.
+
+**Plugin deployment** (`plugin/` folder at repo root, copy of agentmemory's layout):
 
 ```
 ┌──────────────┐   npm/npx   ┌────────────────┐

@@ -179,7 +179,12 @@ pub fn segment_cjk_with_jieba(text: &str) -> Vec<String> {
         if detect_script(&run) == Script::Han {
             // Use jieba's HMM mode for ambiguous words (jieba-rs default).
             let jieba = jieba_rs::Jieba::new();
-            out.extend(jieba.cut(&run, true).into_iter().map(String::from));
+            out.extend(
+                jieba
+                    .cut(&run, true)
+                    .into_iter()
+                    .map(|t| t.word.to_string()),
+            );
         } else {
             out.push(run);
         }

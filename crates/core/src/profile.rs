@@ -54,21 +54,30 @@ impl ProfileStore {
 
         let mut top_concepts: Vec<FrequencyEntry> = concept_freq
             .into_iter()
-            .map(|(k, v)| FrequencyEntry { key: k, frequency: v })
+            .map(|(k, v)| FrequencyEntry {
+                key: k,
+                frequency: v,
+            })
             .collect();
         top_concepts.sort_by(|a, b| b.frequency.cmp(&a.frequency));
         top_concepts.truncate(20);
 
         let mut top_files: Vec<FrequencyEntry> = file_freq
             .into_iter()
-            .map(|(k, v)| FrequencyEntry { key: k, frequency: v })
+            .map(|(k, v)| FrequencyEntry {
+                key: k,
+                frequency: v,
+            })
             .collect();
         top_files.sort_by(|a, b| b.frequency.cmp(&a.frequency));
         top_files.truncate(20);
 
         let mut top_patterns: Vec<FrequencyEntry> = pattern_freq
             .into_iter()
-            .map(|(k, v)| FrequencyEntry { key: k, frequency: v })
+            .map(|(k, v)| FrequencyEntry {
+                key: k,
+                frequency: v,
+            })
             .collect();
         top_patterns.sort_by(|a, b| b.frequency.cmp(&a.frequency));
         top_patterns.truncate(10);
@@ -127,7 +136,12 @@ impl ProfileStore {
 mod tests {
     use super::*;
 
-    fn test_observation(id: &str, concepts: Vec<&str>, files: Vec<&str>, obs_type: crate::types::ObservationType) -> CompressedObservation {
+    fn test_observation(
+        id: &str,
+        concepts: Vec<&str>,
+        files: Vec<&str>,
+        obs_type: crate::types::ObservationType,
+    ) -> CompressedObservation {
         CompressedObservation {
             id: id.to_string(),
             session_id: "s-1".to_string(),
@@ -152,16 +166,35 @@ mod tests {
     fn test_compute_profile_aggregates_concepts() {
         let store = ProfileStore::new("test-project");
         let obs = vec![
-            test_observation("1", vec!["auth", "jwt"], vec!["src/auth.rs"], crate::types::ObservationType::FileEdit),
-            test_observation("2", vec!["auth", "api"], vec!["src/api.rs"], crate::types::ObservationType::FileEdit),
-            test_observation("3", vec!["jwt"], vec!["src/auth.rs"], crate::types::ObservationType::FileEdit),
+            test_observation(
+                "1",
+                vec!["auth", "jwt"],
+                vec!["src/auth.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_observation(
+                "2",
+                vec!["auth", "api"],
+                vec!["src/api.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_observation(
+                "3",
+                vec!["jwt"],
+                vec!["src/auth.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
         ];
         let profile = store.compute_profile(&obs, 2).unwrap();
         assert_eq!(profile.project, "test-project");
         assert_eq!(profile.session_count, 2);
         assert_eq!(profile.total_observations, 3);
         assert!(!profile.top_concepts.is_empty());
-        let auth_entry = profile.top_concepts.iter().find(|e| e.key == "auth").unwrap();
+        let auth_entry = profile
+            .top_concepts
+            .iter()
+            .find(|e| e.key == "auth")
+            .unwrap();
         assert_eq!(auth_entry.frequency, 2);
     }
 
@@ -169,11 +202,25 @@ mod tests {
     fn test_compute_profile_aggregates_files() {
         let store = ProfileStore::new("test-project");
         let obs = vec![
-            test_observation("1", vec![], vec!["src/auth.rs", "src/main.rs"], crate::types::ObservationType::FileEdit),
-            test_observation("2", vec![], vec!["src/auth.rs"], crate::types::ObservationType::FileEdit),
+            test_observation(
+                "1",
+                vec![],
+                vec!["src/auth.rs", "src/main.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_observation(
+                "2",
+                vec![],
+                vec!["src/auth.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
         ];
         let profile = store.compute_profile(&obs, 1).unwrap();
-        let auth_entry = profile.top_files.iter().find(|e| e.key == "src/auth.rs").unwrap();
+        let auth_entry = profile
+            .top_files
+            .iter()
+            .find(|e| e.key == "src/auth.rs")
+            .unwrap();
         assert_eq!(auth_entry.frequency, 2);
     }
 
@@ -193,7 +240,14 @@ mod tests {
     fn test_compute_profile_recent_activity() {
         let store = ProfileStore::new("test-project");
         let obs: Vec<CompressedObservation> = (0..15)
-            .map(|i| test_observation(&i.to_string(), vec![], vec![], crate::types::ObservationType::Other))
+            .map(|i| {
+                test_observation(
+                    &i.to_string(),
+                    vec![],
+                    vec![],
+                    crate::types::ObservationType::Other,
+                )
+            })
             .collect();
         let profile = store.compute_profile(&obs, 1).unwrap();
         assert!(profile.recent_activity.len() <= 10);
@@ -202,7 +256,12 @@ mod tests {
     #[test]
     fn test_cache_ttl() {
         let store = ProfileStore::new("test-project");
-        let obs = vec![test_observation("1", vec![], vec![], crate::types::ObservationType::Other)];
+        let obs = vec![test_observation(
+            "1",
+            vec![],
+            vec![],
+            crate::types::ObservationType::Other,
+        )];
         store.compute_profile(&obs, 1).unwrap();
         let cached = store.get_profile();
         assert!(cached.is_some());
@@ -211,7 +270,12 @@ mod tests {
     #[test]
     fn test_invalidate_cache() {
         let store = ProfileStore::new("test-project");
-        let obs = vec![test_observation("1", vec![], vec![], crate::types::ObservationType::Other)];
+        let obs = vec![test_observation(
+            "1",
+            vec![],
+            vec![],
+            crate::types::ObservationType::Other,
+        )];
         store.compute_profile(&obs, 1).unwrap();
         store.invalidate_cache();
         assert!(store.get_profile().is_none());

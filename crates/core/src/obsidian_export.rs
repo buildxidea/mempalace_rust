@@ -52,21 +52,24 @@ pub fn memory_to_obsidian_md(
         md.push_str(&format!("id: {}\n", memory.id));
         md.push_str(&format!("title: {}\n", memory.title.replace('\n', " ")));
         md.push_str(&format!("type: {}\n", memory.memory_type));
-        md.push_str(&format!("created: {}\n", memory.created_at.format(&config.date_format)));
+        md.push_str(&format!(
+            "created: {}\n",
+            memory.created_at.format(&config.date_format)
+        ));
         md.push_str(&format!("strength: {:.2}\n", memory.strength));
         md.push_str(&format!("version: {}\n", memory.version));
 
         if config.include_tags && !memory.concepts.is_empty() {
-            let tags: Vec<String> = memory.concepts.iter()
+            let tags: Vec<String> = memory
+                .concepts
+                .iter()
                 .map(|c| format!("[{}/{}]", config.tag_prefix, sanitize_tag(c)))
                 .collect();
             md.push_str(&format!("tags: [{}]\n", tags.join(", ")));
         }
 
         if !memory.files.is_empty() {
-            let files: Vec<String> = memory.files.iter()
-                .map(|f| format!("\"{}\"", f))
-                .collect();
+            let files: Vec<String> = memory.files.iter().map(|f| format!("\"{}\"", f)).collect();
             md.push_str(&format!("files: [{}]\n", files.join(", ")));
         }
 
@@ -123,13 +126,18 @@ pub fn observation_to_obsidian_md(
         md.push_str(&format!("id: {}\n", obs.id));
         md.push_str(&format!("type: observation\n"));
         md.push_str(&format!("observation_type: {}\n", obs.observation_type));
-        md.push_str(&format!("timestamp: {}\n", obs.timestamp.format(&config.date_format)));
+        md.push_str(&format!(
+            "timestamp: {}\n",
+            obs.timestamp.format(&config.date_format)
+        ));
         md.push_str(&format!("importance: {}\n", obs.importance));
         md.push_str(&format!("confidence: {:.2}\n", obs.confidence));
         md.push_str(&format!("session: {}\n", obs.session_id));
 
         if config.include_tags && !obs.concepts.is_empty() {
-            let tags: Vec<String> = obs.concepts.iter()
+            let tags: Vec<String> = obs
+                .concepts
+                .iter()
                 .map(|c| format!("[{}/{}]", config.tag_prefix, sanitize_tag(c)))
                 .collect();
             md.push_str(&format!("tags: [{}]\n", tags.join(", ")));
@@ -208,7 +216,9 @@ pub fn export_observations(
     for obs in observations {
         let md = observation_to_obsidian_md(obs, config);
         let filename = sanitize_filename(&obs.title);
-        let path = output_dir.join("observations").join(format!("{}.md", filename));
+        let path = output_dir
+            .join("observations")
+            .join(format!("{}.md", filename));
         std::fs::write(&path, &md)?;
         files.push(path.to_string_lossy().to_string());
     }
@@ -222,7 +232,13 @@ pub fn export_observations(
 
 fn sanitize_tag(tag: &str) -> String {
     tag.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .replace(' ', "-")
         .to_lowercase()
@@ -246,29 +262,47 @@ mod tests {
 
     fn test_memory(id: &str) -> Memory {
         Memory {
-            id: id.into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-            memory_type: MemoryType::Semantic, title: format!("Test Memory {}", id),
+            id: id.into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            memory_type: MemoryType::Semantic,
+            title: format!("Test Memory {}", id),
             content: "This is test content.".into(),
             concepts: vec!["rust".into(), "testing".into()],
             files: vec!["src/main.rs".into()],
             session_ids: vec!["s-1".into()],
-            strength: 0.8, version: 1, parent_id: None,
-            supersedes: vec![], related_ids: vec![], source_observation_ids: vec!["o-1".into()],
-            is_latest: true, forget_after: None, image_ref: None, agent_id: None,
+            strength: 0.8,
+            version: 1,
+            parent_id: None,
+            supersedes: vec![],
+            related_ids: vec![],
+            source_observation_ids: vec!["o-1".into()],
+            is_latest: true,
+            forget_after: None,
+            image_ref: None,
+            agent_id: None,
             project: "test".into(),
         }
     }
 
     fn test_obs(id: &str) -> CompressedObservation {
         CompressedObservation {
-            id: id.into(), session_id: "s-1".into(),
-            timestamp: chrono::Utc::now(), observation_type: ObservationType::FileEdit,
-            title: format!("Test Observation {}", id), subtitle: Some("A test subtitle".into()),
+            id: id.into(),
+            session_id: "s-1".into(),
+            timestamp: chrono::Utc::now(),
+            observation_type: ObservationType::FileEdit,
+            title: format!("Test Observation {}", id),
+            subtitle: Some("A test subtitle".into()),
             facts: vec!["Fact 1".into(), "Fact 2".into()],
             narrative: "This is the observation narrative.".into(),
-            concepts: vec!["rust".into()], files: vec!["src/lib.rs".into()],
-            importance: 5, confidence: 0.9, image_ref: None, image_description: None,
-            modality: "text".into(), agent_id: None,
+            concepts: vec!["rust".into()],
+            files: vec!["src/lib.rs".into()],
+            importance: 5,
+            confidence: 0.9,
+            image_ref: None,
+            image_description: None,
+            modality: "text".into(),
+            agent_id: None,
         }
     }
 
@@ -303,7 +337,10 @@ mod tests {
     #[test]
     fn test_memory_no_frontmatter() {
         let memory = test_memory("m-1");
-        let config = ObsidianExportConfig { include_frontmatter: false, ..Default::default() };
+        let config = ObsidianExportConfig {
+            include_frontmatter: false,
+            ..Default::default()
+        };
         let md = memory_to_obsidian_md(&memory, &config);
 
         assert!(!md.starts_with("---"));
@@ -313,7 +350,10 @@ mod tests {
     #[test]
     fn test_memory_no_links() {
         let memory = test_memory("m-1");
-        let config = ObsidianExportConfig { include_links: false, ..Default::default() };
+        let config = ObsidianExportConfig {
+            include_links: false,
+            ..Default::default()
+        };
         let md = memory_to_obsidian_md(&memory, &config);
 
         assert!(!md.contains("## Related"));

@@ -31,14 +31,23 @@ impl SentinelStore {
         Ok(Self { conn })
     }
 
-    pub fn create(&self, name: &str, sentinel_type: &str, config: Option<&str>, linked_action_ids: Vec<String>, expires_in_ms: Option<i64>) -> Result<Sentinel> {
+    pub fn create(
+        &self,
+        name: &str,
+        sentinel_type: &str,
+        config: Option<&str>,
+        linked_action_ids: Vec<String>,
+        expires_in_ms: Option<i64>,
+    ) -> Result<Sentinel> {
         let now = Utc::now();
         let sentinel = Sentinel {
             id: format!("snl-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()),
             name: name.trim().to_string(),
             sentinel_type: crate::types::SentinelType::Custom,
             status: "watching".to_string(),
-            config: config.map(|c| serde_json::from_str(c).unwrap_or_default()).unwrap_or_default(),
+            config: config
+                .map(|c| serde_json::from_str(c).unwrap_or_default())
+                .unwrap_or_default(),
             condition: String::new(),
             action: String::new(),
             active: true,
@@ -54,7 +63,9 @@ impl SentinelStore {
     }
 
     pub fn trigger(&self, id: &str, result: Option<serde_json::Value>) -> Result<Sentinel> {
-        let mut sentinel = self.get(id)?.ok_or_else(|| anyhow::anyhow!("Sentinel not found"))?;
+        let mut sentinel = self
+            .get(id)?
+            .ok_or_else(|| anyhow::anyhow!("Sentinel not found"))?;
         if sentinel.status != "watching" {
             return Err(anyhow::anyhow!("Sentinel already {}", sentinel.status));
         }
@@ -66,9 +77,14 @@ impl SentinelStore {
     }
 
     pub fn cancel(&self, id: &str) -> Result<Sentinel> {
-        let mut sentinel = self.get(id)?.ok_or_else(|| anyhow::anyhow!("Sentinel not found"))?;
+        let mut sentinel = self
+            .get(id)?
+            .ok_or_else(|| anyhow::anyhow!("Sentinel not found"))?;
         if sentinel.status != "watching" {
-            return Err(anyhow::anyhow!("Cannot cancel sentinel with status {}", sentinel.status));
+            return Err(anyhow::anyhow!(
+                "Cannot cancel sentinel with status {}",
+                sentinel.status
+            ));
         }
         sentinel.status = "cancelled".to_string();
         self.update(&sentinel)?;
@@ -95,7 +111,9 @@ impl SentinelStore {
         let mut expired = 0;
 
         for mut sentinel in sentinels {
-            if sentinel.status != "watching" { continue; }
+            if sentinel.status != "watching" {
+                continue;
+            }
             if let Some(expires) = sentinel.expires_at {
                 if expires <= now {
                     sentinel.status = "expired".to_string();
@@ -121,8 +139,11 @@ impl SentinelStore {
 
     fn load_all(&self) -> Result<Vec<Sentinel>> {
         let mut stmt = self.conn.prepare("SELECT * FROM sentinels")?;
-        let rows: Vec<rusqlite::Result<Sentinel>> = stmt.query_map([], |row| row_to_sentinel(row))?.collect();
-        rows.into_iter().map(|r| r.map_err(|e| anyhow::anyhow!(e))).collect()
+        let rows: Vec<rusqlite::Result<Sentinel>> =
+            stmt.query_map([], |row| row_to_sentinel(row))?.collect();
+        rows.into_iter()
+            .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+            .collect()
     }
 
     fn insert(&self, sentinel: &Sentinel) -> Result<()> {
@@ -150,13 +171,23 @@ impl SentinelStore {
                                 created_at=?10, expires_at=?11, triggered_at=?12,
                                 last_triggered=?13, result=?14 WHERE id=?1",
             params![
-                sentinel.id, sentinel.name, format!("{:?}", sentinel.sentinel_type), sentinel.status,
-                serde_json::to_string(&sentinel.config)?, sentinel.condition, sentinel.action,
-                sentinel.active as i32, serde_json::to_string(&sentinel.linked_action_ids)?,
-                sentinel.created_at.to_rfc3339(), sentinel.expires_at.map(|d| d.to_rfc3339()),
+                sentinel.id,
+                sentinel.name,
+                format!("{:?}", sentinel.sentinel_type),
+                sentinel.status,
+                serde_json::to_string(&sentinel.config)?,
+                sentinel.condition,
+                sentinel.action,
+                sentinel.active as i32,
+                serde_json::to_string(&sentinel.linked_action_ids)?,
+                sentinel.created_at.to_rfc3339(),
+                sentinel.expires_at.map(|d| d.to_rfc3339()),
                 sentinel.triggered_at.map(|d| d.to_rfc3339()),
                 sentinel.last_triggered.map(|d| d.to_rfc3339()),
-                sentinel.result.as_ref().map(|r| serde_json::to_string(r).unwrap_or_default())
+                sentinel
+                    .result
+                    .as_ref()
+                    .map(|r| serde_json::to_string(r).unwrap_or_default())
             ],
         )?;
         Ok(())
@@ -176,11 +207,24 @@ fn row_to_sentinel(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sentinel> {
         action: row.get(6)?,
         active: row.get::<_, i32>(7)? != 0,
         linked_action_ids: serde_json::from_str(&linked_action_ids).unwrap_or_default(),
-        created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?).unwrap().with_timezone(&Utc),
-        expires_at: row.get::<_, Option<String>>(10)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-        triggered_at: row.get::<_, Option<String>>(11)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-        last_triggered: row.get::<_, Option<String>>(12)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-        result: row.get::<_, Option<String>>(13)?.and_then(|s| serde_json::from_str(&s).ok()),
+        created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+            .unwrap()
+            .with_timezone(&Utc),
+        expires_at: row
+            .get::<_, Option<String>>(10)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        triggered_at: row
+            .get::<_, Option<String>>(11)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        last_triggered: row
+            .get::<_, Option<String>>(12)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        result: row
+            .get::<_, Option<String>>(13)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
     })
 }
 
@@ -195,7 +239,15 @@ mod tests {
     #[test]
     fn test_create_sentinel() {
         let store = test_store();
-        let sentinel = store.create("Test sentinel", "timer", Some(r#"{"durationMs": 5000}"#), vec![], Some(60000)).unwrap();
+        let sentinel = store
+            .create(
+                "Test sentinel",
+                "timer",
+                Some(r#"{"durationMs": 5000}"#),
+                vec![],
+                Some(60000),
+            )
+            .unwrap();
         assert!(sentinel.id.starts_with("snl-"));
         assert_eq!(sentinel.status, "watching");
         assert!(sentinel.expires_at.is_some());
@@ -205,7 +257,9 @@ mod tests {
     fn test_trigger_sentinel() {
         let store = test_store();
         let sentinel = store.create("Test", "timer", None, vec![], None).unwrap();
-        let triggered = store.trigger(&sentinel.id, Some(serde_json::json!({"reason": "manual"}))).unwrap();
+        let triggered = store
+            .trigger(&sentinel.id, Some(serde_json::json!({"reason": "manual"})))
+            .unwrap();
         assert_eq!(triggered.status, "triggered");
         assert!(triggered.triggered_at.is_some());
     }
@@ -222,7 +276,9 @@ mod tests {
     fn test_list_sentinels() {
         let store = test_store();
         store.create("Active", "timer", None, vec![], None).unwrap();
-        store.create("Another", "threshold", None, vec![], None).unwrap();
+        store
+            .create("Another", "threshold", None, vec![], None)
+            .unwrap();
         let all = store.list(None, None).unwrap();
         assert_eq!(all.len(), 2);
     }
@@ -231,7 +287,9 @@ mod tests {
     fn test_list_filters_by_status() {
         let store = test_store();
         let s1 = store.create("Active", "timer", None, vec![], None).unwrap();
-        let s2 = store.create("To trigger", "timer", None, vec![], None).unwrap();
+        let s2 = store
+            .create("To trigger", "timer", None, vec![], None)
+            .unwrap();
         store.trigger(&s2.id, None).unwrap();
         let watching = store.list(Some("watching"), None).unwrap();
         assert_eq!(watching.len(), 1);
@@ -241,8 +299,12 @@ mod tests {
     #[test]
     fn test_expire_sentinels() {
         let store = test_store();
-        store.create("Expired", "timer", None, vec![], Some(-1000)).unwrap();
-        store.create("Active", "timer", None, vec![], Some(999999999)).unwrap();
+        store
+            .create("Expired", "timer", None, vec![], Some(-1000))
+            .unwrap();
+        store
+            .create("Active", "timer", None, vec![], Some(999999999))
+            .unwrap();
         let expired = store.expire().unwrap();
         assert_eq!(expired, 1);
     }

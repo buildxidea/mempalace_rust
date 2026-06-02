@@ -1,4 +1,6 @@
-use crate::types::{CompressedObservation, ContextBlock, FrequencyEntry, MemorySlot, ProjectProfile, Session};
+use crate::types::{
+    CompressedObservation, ContextBlock, FrequencyEntry, MemorySlot, ProjectProfile, Session,
+};
 use anyhow::Result;
 
 pub const DEFAULT_TOKEN_BUDGET: usize = 8000;
@@ -70,7 +72,11 @@ impl ContextBuilder {
 
         // 2. Project profile (top concepts and files)
         if let Some(profile) = &self.project_profile {
-            let concepts: Vec<&str> = profile.top_concepts.iter().map(|e| e.key.as_str()).collect();
+            let concepts: Vec<&str> = profile
+                .top_concepts
+                .iter()
+                .map(|e| e.key.as_str())
+                .collect();
             let files: Vec<&str> = profile.top_files.iter().map(|e| e.key.as_str()).collect();
             let profile_content = format!(
                 "Project: {}\nTop Concepts: {}\nTop Files: {}\nLanguage: {}\nFramework: {}",
@@ -180,12 +186,19 @@ mod tests {
         ProjectProfile {
             project: "test-project".to_string(),
             top_concepts: vec![
-                FrequencyEntry { key: "auth".to_string(), frequency: 2 },
-                FrequencyEntry { key: "api".to_string(), frequency: 1 },
+                FrequencyEntry {
+                    key: "auth".to_string(),
+                    frequency: 2,
+                },
+                FrequencyEntry {
+                    key: "api".to_string(),
+                    frequency: 1,
+                },
             ],
-            top_files: vec![
-                FrequencyEntry { key: "src/main.rs".to_string(), frequency: 1 },
-            ],
+            top_files: vec![FrequencyEntry {
+                key: "src/main.rs".to_string(),
+                frequency: 1,
+            }],
             top_patterns: vec![],
             conventions: vec![],
             common_errors: vec![],
@@ -239,8 +252,11 @@ mod tests {
 
     #[test]
     fn test_build_with_pinned_slots() {
-        let builder = ContextBuilder::new(1000)
-            .with_pinned_slots(vec![test_slot("s-1", "instructions", "Always use Rust")]);
+        let builder = ContextBuilder::new(1000).with_pinned_slots(vec![test_slot(
+            "s-1",
+            "instructions",
+            "Always use Rust",
+        )]);
         let blocks = builder.build().unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].source, "slot:instructions");
@@ -248,8 +264,7 @@ mod tests {
 
     #[test]
     fn test_build_with_project_profile() {
-        let builder = ContextBuilder::new(1000)
-            .with_project_profile(test_profile());
+        let builder = ContextBuilder::new(1000).with_project_profile(test_profile());
         let blocks = builder.build().unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].source, "project_profile");
@@ -258,16 +273,19 @@ mod tests {
 
     #[test]
     fn test_build_respects_token_budget() {
-        let builder = ContextBuilder::new(50)
-            .with_pinned_slots(vec![test_slot("s-1", "big-slot", &"x".repeat(200))]);
+        let builder = ContextBuilder::new(50).with_pinned_slots(vec![test_slot(
+            "s-1",
+            "big-slot",
+            &"x".repeat(200),
+        )]);
         let blocks = builder.build().unwrap();
         assert!(blocks.is_empty());
     }
 
     #[test]
     fn test_build_xml_format() {
-        let builder = ContextBuilder::new(1000)
-            .with_pinned_slots(vec![test_slot("s-1", "test", "content")]);
+        let builder =
+            ContextBuilder::new(1000).with_pinned_slots(vec![test_slot("s-1", "test", "content")]);
         let xml = builder.build_xml().unwrap();
         assert!(xml.starts_with("<agentmemory_context>"));
         assert!(xml.ends_with("</agentmemory_context>"));
@@ -291,8 +309,7 @@ mod tests {
 
     #[test]
     fn test_build_with_lessons() {
-        let builder = ContextBuilder::new(1000)
-            .with_lessons(vec!["Always test auth".to_string()]);
+        let builder = ContextBuilder::new(1000).with_lessons(vec!["Always test auth".to_string()]);
         let blocks = builder.build().unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].content, "Always test auth");

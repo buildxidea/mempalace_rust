@@ -16,8 +16,8 @@ use crate::palace_db::MemorySlot;
 use rmcp::model::{
     CallToolResult, Content, GetPromptResult, Implementation, InitializeResult, JsonObject,
     ListPromptsResult, ListResourcesResult, ListToolsResult, PromptArgument,
-    ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-    ServerCapabilities, ServerInfo as McpServerInfo,
+    ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
+    ServerInfo as McpServerInfo,
 };
 use rmcp::service::MaybeSendFuture;
 use rmcp::transport::stdio;
@@ -1239,15 +1239,20 @@ impl MempalaceServer {
     }
 
     fn read_resource_status(&self) -> Result<ReadResourceResult, ErrorData> {
-        let db = fresh_db(self.state.as_ref()).map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let db = fresh_db(self.state.as_ref())
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
         let entries = db.get_all(None, None, usize::MAX);
         let memory_count = entries.len();
-        let health = if memory_count >= 0 { "healthy" } else { "unhealthy" };
+        // A successfully-opened palace is healthy; count is informational.
+        let health = "healthy";
         let content = format!(
             "MemPalace Status\n===============\nMemories: {}\nHealth: {}",
             memory_count, health
         );
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(content, "agentmemory://status")]))
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            content,
+            "agentmemory://status",
+        )]))
     }
 
     fn read_resource_project(&self, uri: &str) -> Result<ReadResourceResult, ErrorData> {
@@ -1259,41 +1264,70 @@ impl MempalaceServer {
             ));
         }
         let name = parts[3];
-        let db = fresh_db(self.state.as_ref()).map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let db = fresh_db(self.state.as_ref())
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
         let entries = db.get_all(Some(name), None, 50);
-        let files: Vec<String> = entries.iter()
-            .filter_map(|e| e.metadatas.first()?.get("source_file")?.as_str().map(String::from))
+        let files: Vec<String> = entries
+            .iter()
+            .filter_map(|e| {
+                e.metadatas
+                    .first()?
+                    .get("source_file")?
+                    .as_str()
+                    .map(String::from)
+            })
             .take(10)
             .collect();
         let content = format!(
             "Project Profile: {}\n===============\nRecent entries: {}\nFiles: {:?}",
-            name, entries.len(), files
+            name,
+            entries.len(),
+            files
         );
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(content, uri)]))
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            content, uri,
+        )]))
     }
 
     fn read_resource_latest_memories(&self) -> Result<ReadResourceResult, ErrorData> {
-        let db = fresh_db(self.state.as_ref()).map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        let db = fresh_db(self.state.as_ref())
+            .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
         let entries = db.get_all(None, None, 10);
         let content = if entries.is_empty() {
             "No memories found".to_string()
         } else {
-            let items: Vec<String> = entries.iter().map(|e| {
-                format!("- {}", e.ids.first().map(|id| id.as_str()).unwrap_or("unknown"))
-            }).collect();
+            let items: Vec<String> = entries
+                .iter()
+                .map(|e| {
+                    format!(
+                        "- {}",
+                        e.ids.first().map(|id| id.as_str()).unwrap_or("unknown")
+                    )
+                })
+                .collect();
             format!("Latest Memories\n==============\n{}", items.join("\n"))
         };
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(content, "agentmemory://memories/latest")]))
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            content,
+            "agentmemory://memories/latest",
+        )]))
     }
 
     fn read_resource_graph_stats(&self) -> Result<ReadResourceResult, ErrorData> {
-        let content = "Knowledge Graph Statistics\n==========================\n(KG not yet implemented)";
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(content, "agentmemory://graph/stats")]))
+        let content =
+            "Knowledge Graph Statistics\n==========================\n(KG not yet implemented)";
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            content,
+            "agentmemory://graph/stats",
+        )]))
     }
 
     fn read_resource_team_feed(&self) -> Result<ReadResourceResult, ErrorData> {
         let content = "Team Feed\n=======\n(No team data available)".to_string();
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(content, "agentmemory://team/feed")]))
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            content,
+            "agentmemory://team/feed",
+        )]))
     }
 
     fn list_mcp_prompts(&self) -> Result<ListPromptsResult, ErrorData> {
@@ -1301,49 +1335,55 @@ impl MempalaceServer {
             rmcp::model::Prompt::new(
                 "recall_context",
                 Some("Search memories for task context"),
-                Some(vec![
-                    PromptArgument::new("task_description")
-                        .with_title("Task Description")
-                        .with_description("Description of the task to find context for")
-                        .with_required(true),
-                ]),
+                Some(vec![PromptArgument::new("task_description")
+                    .with_title("Task Description")
+                    .with_description("Description of the task to find context for")
+                    .with_required(true)]),
             ),
             rmcp::model::Prompt::new(
                 "session_handoff",
                 Some("Generate handoff summary for a session"),
-                Some(vec![
-                    PromptArgument::new("session_id")
-                        .with_title("Session ID")
-                        .with_description("ID of the session to generate handoff for")
-                        .with_required(true),
-                ]),
+                Some(vec![PromptArgument::new("session_id")
+                    .with_title("Session ID")
+                    .with_description("ID of the session to generate handoff for")
+                    .with_required(true)]),
             ),
             rmcp::model::Prompt::new(
                 "detect_patterns",
                 Some("Detect recurring patterns in memories"),
-                Some(vec![
-                    PromptArgument::new("project")
-                        .with_title("Project")
-                        .with_description("Project name to analyze (optional)")
-                        .with_required(false),
-                ]),
+                Some(vec![PromptArgument::new("project")
+                    .with_title("Project")
+                    .with_description("Project name to analyze (optional)")
+                    .with_required(false)]),
             ),
         ];
         Ok(ListPromptsResult::with_all_items(prompts))
     }
 
-    fn get_mcp_prompt(&self, name: &str, args: serde_json::Map<String, serde_json::Value>) -> Result<GetPromptResult, ErrorData> {
-        use rmcp::model::{PromptMessage, PromptMessageRole, PromptMessageContent};
+    fn get_mcp_prompt(
+        &self,
+        name: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        use rmcp::model::{PromptMessage, PromptMessageContent, PromptMessageRole};
         match name {
             "recall_context" => {
-                let task_desc = args.get("task_description")
+                let task_desc = args
+                    .get("task_description")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let db = fresh_db(self.state.as_ref()).map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-                let results = db.query_sync(task_desc, None, None, 5)
+                let db = fresh_db(self.state.as_ref())
                     .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-                let context: Vec<String> = results.iter()
-                    .filter_map(|r| r.documents.first().map(|d| format!("- {}", d.chars().take(100).collect::<String>())))
+                let results = db
+                    .query_sync(task_desc, None, None, 5)
+                    .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+                let context: Vec<String> = results
+                    .iter()
+                    .filter_map(|r| {
+                        r.documents
+                            .first()
+                            .map(|d| format!("- {}", d.chars().take(100).collect::<String>()))
+                    })
                     .collect();
                 let message = format!(
                     "Recall Context for: {}\n\nFound {} relevant memories:\n{}",
@@ -1351,27 +1391,36 @@ impl MempalaceServer {
                     results.len(),
                     context.join("\n")
                 );
-                Ok(GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, message)]))
+                Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    message,
+                )]))
             }
             "session_handoff" => {
-                let session_id = args.get("session_id")
+                let session_id = args
+                    .get("session_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let content = format!(
                     "Session Handoff for: {}\n\nPlease provide context about what was accomplished and what needs to be done next.",
                     session_id
                 );
-                Ok(GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, content)]))
+                Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    content,
+                )]))
             }
             "detect_patterns" => {
-                let project = args.get("project")
-                    .and_then(|v| v.as_str());
+                let project = args.get("project").and_then(|v| v.as_str());
                 let content = if let Some(p) = project {
                     format!("Analyzing patterns for project: {}", p)
                 } else {
                     "Analyzing patterns across all projects".to_string()
                 };
-                Ok(GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, content)]))
+                Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    content,
+                )]))
             }
             _ => Err(rmcp::ErrorData::invalid_params(
                 format!("Unknown prompt: {}", name),
@@ -1624,7 +1673,9 @@ fn tool_search(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
             .filter(|(_, r)| {
                 r.metadatas.iter().any(|m| {
                     filter_map.iter().all(|(k, v)| {
-                        m.get(k).map(|mv| mv.as_str().unwrap_or("") == *v).unwrap_or(false)
+                        m.get(k)
+                            .map(|mv| mv.as_str().unwrap_or("") == *v)
+                            .unwrap_or(false)
                     })
                 })
             })
@@ -2140,9 +2191,10 @@ fn tool_verify(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
     let memories: Vec<crate::types::Memory> = all_entries
         .iter()
         .filter_map(|entry| {
-            entry.documents.first().and_then(|doc| {
-                serde_json::from_str::<crate::types::Memory>(doc).ok()
-            })
+            entry
+                .documents
+                .first()
+                .and_then(|doc| serde_json::from_str::<crate::types::Memory>(doc).ok())
         })
         .collect();
 
@@ -2158,7 +2210,12 @@ fn tool_verify(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
     let session_ids: Vec<String> = all_entries
         .iter()
         .filter_map(|entry| {
-            entry.metadatas.first()?.get("session_id")?.as_str().map(String::from)
+            entry
+                .metadatas
+                .first()?
+                .get("session_id")?
+                .as_str()
+                .map(String::from)
         })
         .collect();
 
@@ -2199,9 +2256,10 @@ fn tool_governance_delete(state: &AppState, args: JsonObject) -> Result<CallTool
     let mut memories: Vec<crate::types::Memory> = all_entries
         .iter()
         .filter_map(|entry| {
-            entry.documents.first().and_then(|doc| {
-                serde_json::from_str::<crate::types::Memory>(doc).ok()
-            })
+            entry
+                .documents
+                .first()
+                .and_then(|doc| serde_json::from_str::<crate::types::Memory>(doc).ok())
         })
         .collect();
 
@@ -2246,7 +2304,9 @@ fn tool_obsidian_export(state: &AppState, args: JsonObject) -> Result<CallToolRe
     let all_entries = db.get_all(None, None, usize::MAX);
 
     let config = crate::obsidian_export::ObsidianExportConfig {
-        output_dir: input.output_dir.unwrap_or_else(|| "./memory-export".to_string()),
+        output_dir: input
+            .output_dir
+            .unwrap_or_else(|| "./memory-export".to_string()),
         include_frontmatter: input.include_frontmatter.unwrap_or(true),
         include_tags: input.include_tags.unwrap_or(true),
         include_links: true,
@@ -2268,9 +2328,10 @@ fn tool_obsidian_export(state: &AppState, args: JsonObject) -> Result<CallToolRe
         let memories: Vec<crate::types::Memory> = all_entries
             .iter()
             .filter_map(|entry| {
-                entry.documents.first().and_then(|doc| {
-                    serde_json::from_str::<crate::types::Memory>(doc).ok()
-                })
+                entry
+                    .documents
+                    .first()
+                    .and_then(|doc| serde_json::from_str::<crate::types::Memory>(doc).ok())
             })
             .collect();
         crate::obsidian_export::export_memories(&memories, &config)
@@ -2294,8 +2355,8 @@ fn tool_compress_file(state: &AppState, args: JsonObject) -> Result<CallToolResu
     let input: Input = parse_args(args)?;
 
     let path = std::path::PathBuf::from(&input.file_path);
-    let result = crate::compress_file::compress_markdown_file(&path)
-        .map_err(|e| internal_error_safe(&e))?;
+    let result =
+        crate::compress_file::compress_markdown_file(&path).map_err(|e| internal_error_safe(&e))?;
 
     if input.dry_run.unwrap_or(false) {
         ok_json(serde_json::json!({
@@ -2329,8 +2390,8 @@ fn tool_detect_worktree(state: &AppState, args: JsonObject) -> Result<CallToolRe
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| state.palace_path.clone());
 
-    let worktrees = crate::branch_aware::list_worktrees(&path)
-        .map_err(|e| internal_error_safe(&e))?;
+    let worktrees =
+        crate::branch_aware::list_worktrees(&path).map_err(|e| internal_error_safe(&e))?;
 
     ok_json(serde_json::json!({
         "worktrees": worktrees,
@@ -2345,8 +2406,7 @@ fn tool_replay_import(_state: &AppState, args: JsonObject) -> Result<CallToolRes
     }
     let input: Input = parse_args(args)?;
 
-    let sessions = crate::replay::load_all_sessions()
-        .map_err(|e| internal_error_safe(&e))?;
+    let sessions = crate::replay::load_all_sessions().map_err(|e| internal_error_safe(&e))?;
 
     let filtered: Vec<_> = if let Some(ref proj) = input.project_filter {
         sessions
@@ -2503,15 +2563,22 @@ fn tool_action_update(state: &AppState, args: JsonObject) -> Result<CallToolResu
     let input: Input = parse_args(args)?;
     let mut db = fresh_db(state)?;
     let mut coord = db.coordination();
-    let existing = coord.action_get(&input.action_id).map_err(|e| internal_error_safe(&e))?;
-        if existing.is_none() {
-            return Err(ErrorData::invalid_params(
-                format!("Action {} not found", input.action_id),
-                None,
-            ));
-        }
+    let existing = coord
+        .action_get(&input.action_id)
+        .map_err(|e| internal_error_safe(&e))?;
+    if existing.is_none() {
+        return Err(ErrorData::invalid_params(
+            format!("Action {} not found", input.action_id),
+            None,
+        ));
+    }
     coord
-        .action_update(&input.action_id, input.status.as_deref(), input.result.as_deref(), input.priority)
+        .action_update(
+            &input.action_id,
+            input.status.as_deref(),
+            input.result.as_deref(),
+            input.priority,
+        )
         .map_err(|e| internal_error_safe(&e))?;
     ok_json(serde_json::json!({
         "success": true,
@@ -2615,7 +2682,10 @@ fn tool_lease(state: &AppState, args: JsonObject) -> Result<CallToolResult, Erro
             let ttl = input.ttl_ms.unwrap_or(300000);
             let now = chrono::Utc::now();
             let expires = (now + chrono::Duration::milliseconds(ttl)).to_rfc3339();
-            let lease_id = format!("lease_{}", short_hash(&format!("{}{}", input.action_id, now), 12));
+            let lease_id = format!(
+                "lease_{}",
+                short_hash(&format!("{}{}", input.action_id, now), 12)
+            );
             let lease = crate::palace_db::Lease {
                 id: lease_id.clone(),
                 action_id: input.action_id,
@@ -2722,10 +2792,7 @@ fn tool_routine_run(state: &AppState, args: JsonObject) -> Result<CallToolResult
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let priority = step
-            .get("priority")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(5);
+        let priority = step.get("priority").and_then(|v| v.as_i64()).unwrap_or(5);
         let action_id = format!("{}_step_{}", input.routine_id, i);
         let action = crate::palace_db::Action {
             id: action_id.clone(),
@@ -2800,7 +2867,12 @@ fn tool_signal_read(state: &AppState, args: JsonObject) -> Result<CallToolResult
     let limit = input.limit.unwrap_or(50);
     let signals = db
         .coordination()
-        .signal_list(&input.agent_id, input.unread_only.unwrap_or(false), input.thread_id.as_deref(), limit)
+        .signal_list(
+            &input.agent_id,
+            input.unread_only.unwrap_or(false),
+            input.thread_id.as_deref(),
+            limit,
+        )
         .map_err(|e| internal_error_safe(&e))?;
     let count = signals.len();
     let messages: Vec<serde_json::Value> = signals
@@ -2968,7 +3040,12 @@ fn tool_sentinel_create(state: &AppState, args: JsonObject) -> Result<CallToolRe
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let sentinel_id = format!("sentinel_{}", short_hash(&input.name, 8));
     let now = chrono::Utc::now().to_rfc3339();
@@ -3005,13 +3082,20 @@ fn tool_sentinel_trigger(state: &AppState, args: JsonObject) -> Result<CallToolR
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let mut conn = state.db.coordination();
     let sentinel = conn
         .sentinel_get(&input.sentinel_id)
         .map_err(|e| internal_error_safe(&e))?
-        .ok_or_else(|| ErrorData::invalid_params(format!("Sentinel not found: {}", input.sentinel_id), None))?;
+        .ok_or_else(|| {
+            ErrorData::invalid_params(format!("Sentinel not found: {}", input.sentinel_id), None)
+        })?;
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE sentinels SET status = 'triggered', triggered_at = ?1 WHERE id = ?2",
@@ -3053,10 +3137,16 @@ fn tool_sentinel_delete(state: &AppState, args: JsonObject) -> Result<CallToolRe
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let mut conn = state.db.coordination();
-    conn.sentinel_delete(&input.sentinel_id).map_err(|e| internal_error_safe(&e))?;
+    conn.sentinel_delete(&input.sentinel_id)
+        .map_err(|e| internal_error_safe(&e))?;
     ok_json(serde_json::json!({
         "success": true,
         "deleted": true,
@@ -3066,7 +3156,9 @@ fn tool_sentinel_delete(state: &AppState, args: JsonObject) -> Result<CallToolRe
 
 fn tool_checkpoint_list(state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
     let mut conn = state.db.coordination();
-    let checkpoints = conn.checkpoint_list().map_err(|e| internal_error_safe(&e))?;
+    let checkpoints = conn
+        .checkpoint_list()
+        .map_err(|e| internal_error_safe(&e))?;
     ok_json(serde_json::json!({
         "success": true,
         "checkpoints": checkpoints.into_iter().map(|c| serde_json::json!({
@@ -3082,7 +3174,10 @@ fn tool_checkpoint_list(state: &AppState, _args: JsonObject) -> Result<CallToolR
     }))
 }
 
-fn tool_checkpoint_resolve(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+fn tool_checkpoint_resolve(
+    state: &AppState,
+    args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Input {
@@ -3091,7 +3186,12 @@ fn tool_checkpoint_resolve(state: &AppState, args: JsonObject) -> Result<CallToo
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let mut conn = state.db.coordination();
     conn.checkpoint_resolve(&input.checkpoint_id, &input.status)
@@ -3117,7 +3217,12 @@ fn tool_sketch_create(state: &AppState, args: JsonObject) -> Result<CallToolResu
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let project = input.wing.unwrap_or_else(|| "default".to_string());
     let now = chrono::Utc::now().to_rfc3339();
@@ -3129,12 +3234,18 @@ fn tool_sketch_create(state: &AppState, args: JsonObject) -> Result<CallToolResu
         description: input.tags.clone().unwrap_or_default().join(", "),
         steps: steps.to_string(),
         project: project.clone(),
-        expires_at: chrono::Utc::now().checked_add_signed(chrono::Duration::days(7)).unwrap().to_rfc3339(),
+        expires_at: chrono::Utc::now()
+            .checked_add_signed(chrono::Duration::days(7))
+            .unwrap()
+            .to_rfc3339(),
         created_at: now,
     };
     let mut db = fresh_db(state)?;
     if let Err(e) = db.sketch_create(&sketch) {
-        return Err(ErrorData::invalid_request(format!("Failed to create sketch: {}", e), None));
+        return Err(ErrorData::invalid_request(
+            format!("Failed to create sketch: {}", e),
+            None,
+        ));
     }
     ok_json(serde_json::json!({
         "success": true,
@@ -3155,7 +3266,12 @@ fn tool_sketch_promote(state: &AppState, args: JsonObject) -> Result<CallToolRes
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let mut db = fresh_db(state)?;
 
@@ -3214,7 +3330,10 @@ fn tool_sketch_promote(state: &AppState, args: JsonObject) -> Result<CallToolRes
 
     // 4. Delete the sketch
     if let Err(e) = db.sketch_delete(&input.sketch_id) {
-        return Err(ErrorData::invalid_request(format!("Failed to delete sketch: {}", e), None));
+        return Err(ErrorData::invalid_request(
+            format!("Failed to delete sketch: {}", e),
+            None,
+        ));
     }
 
     ok_json(serde_json::json!({
@@ -3251,7 +3370,12 @@ fn tool_crystallize(state: &AppState, args: JsonObject) -> Result<CallToolResult
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let crystal_id = format!("crystal_{}", short_hash(&input.drawer_id, 8));
     let now = chrono::Utc::now().to_rfc3339();
@@ -3270,7 +3394,10 @@ fn tool_crystallize(state: &AppState, args: JsonObject) -> Result<CallToolResult
     };
     let mut db = fresh_db(state)?;
     if let Err(e) = db.crystal_create(&crystal) {
-        return Err(ErrorData::invalid_request(format!("Failed to create crystal: {}", e), None));
+        return Err(ErrorData::invalid_request(
+            format!("Failed to create crystal: {}", e),
+            None,
+        ));
     }
     ok_json(serde_json::json!({
         "success": true,
@@ -3291,29 +3418,52 @@ fn tool_diagnose(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
     }
     let _input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
     let all_drawers = db.get_all(None, None, usize::MAX);
     let total_drawers = all_drawers.len();
     let coord = db.coordination();
-    let actions = coord.action_list_all().map_err(|e| internal_error_safe(&e))?;
-    let leases = coord.lease_list_all().map_err(|e| internal_error_safe(&e))?;
-    let signals = coord.signal_list_all().map_err(|e| internal_error_safe(&e))?;
-    let stuck_actions = actions.iter().filter(|a| a.status == "pending" || a.status == "blocked").count();
-    let stale_leases = leases.iter().filter(|l| {
-        chrono::DateTime::parse_from_rfc3339(&l.expires_at)
-            .map(|dt| dt < chrono::Utc::now())
-            .unwrap_or(false)
-    }).count();
+    let actions = coord
+        .action_list_all()
+        .map_err(|e| internal_error_safe(&e))?;
+    let leases = coord
+        .lease_list_all()
+        .map_err(|e| internal_error_safe(&e))?;
+    let signals = coord
+        .signal_list_all()
+        .map_err(|e| internal_error_safe(&e))?;
+    let stuck_actions = actions
+        .iter()
+        .filter(|a| a.status == "pending" || a.status == "blocked")
+        .count();
+    let stale_leases = leases
+        .iter()
+        .filter(|l| {
+            chrono::DateTime::parse_from_rfc3339(&l.expires_at)
+                .map(|dt| dt < chrono::Utc::now())
+                .unwrap_or(false)
+        })
+        .count();
     let issues = stuck_actions + stale_leases;
-    let health_score = if total_drawers == 0 { 100 } else {
-        ((total_drawers.saturating_sub(stuck_actions)) as f64 / total_drawers as f64 * 100.0).round() as i32
+    let health_score = if total_drawers == 0 {
+        100
+    } else {
+        ((total_drawers.saturating_sub(stuck_actions)) as f64 / total_drawers as f64 * 100.0)
+            .round() as i32
     };
     let diagnosis = if issues == 0 {
         "No issues found".to_string()
     } else {
-        format!("{} issues: {} stuck actions, {} stale leases", issues, stuck_actions, stale_leases)
+        format!(
+            "{} issues: {} stuck actions, {} stale leases",
+            issues, stuck_actions, stale_leases
+        )
     };
     ok_json(serde_json::json!({
         "success": true,
@@ -3347,12 +3497,20 @@ fn tool_facet_tag(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let now = chrono::Utc::now().to_rfc3339();
     let mut db = fresh_db(state)?;
     for tag in &input.tags {
-        let facet_id = format!("facet_{}", short_hash(&format!("{}_{}", input.drawer_id, tag), 8));
+        let facet_id = format!(
+            "facet_{}",
+            short_hash(&format!("{}_{}", input.drawer_id, tag), 8)
+        );
         let facet = crate::palace_db::FacetRecord {
             id: facet_id,
             target_id: input.drawer_id.clone(),
@@ -3362,7 +3520,10 @@ fn tool_facet_tag(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
             created_at: now.clone(),
         };
         if let Err(e) = db.facet_create(&facet) {
-            return Err(ErrorData::invalid_request(format!("Failed to create facet: {}", e), None));
+            return Err(ErrorData::invalid_request(
+                format!("Failed to create facet: {}", e),
+                None,
+            ));
         }
     }
     ok_json(serde_json::json!({
@@ -3385,20 +3546,28 @@ fn tool_facet_query(state: &AppState, args: JsonObject) -> Result<CallToolResult
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
-    let facets = db.facet_list(None, None).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to query facets: {}", e), None)
-    })?;
-    let results: Vec<_> = facets.iter().map(|f| {
-        serde_json::json!({
-            "id": f.id,
-            "target_id": f.target_id,
-            "dimension": f.dimension,
-            "value": f.value,
+    let facets = db
+        .facet_list(None, None)
+        .map_err(|e| ErrorData::invalid_request(format!("Failed to query facets: {}", e), None))?;
+    let results: Vec<_> = facets
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "id": f.id,
+                "target_id": f.target_id,
+                "dimension": f.dimension,
+                "value": f.value,
+            })
         })
-    }).collect();
+        .collect();
     ok_json(serde_json::json!({
         "success": true,
         "query": input.query,
@@ -3422,7 +3591,12 @@ fn tool_lesson_save(state: &AppState, args: JsonObject) -> Result<CallToolResult
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let lesson_id = format!("lesson_{}", short_hash(&input.lesson, 8));
     let now = chrono::Utc::now().to_rfc3339();
@@ -3439,7 +3613,10 @@ fn tool_lesson_save(state: &AppState, args: JsonObject) -> Result<CallToolResult
     };
     let mut db = fresh_db(state)?;
     if let Err(e) = db.lesson_create(&lesson) {
-        return Err(ErrorData::invalid_request(format!("Failed to save lesson: {}", e), None));
+        return Err(ErrorData::invalid_request(
+            format!("Failed to save lesson: {}", e),
+            None,
+        ));
     }
     ok_json(serde_json::json!({
         "success": true,
@@ -3462,20 +3639,30 @@ fn tool_lesson_recall(state: &AppState, args: JsonObject) -> Result<CallToolResu
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
-    let lessons = db.lesson_list(input.project.as_deref(), None).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to recall lessons: {}", e), None)
-    })?;
-    let results: Vec<_> = lessons.iter().map(|l| {
-        serde_json::json!({
-            "id": l.id,
-            "content": l.content,
-            "context": l.context,
-            "confidence": l.confidence,
+    let lessons = db
+        .lesson_list(input.project.as_deref(), None)
+        .map_err(|e| {
+            ErrorData::invalid_request(format!("Failed to recall lessons: {}", e), None)
+        })?;
+    let results: Vec<_> = lessons
+        .iter()
+        .map(|l| {
+            serde_json::json!({
+                "id": l.id,
+                "content": l.content,
+                "context": l.context,
+                "confidence": l.confidence,
+            })
         })
-    }).collect();
+        .collect();
     ok_json(serde_json::json!({
         "success": true,
         "query": input.query,
@@ -3497,15 +3684,15 @@ async fn tool_reflect_async(
     let llm = crate::llm::create_llm_provider_from_env();
 
     // Collect all source material: lessons + insights + crystals
-    let lessons = db.lesson_list(None, None).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to list lessons: {}", e), None)
-    })?;
-    let insights = db.insight_list(None, None).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to list insights: {}", e), None)
-    })?;
-    let crystals = db.crystal_list(None).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to list crystals: {}", e), None)
-    })?;
+    let lessons = db
+        .lesson_list(None, None)
+        .map_err(|e| ErrorData::invalid_request(format!("Failed to list lessons: {}", e), None))?;
+    let insights = db
+        .insight_list(None, None)
+        .map_err(|e| ErrorData::invalid_request(format!("Failed to list insights: {}", e), None))?;
+    let crystals = db
+        .crystal_list(None)
+        .map_err(|e| ErrorData::invalid_request(format!("Failed to list crystals: {}", e), None))?;
 
     let total_sources = lessons.len() + insights.len() + crystals.len();
     if total_sources == 0 {
@@ -3527,7 +3714,12 @@ async fn tool_reflect_async(
     for lesson in &lessons {
         for tag in lesson.tags.split(',') {
             let tag = tag.trim();
-            if !tag.is_empty() && lesson.content.to_lowercase().contains(&input.topic.to_lowercase()) {
+            if !tag.is_empty()
+                && lesson
+                    .content
+                    .to_lowercase()
+                    .contains(&input.topic.to_lowercase())
+            {
                 concept_to_sources
                     .entry(tag.to_lowercase())
                     .or_default()
@@ -3545,7 +3737,12 @@ async fn tool_reflect_async(
         let words: Vec<&str> = insight.content.split_whitespace().take(5).collect();
         for word in words {
             let word_lower = word.to_lowercase();
-            if word_lower.len() > 3 && insight.content.to_lowercase().contains(&input.topic.to_lowercase()) {
+            if word_lower.len() > 3
+                && insight
+                    .content
+                    .to_lowercase()
+                    .contains(&input.topic.to_lowercase())
+            {
                 concept_to_sources
                     .entry(word_lower)
                     .or_default()
@@ -3612,10 +3809,9 @@ async fn tool_reflect_async(
             cluster_items.join("\n")
         );
 
-        let response = llm.complete(
-            crate::reflect::REFLECT_SYSTEM_PROMPT,
-            &prompt,
-        ).await;
+        let response = llm
+            .complete(crate::reflect::REFLECT_SYSTEM_PROMPT, &prompt)
+            .await;
 
         match response {
             Ok(completion) => {
@@ -3624,7 +3820,8 @@ async fn tool_reflect_async(
                         let content_hash = short_hash(&insight.content, 12);
                         let insight_id = format!("ins_{}", content_hash);
 
-                        let existing = db.insight_list(None, Some(insight.confidence))
+                        let existing = db
+                            .insight_list(None, Some(insight.confidence))
                             .ok()
                             .and_then(|list| {
                                 list.into_iter().find(|i| {
@@ -3708,7 +3905,12 @@ fn tool_reflect(state: &AppState, args: JsonObject) -> Result<CallToolResult, Er
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let reflect_input = ReflectInput {
         topic: input.topic,
@@ -3736,20 +3938,28 @@ fn tool_insight_list(state: &AppState, args: JsonObject) -> Result<CallToolResul
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
-    let insights = db.insight_list(input.wing.as_deref(), input.min_confidence).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to list insights: {}", e), None)
-    })?;
-    let results: Vec<_> = insights.iter().map(|i| {
-        serde_json::json!({
-            "id": i.id,
-            "content": i.content,
-            "confidence": i.confidence,
-            "cluster_id": i.cluster_id,
+    let insights = db
+        .insight_list(input.wing.as_deref(), input.min_confidence)
+        .map_err(|e| ErrorData::invalid_request(format!("Failed to list insights: {}", e), None))?;
+    let results: Vec<_> = insights
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "id": i.id,
+                "content": i.content,
+                "confidence": i.confidence,
+                "cluster_id": i.cluster_id,
+            })
         })
-    }).collect();
+        .collect();
     ok_json(serde_json::json!({
         "success": true,
         "insights": results,
@@ -3766,26 +3976,34 @@ fn tool_slot_list(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
-    let slots = db.slot_list(input.project.as_deref()).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to list slots: {}", e), None)
-    })?;
-    let results: Vec<_> = slots.iter().map(|s| {
-        serde_json::json!({
-            "id": s.id,
-            "label": s.label,
-            "content": s.content,
-            "size_limit": s.size_limit,
-            "description": s.description,
-            "pinned": s.pinned,
-            "scope": s.scope,
-            "project": s.project,
-            "created_at": s.created_at,
-            "updated_at": s.updated_at,
+    let slots = db
+        .slot_list(input.project.as_deref())
+        .map_err(|e| ErrorData::invalid_request(format!("Failed to list slots: {}", e), None))?;
+    let results: Vec<_> = slots
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "label": s.label,
+                "content": s.content,
+                "size_limit": s.size_limit,
+                "description": s.description,
+                "pinned": s.pinned,
+                "scope": s.scope,
+                "project": s.project,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+            })
         })
-    }).collect();
+        .collect();
     ok_json(serde_json::json!({
         "success": true,
         "slots": results,
@@ -3801,12 +4019,17 @@ fn tool_slot_get(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
-    let slot = db.slot_get(&input.label).map_err(|e| {
-        ErrorData::invalid_request(format!("Failed to get slot: {}", e), None)
-    })?;
+    let slot = db
+        .slot_get(&input.label)
+        .map_err(|e| ErrorData::invalid_request(format!("Failed to get slot: {}", e), None))?;
     match slot {
         Some(s) => ok_json(serde_json::json!({
             "success": true,
@@ -3823,7 +4046,10 @@ fn tool_slot_get(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
                 "updated_at": s.updated_at,
             }
         })),
-        None => Err(ErrorData::invalid_params(format!("Slot '{}' not found", input.label), None)),
+        None => Err(ErrorData::invalid_params(
+            format!("Slot '{}' not found", input.label),
+            None,
+        )),
     }
 }
 
@@ -3842,7 +4068,12 @@ fn tool_slot_create(state: &AppState, args: JsonObject) -> Result<CallToolResult
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let now = chrono::Utc::now();
     let created_at = now.to_rfc3339();
@@ -3861,7 +4092,10 @@ fn tool_slot_create(state: &AppState, args: JsonObject) -> Result<CallToolResult
     };
     let mut db = fresh_db(state)?;
     if let Err(e) = db.slot_create(&slot) {
-        return Err(ErrorData::invalid_request(format!("Failed to create slot: {}", e), None));
+        return Err(ErrorData::invalid_request(
+            format!("Failed to create slot: {}", e),
+            None,
+        ));
     }
     ok_json(serde_json::json!({
         "success": true,
@@ -3881,7 +4115,12 @@ fn tool_slot_append(state: &AppState, args: JsonObject) -> Result<CallToolResult
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let mut db = fresh_db(state)?;
     match db.slot_append(&input.label, &input.text) {
@@ -3907,7 +4146,12 @@ fn tool_slot_replace(state: &AppState, args: JsonObject) -> Result<CallToolResul
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let mut db = fresh_db(state)?;
     match db.slot_replace(&input.label, &input.content) {
@@ -3932,11 +4176,19 @@ fn tool_slot_delete(state: &AppState, args: JsonObject) -> Result<CallToolResult
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let mut db = fresh_db(state)?;
     if let Err(e) = db.slot_delete(&input.label) {
-        return Err(ErrorData::invalid_request(format!("Failed to delete slot: {}", e), None));
+        return Err(ErrorData::invalid_request(
+            format!("Failed to delete slot: {}", e),
+            None,
+        ));
     }
     ok_json(serde_json::json!({
         "success": true,
@@ -3955,7 +4207,12 @@ fn tool_checkpoint(state: &AppState, args: JsonObject) -> Result<CallToolResult,
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let checkpoint_id = format!("cp_{}", chrono::Utc::now().timestamp());
     let now = chrono::Utc::now().to_rfc3339();
@@ -4003,7 +4260,12 @@ fn tool_mesh_sync(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
 
     let registered_peer = if let (Some(url), Some(name)) = (&input.peer_url, &input.peer_name) {
@@ -4025,16 +4287,23 @@ fn tool_mesh_sync(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
         None
     };
 
-    let peers: Vec<_> = state.mesh.read().unwrap().list_peers().iter().map(|p| {
-        serde_json::json!({
-            "id": p.id,
-            "url": p.url,
-            "name": p.name,
-            "status": p.status,
-            "shared_scopes": p.shared_scopes,
-            "last_sync_at": p.last_sync_at.map(|dt| dt.to_rfc3339()),
+    let peers: Vec<_> = state
+        .mesh
+        .read()
+        .unwrap()
+        .list_peers()
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "url": p.url,
+                "name": p.name,
+                "status": p.status,
+                "shared_scopes": p.shared_scopes,
+                "last_sync_at": p.last_sync_at.map(|dt| dt.to_rfc3339()),
+            })
         })
-    }).collect();
+        .collect();
 
     ok_json(serde_json::json!({
         "success": true,
@@ -4049,16 +4318,36 @@ fn tool_mesh_sync(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
 fn tool_graph_search(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Input { entity_names: Vec<String>, depth: Option<usize>, limit: Option<usize> }
+    struct Input {
+        entity_names: Vec<String>,
+        depth: Option<usize>,
+        limit: Option<usize>,
+    }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i, Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
-    let kg = match crate::knowledge_graph::KnowledgeGraph::open(&state.palace_path.join("knowledge_graph.db")) {
-        Ok(g) => g, Err(e) => return ok_json(serde_json::json!({"status": "error", "message": e.to_string()})),
+    let kg = match crate::knowledge_graph::KnowledgeGraph::open(
+        &state.palace_path.join("knowledge_graph.db"),
+    ) {
+        Ok(g) => g,
+        Err(e) => return ok_json(serde_json::json!({"status": "error", "message": e.to_string()})),
     };
     let entity_refs: Vec<&str> = input.entity_names.iter().map(|s| s.as_str()).collect();
-    match crate::graph_retrieval::search_by_entities(&kg, &entity_refs, input.depth.unwrap_or(2), input.limit.unwrap_or(50)) {
-        Ok(r) => ok_json(serde_json::json!({"status": "ok", "entities": r.entities, "relationships": r.relationships.iter().map(|e| serde_json::json!({"subject": e.subject, "predicate": e.predicate, "object": e.object, "confidence": e.confidence, "current": e.current})).collect::<Vec<_>>(), "depth": r.depth})),
+    match crate::graph_retrieval::search_by_entities(
+        &kg,
+        &entity_refs,
+        input.depth.unwrap_or(2),
+        input.limit.unwrap_or(50),
+    ) {
+        Ok(r) => ok_json(
+            serde_json::json!({"status": "ok", "entities": r.entities, "relationships": r.relationships.iter().map(|e| serde_json::json!({"subject": e.subject, "predicate": e.predicate, "object": e.object, "confidence": e.confidence, "current": e.current})).collect::<Vec<_>>(), "depth": r.depth}),
+        ),
         Err(e) => ok_json(serde_json::json!({"status": "error", "message": e.to_string()})),
     }
 }
@@ -4066,15 +4355,35 @@ fn tool_graph_search(state: &AppState, args: JsonObject) -> Result<CallToolResul
 fn tool_graph_expand(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Input { observation_ids: Vec<String>, depth: Option<usize>, limit: Option<usize> }
+    struct Input {
+        observation_ids: Vec<String>,
+        depth: Option<usize>,
+        limit: Option<usize>,
+    }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i, Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
-    let kg = match crate::knowledge_graph::KnowledgeGraph::open(&state.palace_path.join("knowledge_graph.db")) {
-        Ok(g) => g, Err(e) => return ok_json(serde_json::json!({"status": "error", "message": e.to_string()})),
+    let kg = match crate::knowledge_graph::KnowledgeGraph::open(
+        &state.palace_path.join("knowledge_graph.db"),
+    ) {
+        Ok(g) => g,
+        Err(e) => return ok_json(serde_json::json!({"status": "error", "message": e.to_string()})),
     };
-    match crate::graph_retrieval::expand_from_chunks(&kg, &input.observation_ids, input.depth.unwrap_or(2), input.limit.unwrap_or(50)) {
-        Ok(r) => ok_json(serde_json::json!({"status": "ok", "entities": r.entities, "relationships": r.relationships.iter().map(|e| serde_json::json!({"subject": e.subject, "predicate": e.predicate, "object": e.object, "confidence": e.confidence, "current": e.current})).collect::<Vec<_>>(), "depth": r.depth})),
+    match crate::graph_retrieval::expand_from_chunks(
+        &kg,
+        &input.observation_ids,
+        input.depth.unwrap_or(2),
+        input.limit.unwrap_or(50),
+    ) {
+        Ok(r) => ok_json(
+            serde_json::json!({"status": "ok", "entities": r.entities, "relationships": r.relationships.iter().map(|e| serde_json::json!({"subject": e.subject, "predicate": e.predicate, "object": e.object, "confidence": e.confidence, "current": e.current})).collect::<Vec<_>>(), "depth": r.depth}),
+        ),
         Err(e) => ok_json(serde_json::json!({"status": "error", "message": e.to_string()})),
     }
 }
@@ -4082,9 +4391,21 @@ fn tool_graph_expand(state: &AppState, args: JsonObject) -> Result<CallToolResul
 fn tool_context_build(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Input { token_budget: Option<usize>, pinned_ids: Option<Vec<String>>, session_ids: Option<Vec<String>>, include_working_memory: Option<bool>, output_format: Option<String> }
+    struct Input {
+        token_budget: Option<usize>,
+        pinned_ids: Option<Vec<String>>,
+        session_ids: Option<Vec<String>>,
+        include_working_memory: Option<bool>,
+        output_format: Option<String>,
+    }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i, Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let budget = input.token_budget.unwrap_or(8000);
     let fmt = input.output_format.unwrap_or_else(|| "json".to_string());
@@ -4093,37 +4414,115 @@ fn tool_context_build(state: &AppState, args: JsonObject) -> Result<CallToolResu
     if let Some(ref ids) = input.pinned_ids {
         for id in ids {
             if let Ok(Some(slot)) = db.slot_get(id) {
-                slots.push(crate::types::MemorySlot { id: slot.id.clone(), name: slot.label.clone(), content: slot.content.clone(), token_count: slot.content.split_whitespace().count(), priority: if slot.pinned { 1 } else { 0 }, last_updated: slot.updated_at.parse().unwrap_or_else(|_| chrono::Utc::now()) });
+                slots.push(crate::types::MemorySlot {
+                    id: slot.id.clone(),
+                    name: slot.label.clone(),
+                    content: slot.content.clone(),
+                    token_count: slot.content.split_whitespace().count(),
+                    priority: if slot.pinned { 1 } else { 0 },
+                    last_updated: slot
+                        .updated_at
+                        .parse()
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                });
             }
         }
     }
     let mut builder = crate::context::ContextBuilder::new(budget).with_pinned_slots(slots);
     if let Some(ref session_ids) = input.session_ids {
         let all_drawers = db.get_all(None, Some("session"), 1000);
-        let sessions: Vec<_> = session_ids.iter().filter_map(|sid| {
-            all_drawers.iter().flat_map(|qr| qr.ids.iter().zip(qr.metadatas.iter()).filter_map(|(id, meta)| {
-                if id == sid {
-                    Some(crate::types::Session { id: id.clone(), project: String::new(), cwd: String::new(), started_at: meta.get("created_at").and_then(|v| v.as_str()).unwrap_or("1970-01-01T00:00:00Z").parse().unwrap_or_else(|_| chrono::Utc::now()), ended_at: None, status: "active".to_string(), observation_count: 0, model: None, tags: vec![], first_prompt: None, summary: None, commit_shas: vec![], agent_id: None })
-                } else { None }
-            })).find(|_| true)
-        }).collect();
+        let sessions: Vec<_> = session_ids
+            .iter()
+            .filter_map(|sid| {
+                all_drawers
+                    .iter()
+                    .flat_map(|qr| {
+                        qr.ids
+                            .iter()
+                            .zip(qr.metadatas.iter())
+                            .filter_map(|(id, meta)| {
+                                if id == sid {
+                                    Some(crate::types::Session {
+                                        id: id.clone(),
+                                        project: String::new(),
+                                        cwd: String::new(),
+                                        started_at: meta
+                                            .get("created_at")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("1970-01-01T00:00:00Z")
+                                            .parse()
+                                            .unwrap_or_else(|_| chrono::Utc::now()),
+                                        ended_at: None,
+                                        status: "active".to_string(),
+                                        observation_count: 0,
+                                        model: None,
+                                        tags: vec![],
+                                        first_prompt: None,
+                                        summary: None,
+                                        commit_shas: vec![],
+                                        agent_id: None,
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                    })
+                    .find(|_| true)
+            })
+            .collect();
         builder = builder.with_session_summaries(sessions);
     }
     if input.include_working_memory.unwrap_or(true) {
         let obs_drawers = db.get_all(None, Some("observation"), 50);
-        let compressed: Vec<_> = obs_drawers.iter().flat_map(|qr| {
-            qr.ids.iter().zip(qr.documents.iter()).zip(qr.metadatas.iter()).map(|((id, doc), meta)| {
-                crate::types::CompressedObservation { id: id.clone(), session_id: meta.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string(), timestamp: meta.get("created_at").and_then(|v| v.as_str()).unwrap_or("1970-01-01T00:00:00Z").parse().unwrap_or_else(|_| chrono::Utc::now()), observation_type: crate::types::ObservationType::UserPrompt, title: doc.chars().take(100).collect(), subtitle: None, facts: vec![], narrative: doc.clone(), concepts: vec![], files: vec![], importance: 5, confidence: 0.5, image_ref: None, image_description: None, modality: "text".to_string(), agent_id: None }
-            }).collect::<Vec<_>>()
-        }).collect();
+        let compressed: Vec<_> = obs_drawers
+            .iter()
+            .flat_map(|qr| {
+                qr.ids
+                    .iter()
+                    .zip(qr.documents.iter())
+                    .zip(qr.metadatas.iter())
+                    .map(|((id, doc), meta)| crate::types::CompressedObservation {
+                        id: id.clone(),
+                        session_id: meta
+                            .get("session_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        timestamp: meta
+                            .get("created_at")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("1970-01-01T00:00:00Z")
+                            .parse()
+                            .unwrap_or_else(|_| chrono::Utc::now()),
+                        observation_type: crate::types::ObservationType::UserPrompt,
+                        title: doc.chars().take(100).collect(),
+                        subtitle: None,
+                        facts: vec![],
+                        narrative: doc.clone(),
+                        concepts: vec![],
+                        files: vec![],
+                        importance: 5,
+                        confidence: 0.5,
+                        image_ref: None,
+                        image_description: None,
+                        modality: "text".to_string(),
+                        agent_id: None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         builder = builder.with_working_memory(compressed);
     }
     match builder.build() {
         Ok(blocks) => {
             if fmt == "xml" {
-                ok_json(serde_json::json!({"status": "ok", "format": "xml", "context": builder.build_xml().unwrap_or_default()}))
+                ok_json(
+                    serde_json::json!({"status": "ok", "format": "xml", "context": builder.build_xml().unwrap_or_default()}),
+                )
             } else {
-                ok_json(serde_json::json!({"status": "ok", "format": "json", "blocks": blocks.iter().map(|b| serde_json::json!({"content": b.content, "source": b.source, "relevance_score": b.relevance_score, "token_count": b.token_count, "memory_id": b.memory_id})).collect::<Vec<_>>(), "total_tokens": blocks.iter().map(|b| b.token_count).sum::<usize>()}))
+                ok_json(
+                    serde_json::json!({"status": "ok", "format": "json", "blocks": blocks.iter().map(|b| serde_json::json!({"content": b.content, "source": b.source, "relevance_score": b.relevance_score, "token_count": b.token_count, "memory_id": b.memory_id})).collect::<Vec<_>>(), "total_tokens": blocks.iter().map(|b| b.token_count).sum::<usize>()}),
+                )
             }
         }
         Err(e) => ok_json(serde_json::json!({"status": "error", "message": e.to_string()})),
@@ -4140,7 +4539,12 @@ fn tool_flow_compress(state: &AppState, args: JsonObject) -> Result<CallToolResu
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
 
     let obs = input.observations.unwrap_or_default();
@@ -4178,7 +4582,12 @@ fn tool_cascade_update(state: &AppState, args: JsonObject) -> Result<CallToolRes
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
 
     let config = crate::cascade::CascadeConfig {
@@ -4196,7 +4605,12 @@ fn tool_cascade_update(state: &AppState, args: JsonObject) -> Result<CallToolRes
     };
 
     let kg_path = state.palace_path.join("knowledge_graph.db");
-    match crate::cascade::cascade_update(&input.changed_entity_id, &input.changed_entity_type, &kg_path, Some(config)) {
+    match crate::cascade::cascade_update(
+        &input.changed_entity_id,
+        &input.changed_entity_type,
+        &kg_path,
+        Some(config),
+    ) {
         Ok(result) => ok_json(serde_json::json!({
             "status": "ok",
             "total_updated": result.total_updated,
@@ -4210,28 +4624,85 @@ fn tool_cascade_update(state: &AppState, args: JsonObject) -> Result<CallToolRes
 fn tool_enrich(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Input { file_path: String, query: Option<String>, search_limit: Option<usize> }
+    struct Input {
+        file_path: String,
+        query: Option<String>,
+        search_limit: Option<usize>,
+    }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i, Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
     let limit = input.search_limit.unwrap_or(10);
     let all_drawers = db.get_all(None, None, 100);
-    let memories: Vec<_> = all_drawers.iter().flat_map(|qr| {
-        qr.ids.iter().zip(qr.documents.iter()).zip(qr.metadatas.iter()).map(|((id, doc), meta)| {
-            crate::types::Memory { id: id.clone(), created_at: meta.get("created_at").and_then(|v| v.as_str()).unwrap_or("1970-01-01T00:00:00Z").parse().unwrap_or_else(|_| chrono::Utc::now()), updated_at: chrono::Utc::now(), memory_type: crate::types::MemoryType::Semantic, title: doc.chars().take(100).collect(), content: doc.clone(), concepts: vec![], files: vec![], session_ids: vec![], strength: 0.5, version: 1, parent_id: None, supersedes: vec![], related_ids: vec![], source_observation_ids: vec![], is_latest: true, forget_after: None, image_ref: None, agent_id: None, project: String::new() }
-        }).collect::<Vec<_>>()
-    }).collect();
-    let result = crate::enrich::enrich(&input.file_path, input.query.as_deref().unwrap_or(""), &memories, limit);
-    ok_json(serde_json::json!({"status": "ok", "file_contexts": result.file_contexts.iter().map(|fc| serde_json::json!({"path": fc.path, "content_summary": fc.content_summary, "last_modified": fc.last_modified, "related_files": fc.related_files})).collect::<Vec<_>>(), "related_memories": result.related_memories.iter().map(|m| serde_json::json!({"id": m.id, "title": m.title, "content": m.content, "relevance": m.relevance})).collect::<Vec<_>>(), "bug_memories": result.bug_memories.iter().map(|m| serde_json::json!({"id": m.id, "title": m.title, "content": m.content, "relevance": m.relevance})).collect::<Vec<_>>()}))
+    let memories: Vec<_> = all_drawers
+        .iter()
+        .flat_map(|qr| {
+            qr.ids
+                .iter()
+                .zip(qr.documents.iter())
+                .zip(qr.metadatas.iter())
+                .map(|((id, doc), meta)| crate::types::Memory {
+                    id: id.clone(),
+                    created_at: meta
+                        .get("created_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("1970-01-01T00:00:00Z")
+                        .parse()
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                    updated_at: chrono::Utc::now(),
+                    memory_type: crate::types::MemoryType::Semantic,
+                    title: doc.chars().take(100).collect(),
+                    content: doc.clone(),
+                    concepts: vec![],
+                    files: vec![],
+                    session_ids: vec![],
+                    strength: 0.5,
+                    version: 1,
+                    parent_id: None,
+                    supersedes: vec![],
+                    related_ids: vec![],
+                    source_observation_ids: vec![],
+                    is_latest: true,
+                    forget_after: None,
+                    image_ref: None,
+                    agent_id: None,
+                    project: String::new(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let result = crate::enrich::enrich(
+        &input.file_path,
+        input.query.as_deref().unwrap_or(""),
+        &memories,
+        limit,
+    );
+    ok_json(
+        serde_json::json!({"status": "ok", "file_contexts": result.file_contexts.iter().map(|fc| serde_json::json!({"path": fc.path, "content_summary": fc.content_summary, "last_modified": fc.last_modified, "related_files": fc.related_files})).collect::<Vec<_>>(), "related_memories": result.related_memories.iter().map(|m| serde_json::json!({"id": m.id, "title": m.title, "content": m.content, "relevance": m.relevance})).collect::<Vec<_>>(), "bug_memories": result.bug_memories.iter().map(|m| serde_json::json!({"id": m.id, "title": m.title, "content": m.content, "relevance": m.relevance})).collect::<Vec<_>>()}),
+    )
 }
 
 fn tool_retention_score(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Input { memory_id: String }
+    struct Input {
+        memory_id: String,
+    }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i, Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
     let drawers = db.get_all(None, None, usize::MAX);
@@ -4241,7 +4712,10 @@ fn tool_retention_score(state: &AppState, args: JsonObject) -> Result<CallToolRe
             let doc = &drawer.documents[idx];
             let meta = &drawer.metadatas[idx];
             let strength: f64 = meta.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.0);
-            let memory_type = meta.get("memory_type").and_then(|v| v.as_str()).unwrap_or("semantic");
+            let memory_type = meta
+                .get("memory_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("semantic");
             found = Some((doc.clone(), strength, memory_type));
             break;
         }
@@ -4251,7 +4725,8 @@ fn tool_retention_score(state: &AppState, args: JsonObject) -> Result<CallToolRe
             let decay_id = input.memory_id.clone();
             let decay_config = crate::retention::default_decay_config();
             let retention_score = crate::retention::default_retention_score(&decay_id);
-            let retention_strength = crate::retention::calculate_retention(&retention_score, &decay_config, None);
+            let retention_strength =
+                crate::retention::calculate_retention(&retention_score, &decay_config, None);
             let tier = crate::retention::promote_tier(retention_strength);
             ok_json(serde_json::json!({
                 "memory_id": input.memory_id,
@@ -4269,9 +4744,17 @@ fn tool_retention_score(state: &AppState, args: JsonObject) -> Result<CallToolRe
 fn tool_access_stats(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Input { limit: Option<usize> }
+    struct Input {
+        limit: Option<usize>,
+    }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i, Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let limit = input.limit.unwrap_or(10);
     let db = fresh_db(state)?;
@@ -4300,9 +4783,17 @@ fn tool_access_stats(state: &AppState, args: JsonObject) -> Result<CallToolResul
 fn tool_working_memory(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Input { limit: Option<usize> }
+    struct Input {
+        limit: Option<usize>,
+    }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
-        Ok(i) => i, Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let limit = input.limit.unwrap_or(50);
     let db = fresh_db(state)?;
@@ -4326,9 +4817,18 @@ fn tool_working_memory(state: &AppState, args: JsonObject) -> Result<CallToolRes
 }
 
 fn tool_team_share(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
-    let observation_id = args.get("observation_id").and_then(|v| v.as_str()).unwrap_or_default();
-    let team_id = args.get("team_id").and_then(|v| v.as_str()).unwrap_or_default();
-    let permission = args.get("permission").and_then(|v| v.as_str()).unwrap_or("read");
+    let observation_id = args
+        .get("observation_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let team_id = args
+        .get("team_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let permission = args
+        .get("permission")
+        .and_then(|v| v.as_str())
+        .unwrap_or("read");
     let message = args.get("message").and_then(|v| v.as_str());
 
     if observation_id.is_empty() || team_id.is_empty() {
@@ -4339,7 +4839,10 @@ fn tool_team_share(state: &AppState, args: JsonObject) -> Result<CallToolResult,
     }
 
     let db = fresh_db(state)?;
-    let share_id = format!("share_{}", uuid::Uuid::new_v4().to_string()[..8].to_string());
+    let share_id = format!(
+        "share_{}",
+        uuid::Uuid::new_v4().to_string()[..8].to_string()
+    );
     let now = chrono::Utc::now().to_rfc3339();
 
     let share = crate::palace_db::TeamShare {
@@ -4365,16 +4868,12 @@ fn tool_team_share(state: &AppState, args: JsonObject) -> Result<CallToolResult,
 
 fn tool_team_feed(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     let team_id = args.get("team_id").and_then(|v| v.as_str());
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(20) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
     let db = fresh_db(state)?;
-    let shares = db
-        .coordination()
-        .team_share_list(team_id)
-        .map_err(|e| ErrorData::internal_error(format!("Failed to fetch team feed: {}", e), None))?;
+    let shares = db.coordination().team_share_list(team_id).map_err(|e| {
+        ErrorData::internal_error(format!("Failed to fetch team feed: {}", e), None)
+    })?;
 
     let feed: Vec<_> = shares
         .into_iter()
@@ -4413,7 +4912,12 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
 
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
 
     let mut db = fresh_db(state)?;
@@ -4448,7 +4952,8 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
                 "observation" => {
                     if importance >= input.threshold {
                         promote_sketch_to_lesson.push(memory_id);
-                        tier_counts["sketch"] = (tier_counts["sketch"].as_i64().unwrap_or(0) + 1).into();
+                        tier_counts["sketch"] =
+                            (tier_counts["sketch"].as_i64().unwrap_or(0) + 1).into();
                     }
                 }
                 "memory" => {
@@ -4468,16 +4973,20 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
 
                     if confidence >= 9.0 || created_days_ago > 90 {
                         promote_memory_to_archive.push(memory_id);
-                        tier_counts["archive"] = (tier_counts["archive"].as_i64().unwrap_or(0) + 1).into();
+                        tier_counts["archive"] =
+                            (tier_counts["archive"].as_i64().unwrap_or(0) + 1).into();
                     } else if confidence >= 8.0 {
                         promote_insight_to_memory.push(memory_id);
-                        tier_counts["memory"] = (tier_counts["memory"].as_i64().unwrap_or(0) + 1).into();
+                        tier_counts["memory"] =
+                            (tier_counts["memory"].as_i64().unwrap_or(0) + 1).into();
                     } else if confidence >= 7.0 {
                         promote_lesson_to_insight.push(memory_id);
-                        tier_counts["insight"] = (tier_counts["insight"].as_i64().unwrap_or(0) + 1).into();
+                        tier_counts["insight"] =
+                            (tier_counts["insight"].as_i64().unwrap_or(0) + 1).into();
                     } else {
                         promote_lesson_to_insight.push(memory_id);
-                        tier_counts["lesson"] = (tier_counts["lesson"].as_i64().unwrap_or(0) + 1).into();
+                        tier_counts["lesson"] =
+                            (tier_counts["lesson"].as_i64().unwrap_or(0) + 1).into();
                     }
                 }
                 _ => {}
@@ -4518,7 +5027,8 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
                     (id, content, meta)
                 })
                 .collect();
-            db.upsert_documents(&docs_to_update).map_err(|e| internal_error_safe(&e))?;
+            db.upsert_documents(&docs_to_update)
+                .map_err(|e| internal_error_safe(&e))?;
         }
 
         // Apply lesson → insight promotions (doc_type: lesson → insight)
@@ -4531,7 +5041,8 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
                     (id, content, meta)
                 })
                 .collect();
-            db.upsert_documents(&docs_to_update).map_err(|e| internal_error_safe(&e))?;
+            db.upsert_documents(&docs_to_update)
+                .map_err(|e| internal_error_safe(&e))?;
         }
 
         // Apply insight → memory promotions (doc_type: insight → memory, bump confidence)
@@ -4545,7 +5056,8 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
                     (id, content, meta)
                 })
                 .collect();
-            db.upsert_documents(&docs_to_update).map_err(|e| internal_error_safe(&e))?;
+            db.upsert_documents(&docs_to_update)
+                .map_err(|e| internal_error_safe(&e))?;
         }
 
         // Apply memory → archive promotions (doc_type: memory → archive, bump importance)
@@ -4559,7 +5071,8 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
                     (id, content, meta)
                 })
                 .collect();
-            db.upsert_documents(&docs_to_update).map_err(|e| internal_error_safe(&e))?;
+            db.upsert_documents(&docs_to_update)
+                .map_err(|e| internal_error_safe(&e))?;
         }
 
         // Persist all changes
@@ -4574,7 +5087,10 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
             use crate::consolidation_pipeline::run_consolidation_pipeline;
             use crate::llm::LlmProvider;
             let provider = crate::llm::create_llm_provider_from_env();
-            tracing::info!("async consolidation pipeline spawned for {}", palace_path.display());
+            tracing::info!(
+                "async consolidation pipeline spawned for {}",
+                palace_path.display()
+            );
         });
 
         ok_json(serde_json::json!({
@@ -4601,7 +5117,12 @@ fn tool_snapshot_create(state: &AppState, args: JsonObject) -> Result<CallToolRe
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let repo = state.palace_path.parent().unwrap_or(&state.palace_path);
     let output = std::process::Command::new("git")
@@ -4615,11 +5136,17 @@ fn tool_snapshot_create(state: &AppState, args: JsonObject) -> Result<CallToolRe
             .current_dir(repo)
             .output()
             .ok()
-            .and_then(|o| if o.status.success() {
-                let out = String::from_utf8_lossy(&o.stdout);
-                out.lines().next().map(|l| l.to_string())
-            } else { None })
-    } else { None };
+            .and_then(|o| {
+                if o.status.success() {
+                    let out = String::from_utf8_lossy(&o.stdout);
+                    out.lines().next().map(|l| l.to_string())
+                } else {
+                    None
+                }
+            })
+    } else {
+        None
+    };
     let snapshot_id = sha.unwrap_or_else(|| format!("snap_{}", chrono::Utc::now().timestamp()));
     ok_json(serde_json::json!({
         "success": true,
@@ -4640,27 +5167,46 @@ fn tool_file_history(state: &AppState, args: JsonObject) -> Result<CallToolResul
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let repo = state.palace_path.parent().unwrap_or(&state.palace_path);
     let limit = input.limit.unwrap_or(50);
     let output = std::process::Command::new("git")
-        .args(["log", "--format=%H|%s|%ad", "--follow", "-n", &limit.to_string(), "--", &input.file_path])
+        .args([
+            "log",
+            "--format=%H|%s|%ad",
+            "--follow",
+            "-n",
+            &limit.to_string(),
+            "--",
+            &input.file_path,
+        ])
         .current_dir(repo)
         .output();
-    let history: Vec<_> = output.ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.splitn(3, '|').collect();
-                if parts.len() >= 3 {
-                    Some(serde_json::json!({
-                        "commit_sha": parts[0],
-                        "message": parts[1],
-                        "date": parts[2],
-                    }))
-                } else { None }
-            })
-            .collect())
+    let history: Vec<_> = output
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let parts: Vec<&str> = line.splitn(3, '|').collect();
+                    if parts.len() >= 3 {
+                        Some(serde_json::json!({
+                            "commit_sha": parts[0],
+                            "message": parts[1],
+                            "date": parts[2],
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
         .unwrap_or_default();
     ok_json(serde_json::json!({
         "success": true,
@@ -4681,25 +5227,39 @@ fn tool_sessions(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let db = fresh_db(state)?;
-    let all_drawers = db.get_all(input.wing.as_deref(), Some("session"), input.limit.unwrap_or(50));
-    let sessions: Vec<_> = all_drawers.iter().flat_map(|qr| {
-        qr.ids.iter()
-            .zip(qr.documents.iter())
-            .zip(qr.metadatas.iter())
-            .map(|((id, doc), meta)| {
-                let created_at = meta.get("created_at")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("N/A");
-                serde_json::json!({
-                    "session_id": id,
-                    "content": doc.chars().take(200).collect::<String>(),
-                    "created_at": created_at,
+    let all_drawers = db.get_all(
+        input.wing.as_deref(),
+        Some("session"),
+        input.limit.unwrap_or(50),
+    );
+    let sessions: Vec<_> = all_drawers
+        .iter()
+        .flat_map(|qr| {
+            qr.ids
+                .iter()
+                .zip(qr.documents.iter())
+                .zip(qr.metadatas.iter())
+                .map(|((id, doc), meta)| {
+                    let created_at = meta
+                        .get("created_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A");
+                    serde_json::json!({
+                        "session_id": id,
+                        "content": doc.chars().take(200).collect::<String>(),
+                        "created_at": created_at,
+                    })
                 })
-            })
-    }).collect();
+        })
+        .collect();
     ok_json(serde_json::json!({
         "success": true,
         "sessions": sessions,
@@ -4721,32 +5281,46 @@ fn tool_commits(state: &AppState, args: JsonObject) -> Result<CallToolResult, Er
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let repo = state.palace_path.parent().unwrap_or(&state.palace_path);
     let limit_val = input.limit.unwrap_or(100).min(500);
     let mut cmd = std::process::Command::new("git");
-    cmd.args(["log", "--format=%H|%an|%s|%ct", "-n", &limit_val.to_string()]);
+    cmd.args([
+        "log",
+        "--format=%H|%an|%s|%ct",
+        "-n",
+        &limit_val.to_string(),
+    ]);
     if let Some(branch) = &input.branch {
         cmd.arg(branch.as_str());
     }
-    let output = cmd
-        .current_dir(repo)
-        .output();
-    let commits: Vec<_> = output.ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.splitn(4, '|').collect();
-                if parts.len() >= 4 {
-                    Some(serde_json::json!({
-                        "sha": parts[0],
-                        "author": parts[1],
-                        "message": parts[2],
-                        "timestamp": parts[3],
-                    }))
-                } else { None }
-            })
-            .collect())
+    let output = cmd.current_dir(repo).output();
+    let commits: Vec<_> = output
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let parts: Vec<&str> = line.splitn(4, '|').collect();
+                    if parts.len() >= 4 {
+                        Some(serde_json::json!({
+                            "sha": parts[0],
+                            "author": parts[1],
+                            "message": parts[2],
+                            "timestamp": parts[3],
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
         .unwrap_or_default();
     ok_json(serde_json::json!({
         "success": true,
@@ -4767,27 +5341,33 @@ fn tool_commit_lookup(state: &AppState, args: JsonObject) -> Result<CallToolResu
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
     let repo = state.palace_path.parent().unwrap_or(&state.palace_path);
     let output = std::process::Command::new("git")
         .args(["show", "--format=%H|%an|%ae|%s|%ct", "-s", &input.sha])
         .current_dir(repo)
         .output();
-    let commit = output.ok()
-        .and_then(|o| {
-            let line = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let parts: Vec<&str> = line.splitn(5, '|').collect();
-            if parts.len() >= 5 {
-                Some(serde_json::json!({
-                    "sha": parts[0],
-                    "author_name": parts[1],
-                    "author_email": parts[2],
-                    "subject": parts[3],
-                    "timestamp": parts[4],
-                }))
-            } else { None }
-        });
+    let commit = output.ok().and_then(|o| {
+        let line = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        let parts: Vec<&str> = line.splitn(5, '|').collect();
+        if parts.len() >= 5 {
+            Some(serde_json::json!({
+                "sha": parts[0],
+                "author_name": parts[1],
+                "author_email": parts[2],
+                "subject": parts[3],
+                "timestamp": parts[4],
+            }))
+        } else {
+            None
+        }
+    });
     ok_json(serde_json::json!({
         "success": true,
         "sha": input.sha,
@@ -4872,17 +5452,22 @@ fn tool_save(state: &AppState, args: JsonObject) -> Result<CallToolResult, Error
     let mut db = fresh_db(state)?;
 
     // Parse concepts and files
-    let concepts_vec: Vec<String> = input.concepts
+    let concepts_vec: Vec<String> = input
+        .concepts
         .as_ref()
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
         .unwrap_or_default();
-    let files_vec: Vec<String> = input.files
+    let files_vec: Vec<String> = input
+        .files
         .as_ref()
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
         .unwrap_or_default();
 
     // Use project or derive wing from it
-    let wing = input.project.clone().unwrap_or_else(|| "memory".to_string());
+    let wing = input
+        .project
+        .clone()
+        .unwrap_or_else(|| "memory".to_string());
     let room = input.memory_type.unwrap_or_else(|| "insight".to_string());
 
     let mut metadata = std::collections::HashMap::new();
@@ -4898,10 +5483,7 @@ fn tool_save(state: &AppState, args: JsonObject) -> Result<CallToolResult, Error
     metadata.insert("memory_type".to_string(), room.clone());
 
     // Generate a unique drawer ID
-    let hash = short_hash(
-        &format!("{}{}{}", wing, room, input.content),
-        24,
-    );
+    let hash = short_hash(&format!("{}{}{}", wing, room, input.content), 24);
     let drawer_id = format!("drawer_{}_{}_{}", wing, room, hash);
 
     // Convert metadata HashMap to Vec of tuples for db.add()
@@ -4935,7 +5517,8 @@ fn tool_profile(state: &AppState, args: JsonObject) -> Result<CallToolResult, Er
     let all_drawers = db.get_all(input.project.as_deref(), None, usize::MAX);
 
     // Extract top concepts by frequency
-    let mut concept_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut concept_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for qr in &all_drawers {
         if let Some(meta) = qr.metadatas.first() {
             if let Some(c) = meta.get("concepts").and_then(|v| v.as_str()) {
@@ -4950,21 +5533,33 @@ fn tool_profile(state: &AppState, args: JsonObject) -> Result<CallToolResult, Er
     }
     let mut top_concepts: Vec<_> = concept_counts.into_iter().collect();
     top_concepts.sort_by(|a, b| b.1.cmp(&a.1));
-    let top_concepts: Vec<_> = top_concepts.into_iter().take(20).map(|(k, v)| serde_json::json!({"concept": k, "count": v})).collect();
+    let top_concepts: Vec<_> = top_concepts
+        .into_iter()
+        .take(20)
+        .map(|(k, v)| serde_json::json!({"concept": k, "count": v}))
+        .collect();
 
     // File patterns
-    let mut file_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut file_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for qr in &all_drawers {
         if let Some(meta) = qr.metadatas.first() {
             if let Some(f) = meta.get("source_file").and_then(|v| v.as_str()) {
-                let ext = std::path::Path::new(f).extension().and_then(|e| e.to_str()).unwrap_or("unknown");
+                let ext = std::path::Path::new(f)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown");
                 *file_counts.entry(ext.to_string()).or_insert(0) += 1;
             }
         }
     }
     let mut file_patterns: Vec<_> = file_counts.into_iter().collect();
     file_patterns.sort_by(|a, b| b.1.cmp(&a.1));
-    let file_patterns: Vec<_> = file_patterns.into_iter().take(10).map(|(k, v)| serde_json::json!({"extension": k, "count": v})).collect();
+    let file_patterns: Vec<_> = file_patterns
+        .into_iter()
+        .take(10)
+        .map(|(k, v)| serde_json::json!({"extension": k, "count": v}))
+        .collect();
 
     ok_json(serde_json::json!({
         "project": input.project,
@@ -4980,25 +5575,32 @@ fn tool_export(state: &AppState, _args: JsonObject) -> Result<CallToolResult, Er
     let db = fresh_db(state)?;
     let all_drawers = db.get_all(None, None, usize::MAX);
 
-    let memories: Vec<_> = all_drawers.iter().flat_map(|qr| {
-        qr.ids.iter()
-            .zip(qr.documents.iter())
-            .zip(qr.metadatas.iter())
-            .map(|((id, doc), meta)| {
-                let mut obj = serde_json::Map::new();
-                obj.insert("id".to_string(), serde_json::Value::String(id.clone()));
-                obj.insert("content".to_string(), serde_json::Value::String(doc.clone()));
-                let mut meta_map = serde_json::Map::new();
-                for (k, v) in meta {
-                    if let Some(s) = v.as_str() {
-                        meta_map.insert(k.clone(), serde_json::Value::String(s.to_string()));
+    let memories: Vec<_> = all_drawers
+        .iter()
+        .flat_map(|qr| {
+            qr.ids
+                .iter()
+                .zip(qr.documents.iter())
+                .zip(qr.metadatas.iter())
+                .map(|((id, doc), meta)| {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("id".to_string(), serde_json::Value::String(id.clone()));
+                    obj.insert(
+                        "content".to_string(),
+                        serde_json::Value::String(doc.clone()),
+                    );
+                    let mut meta_map = serde_json::Map::new();
+                    for (k, v) in meta {
+                        if let Some(s) = v.as_str() {
+                            meta_map.insert(k.clone(), serde_json::Value::String(s.to_string()));
+                        }
                     }
-                }
-                obj.insert("metadata".to_string(), serde_json::Value::Object(meta_map));
-                serde_json::Value::Object(obj)
-            })
-            .collect::<Vec<_>>()
-    }).collect();
+                    obj.insert("metadata".to_string(), serde_json::Value::Object(meta_map));
+                    serde_json::Value::Object(obj)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
 
     ok_json(serde_json::json!({
         "exported_at": chrono::Utc::now().to_rfc3339(),
@@ -5028,25 +5630,36 @@ fn tool_timeline(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
     let after_count = input.after.unwrap_or(5);
 
     let all_drawers = db.get_all(input.project.as_deref(), None, 500);
-    let mut all_items: Vec<_> = all_drawers.iter().flat_map(|qr| {
-        qr.ids.iter()
-            .zip(qr.documents.iter())
-            .zip(qr.metadatas.iter())
-            .filter_map(|((id, doc), meta)| {
-                let created_at = meta.get("created_at").and_then(|v| v.as_str()).and_then(|s| {
-                    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
-                        .or_else(|| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
-                            .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default()))
-                });
-                Some(serde_json::json!({
-                    "id": id,
-                    "content": doc.chars().take(100).collect::<String>(),
-                    "created_at": created_at.map(|d| d.to_string()),
-                    "metadata": meta,
-                }))
-            })
-            .collect::<Vec<_>>()
-    }).collect();
+    let mut all_items: Vec<_> = all_drawers
+        .iter()
+        .flat_map(|qr| {
+            qr.ids
+                .iter()
+                .zip(qr.documents.iter())
+                .zip(qr.metadatas.iter())
+                .filter_map(|((id, doc), meta)| {
+                    let created_at =
+                        meta.get("created_at")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| {
+                                chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                                    .ok()
+                                    .or_else(|| {
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                            .ok()
+                                            .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
+                                    })
+                            });
+                    Some(serde_json::json!({
+                        "id": id,
+                        "content": doc.chars().take(100).collect::<String>(),
+                        "created_at": created_at.map(|d| d.to_string()),
+                        "metadata": meta,
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
 
     // Filter by anchor date if provided
     if let Some(date) = anchor_date {
@@ -5080,7 +5693,8 @@ fn tool_patterns(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
     let all_drawers = db.get_all(input.project.as_deref(), None, usize::MAX);
 
     // Detect patterns across sessions - look for recurring content snippets
-    let mut content_freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut content_freq: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for qr in &all_drawers {
         for doc in &qr.documents {
             let words: Vec<&str> = doc.split_whitespace().collect();
@@ -5127,16 +5741,20 @@ fn tool_smart_search(state: &AppState, args: JsonObject) -> Result<CallToolResul
     // If expand_ids provided, fetch those specifically
     let expanded: Vec<serde_json::Value> = if let Some(ids_str) = input.expand_ids {
         let ids: Vec<String> = ids_str.split(',').map(|s| s.trim().to_string()).collect();
-        ids.iter().filter_map(|id| {
-            db._get_document(id).map(|entry| {
-                serde_json::json!({
-                    "id": id,
-                    "content": entry.content,
-                    "metadata": entry.metadata,
+        ids.iter()
+            .filter_map(|id| {
+                db._get_document(id).map(|entry| {
+                    serde_json::json!({
+                        "id": id,
+                        "content": entry.content,
+                        "metadata": entry.metadata,
+                    })
                 })
             })
-        }).collect()
-    } else { vec![] };
+            .collect()
+    } else {
+        vec![]
+    };
 
     ok_json(serde_json::json!({
         "semantic_results": results.iter().map(|r| {
@@ -5211,16 +5829,23 @@ fn tool_vision_search(state: &AppState, args: JsonObject) -> Result<CallToolResu
     }
     let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
         Ok(i) => i,
-        Err(e) => return Err(ErrorData::invalid_params(format!("Invalid args: {e}"), None)),
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
     };
 
     let db_path = state.palace_path.join("coordination.db");
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
-        Err(e) => return ok_json(serde_json::json!({
-            "status": "error",
-            "message": format!("cannot open coordination.db: {}", e),
-        })),
+        Err(e) => {
+            return ok_json(serde_json::json!({
+                "status": "error",
+                "message": format!("cannot open coordination.db: {}", e),
+            }))
+        }
     };
 
     match crate::vision::VisionSearchStore::new(conn, None) {
@@ -5234,13 +5859,15 @@ fn tool_vision_search(state: &AppState, args: JsonObject) -> Result<CallToolResu
                 Ok(results) => {
                     let hits: Vec<_> = results
                         .into_iter()
-                        .map(|r| serde_json::json!({
-                            "image_ref": r.image_ref,
-                            "score": r.score,
-                            "session_id": r.session_id,
-                            "observation_id": r.observation_id,
-                            "updated_at": r.updated_at,
-                        }))
+                        .map(|r| {
+                            serde_json::json!({
+                                "image_ref": r.image_ref,
+                                "score": r.score,
+                                "session_id": r.session_id,
+                                "observation_id": r.observation_id,
+                                "updated_at": r.updated_at,
+                            })
+                        })
                         .collect();
                     ok_json(serde_json::json!({
                         "status": "ok",
@@ -5277,7 +5904,8 @@ fn tool_relations(state: &AppState, args: JsonObject) -> Result<CallToolResult, 
     let input: Input = parse_args_with_integer_coercion(args, &["max_hops"])?;
     let db = fresh_db(state)?;
 
-    let drawer = db._get_document(&input.memory_id)
+    let drawer = db
+        ._get_document(&input.memory_id)
         .ok_or_else(|| ErrorData::internal_error("Drawer not found", None))?;
 
     // Simple relation extraction from metadata
@@ -5340,7 +5968,9 @@ fn tool_audit(state: &AppState, args: JsonObject) -> Result<CallToolResult, Erro
                 for line in content.lines() {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
                         if let Some(tool_name) = val.get("tool").and_then(|v| v.as_str()) {
-                            if input.operation.is_none() || tool_name.contains(input.operation.as_ref().unwrap()) {
+                            if input.operation.is_none()
+                                || tool_name.contains(input.operation.as_ref().unwrap())
+                            {
                                 entries.push(serde_json::json!({
                                     "timestamp": val.get("timestamp"),
                                     "tool": tool_name,
@@ -5368,7 +5998,10 @@ fn tool_audit(state: &AppState, args: JsonObject) -> Result<CallToolResult, Erro
     }))
 }
 
-fn tool_claude_bridge_sync(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+fn tool_claude_bridge_sync(
+    state: &AppState,
+    args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Input {
@@ -5380,7 +6013,13 @@ fn tool_claude_bridge_sync(state: &AppState, args: JsonObject) -> Result<CallToo
     let config = crate::claude_bridge::ClaudeBridgeConfig {
         enabled: true,
         project_path: Some(state.palace_path.to_string_lossy().to_string()),
-        memory_file_path: Some(state.palace_path.join("MEMORY.md").to_string_lossy().to_string()),
+        memory_file_path: Some(
+            state
+                .palace_path
+                .join("MEMORY.md")
+                .to_string_lossy()
+                .to_string(),
+        ),
         line_budget: 200,
     };
 
@@ -5397,22 +6036,21 @@ fn tool_claude_bridge_sync(state: &AppState, args: JsonObject) -> Result<CallToo
                 Err(e) => Err(internal_error_safe(&e)),
             }
         }
-        "pull" => {
-            match crate::claude_bridge::read_from_claude(&config) {
-                Ok(parsed) => ok_json(serde_json::json!({
-                    "success": true,
-                    "direction": "pull",
-                    "sections": parsed.sections,
-                    "line_count": parsed.line_count,
-                })),
-                Err(e) => Err(internal_error_safe(&e)),
-            }
-        }
+        "pull" => match crate::claude_bridge::read_from_claude(&config) {
+            Ok(parsed) => ok_json(serde_json::json!({
+                "success": true,
+                "direction": "pull",
+                "sections": parsed.sections,
+                "line_count": parsed.line_count,
+            })),
+            Err(e) => Err(internal_error_safe(&e)),
+        },
         _ => {
             // Bidirectional sync
             let memories = state.db.get_memories(None, 100);
             let project_summary = "";
-            let push_result = crate::claude_bridge::sync_to_claude(&config, &memories, project_summary);
+            let push_result =
+                crate::claude_bridge::sync_to_claude(&config, &memories, project_summary);
             let pull_result = crate::claude_bridge::read_from_claude(&config);
             ok_json(serde_json::json!({
                 "success": true,
@@ -5818,15 +6456,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                            palace_path: temp_dir.path().join("palace"),
-                            collection_name: "test_ro".to_string(),
-                            people_map: Default::default(),
-                            topic_wings: vec![],
-                            hall_keywords: Default::default(),
-                            embedding_model: "naive".to_string(),
-                            languages: vec![],
-                            ..Default::default()
-                        };
+                palace_path: temp_dir.path().join("palace"),
+                collection_name: "test_ro".to_string(),
+                people_map: Default::default(),
+                topic_wings: vec![],
+                hall_keywords: Default::default(),
+                embedding_model: "naive".to_string(),
+                languages: vec![],
+                ..Default::default()
+            };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -6056,15 +6694,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                            palace_path: temp_dir.path().join("palace"),
-                            collection_name: "test_ro3".to_string(),
-                            people_map: Default::default(),
-                            topic_wings: vec![],
-                            hall_keywords: Default::default(),
-                            embedding_model: "naive".to_string(),
-                            languages: vec![],
-                            ..Default::default()
-                        };
+                palace_path: temp_dir.path().join("palace"),
+                collection_name: "test_ro3".to_string(),
+                people_map: Default::default(),
+                topic_wings: vec![],
+                hall_keywords: Default::default(),
+                embedding_model: "naive".to_string(),
+                languages: vec![],
+                ..Default::default()
+            };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -6984,7 +7622,11 @@ mod tests {
             .to_string();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed.get("success").and_then(|v| v.as_bool()), Some(true));
-        assert!(parsed.get("action_id").and_then(|v| v.as_str()).unwrap().starts_with("action_"));
+        assert!(parsed
+            .get("action_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .starts_with("action_"));
     }
 
     #[test]
@@ -7087,12 +7729,8 @@ mod tests {
         )
         .expect("action should be created");
 
-        let result = dispatch(
-            &state,
-            "mempalace_frontier",
-            json!({"limit": 10}),
-        )
-        .expect("frontier should succeed");
+        let result = dispatch(&state, "mempalace_frontier", json!({"limit": 10}))
+            .expect("frontier should succeed");
         let text = serde_json::to_value(&result.content[0])
             .unwrap()
             .get("text")
@@ -7120,12 +7758,8 @@ mod tests {
         )
         .expect("beta action should be created");
 
-        let result = dispatch(
-            &state,
-            "mempalace_frontier",
-            json!({"project": "alpha"}),
-        )
-        .expect("frontier with project filter should succeed");
+        let result = dispatch(&state, "mempalace_frontier", json!({"project": "alpha"}))
+            .expect("frontier with project filter should succeed");
         let text = serde_json::to_value(&result.content[0])
             .unwrap()
             .get("text")
@@ -7159,8 +7793,7 @@ mod tests {
         )
         .expect("high priority action should be created");
 
-        let result = dispatch(&state, "mempalace_next", json!({}))
-            .expect("next should succeed");
+        let result = dispatch(&state, "mempalace_next", json!({})).expect("next should succeed");
         let text = serde_json::to_value(&result.content[0])
             .unwrap()
             .get("text")
@@ -7236,7 +7869,11 @@ mod tests {
             .to_string();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed.get("success").and_then(|v| v.as_bool()), Some(true));
-        assert!(parsed.get("lease_id").and_then(|v| v.as_str()).unwrap().starts_with("lease_"));
+        assert!(parsed
+            .get("lease_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .starts_with("lease_"));
     }
 
     #[test]
@@ -7371,7 +8008,11 @@ mod tests {
             .to_string();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed.get("success").and_then(|v| v.as_bool()), Some(true));
-        assert!(parsed.get("signal_id").and_then(|v| v.as_str()).unwrap().starts_with("sig_"));
+        assert!(parsed
+            .get("signal_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .starts_with("sig_"));
     }
 
     #[test]
@@ -7494,8 +8135,15 @@ mod tests {
             .to_string();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed.get("success").and_then(|v| v.as_bool()), Some(true));
-        let actions = parsed.get("created_actions").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(actions.len(), 2, "Should create 2 actions from routine steps");
+        let actions = parsed
+            .get("created_actions")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(
+            actions.len(),
+            2,
+            "Should create 2 actions from routine steps"
+        );
     }
 
     #[test]
@@ -7528,15 +8176,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                            palace_path: temp_dir.path().join("palace"),
-                            collection_name: "test_ro_coord".to_string(),
-                            people_map: Default::default(),
-                            topic_wings: vec![],
-                            hall_keywords: Default::default(),
-                            embedding_model: "naive".to_string(),
-                            languages: vec![],
-                            ..Default::default()
-                        };
+                palace_path: temp_dir.path().join("palace"),
+                collection_name: "test_ro_coord".to_string(),
+                people_map: Default::default(),
+                topic_wings: vec![],
+                hall_keywords: Default::default(),
+                embedding_model: "naive".to_string(),
+                languages: vec![],
+                ..Default::default()
+            };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -7545,7 +8193,10 @@ mod tests {
             "mempalace_action_create",
             json!({"title": "Should be blocked"}),
         );
-        assert!(result.is_err(), "action_create should be blocked in read-only mode");
+        assert!(
+            result.is_err(),
+            "action_create should be blocked in read-only mode"
+        );
     }
 
     #[test]
@@ -7553,15 +8204,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                            palace_path: temp_dir.path().join("palace"),
-                            collection_name: "test_ro_signal".to_string(),
-                            people_map: Default::default(),
-                            topic_wings: vec![],
-                            hall_keywords: Default::default(),
-                            embedding_model: "naive".to_string(),
-                            languages: vec![],
-                            ..Default::default()
-                        };
+                palace_path: temp_dir.path().join("palace"),
+                collection_name: "test_ro_signal".to_string(),
+                people_map: Default::default(),
+                topic_wings: vec![],
+                hall_keywords: Default::default(),
+                embedding_model: "naive".to_string(),
+                languages: vec![],
+                ..Default::default()
+            };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };
@@ -7573,7 +8224,10 @@ mod tests {
                 "content": "Should be blocked"
             }),
         );
-        assert!(result.is_err(), "signal_send should be blocked in read-only mode");
+        assert!(
+            result.is_err(),
+            "signal_send should be blocked in read-only mode"
+        );
     }
 
     #[test]
@@ -7581,15 +8235,15 @@ mod tests {
         let state = {
             let temp_dir = tempfile::tempdir().unwrap();
             let config = crate::Config {
-                            palace_path: temp_dir.path().join("palace"),
-                            collection_name: "test_ro_lease".to_string(),
-                            people_map: Default::default(),
-                            topic_wings: vec![],
-                            hall_keywords: Default::default(),
-                            embedding_model: "naive".to_string(),
-                            languages: vec![],
-                            ..Default::default()
-                        };
+                palace_path: temp_dir.path().join("palace"),
+                collection_name: "test_ro_lease".to_string(),
+                people_map: Default::default(),
+                topic_wings: vec![],
+                hall_keywords: Default::default(),
+                embedding_model: "naive".to_string(),
+                languages: vec![],
+                ..Default::default()
+            };
             std::fs::create_dir_all(&config.palace_path).unwrap();
             AppState::new(config, true).unwrap()
         };

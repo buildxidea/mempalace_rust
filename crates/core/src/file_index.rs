@@ -41,10 +41,18 @@ struct FileIndexEntry {
 
 impl FileIndex {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
-    pub fn record(&mut self, file_path: &str, session_id: &str, action: &str, observation_id: Option<&str>) {
+    pub fn record(
+        &mut self,
+        file_path: &str,
+        session_id: &str,
+        action: &str,
+        observation_id: Option<&str>,
+    ) {
         self.entries.push(FileIndexEntry {
             file_path: file_path.to_string(),
             session_id: session_id.to_string(),
@@ -55,7 +63,9 @@ impl FileIndex {
     }
 
     pub fn history_for_file(&self, file_path: &str) -> FileHistory {
-        let matching: Vec<_> = self.entries.iter()
+        let matching: Vec<_> = self
+            .entries
+            .iter()
             .filter(|e| e.file_path == file_path)
             .collect();
 
@@ -69,16 +79,28 @@ impl FileIndex {
             };
         }
 
-        let entries: Vec<_> = matching.iter().map(|e| FileHistoryEntry {
-            session_id: e.session_id.clone(),
-            timestamp: e.timestamp,
-            action: e.action.clone(),
-            observation_id: e.observation_id.clone(),
-        }).collect();
+        let entries: Vec<_> = matching
+            .iter()
+            .map(|e| FileHistoryEntry {
+                session_id: e.session_id.clone(),
+                timestamp: e.timestamp,
+                action: e.action.clone(),
+                observation_id: e.observation_id.clone(),
+            })
+            .collect();
 
-        let first_seen = entries.iter().map(|e| e.timestamp).min().unwrap_or(Utc::now());
-        let last_seen = entries.iter().map(|e| e.timestamp).max().unwrap_or(Utc::now());
-        let session_count = entries.iter()
+        let first_seen = entries
+            .iter()
+            .map(|e| e.timestamp)
+            .min()
+            .unwrap_or(Utc::now());
+        let last_seen = entries
+            .iter()
+            .map(|e| e.timestamp)
+            .max()
+            .unwrap_or(Utc::now());
+        let session_count = entries
+            .iter()
             .map(|e| &e.session_id)
             .collect::<std::collections::HashSet<_>>()
             .len();
@@ -93,7 +115,8 @@ impl FileIndex {
     }
 
     pub fn files_in_session(&self, session_id: &str) -> Vec<String> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .filter(|e| e.session_id == session_id)
             .map(|e| e.file_path.clone())
             .collect::<std::collections::HashSet<_>>()
@@ -102,7 +125,8 @@ impl FileIndex {
     }
 
     pub fn sessions_for_file(&self, file_path: &str) -> Vec<String> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .filter(|e| e.file_path == file_path)
             .map(|e| e.session_id.clone())
             .collect::<std::collections::HashSet<_>>()
@@ -163,9 +187,15 @@ mod tests {
     #[test]
     fn test_most_active_files() {
         let mut index = FileIndex::new();
-        for _ in 0..5 { index.record("src/main.rs", "s-1", "edit", None); }
-        for _ in 0..3 { index.record("src/lib.rs", "s-1", "edit", None); }
-        for _ in 0..1 { index.record("src/util.rs", "s-1", "edit", None); }
+        for _ in 0..5 {
+            index.record("src/main.rs", "s-1", "edit", None);
+        }
+        for _ in 0..3 {
+            index.record("src/lib.rs", "s-1", "edit", None);
+        }
+        for _ in 0..1 {
+            index.record("src/util.rs", "s-1", "edit", None);
+        }
 
         let top = index.most_active_files(2);
         assert_eq!(top.len(), 2);

@@ -81,7 +81,11 @@ pub fn normalize_weights(
     has_graph: bool,
 ) -> (f64, f64, f64) {
     let mut bm25_w = if has_bm25 { config.bm25_weight } else { 0.0 };
-    let mut vector_w = if has_vector { config.vector_weight } else { 0.0 };
+    let mut vector_w = if has_vector {
+        config.vector_weight
+    } else {
+        0.0
+    };
     let mut graph_w = if has_graph { config.graph_weight } else { 0.0 };
 
     let total = bm25_w + vector_w + graph_w;
@@ -108,8 +112,7 @@ pub fn fuse_results(
     let has_vector = !vector_results.is_empty();
     let has_graph = !graph_results.is_empty();
 
-    let (bm25_w, vector_w, graph_w) =
-        normalize_weights(config, has_bm25, has_vector, has_graph);
+    let (bm25_w, vector_w, graph_w) = normalize_weights(config, has_bm25, has_vector, has_graph);
 
     // Build a map of id -> FusedResult
     let mut fused: std::collections::HashMap<String, FusedResult> =
@@ -173,7 +176,11 @@ pub fn fuse_results(
     }
 
     let mut results: Vec<FusedResult> = fused.into_values().collect();
-    results.sort_by(|a, b| b.combined_score.partial_cmp(&a.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.combined_score
+            .partial_cmp(&a.combined_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results
 }
 
@@ -194,19 +201,55 @@ mod tests {
     fn make_overlapping_results() -> (Vec<StreamResult>, Vec<StreamResult>, Vec<StreamResult>) {
         // All three streams return the same IDs but in different orders
         let bm25 = vec![
-            StreamResult { id: "a".to_string(), rank: 0, stream: SearchStream::Bm25 },
-            StreamResult { id: "b".to_string(), rank: 1, stream: SearchStream::Bm25 },
-            StreamResult { id: "c".to_string(), rank: 2, stream: SearchStream::Bm25 },
+            StreamResult {
+                id: "a".to_string(),
+                rank: 0,
+                stream: SearchStream::Bm25,
+            },
+            StreamResult {
+                id: "b".to_string(),
+                rank: 1,
+                stream: SearchStream::Bm25,
+            },
+            StreamResult {
+                id: "c".to_string(),
+                rank: 2,
+                stream: SearchStream::Bm25,
+            },
         ];
         let vector = vec![
-            StreamResult { id: "c".to_string(), rank: 0, stream: SearchStream::Vector },
-            StreamResult { id: "a".to_string(), rank: 1, stream: SearchStream::Vector },
-            StreamResult { id: "b".to_string(), rank: 2, stream: SearchStream::Vector },
+            StreamResult {
+                id: "c".to_string(),
+                rank: 0,
+                stream: SearchStream::Vector,
+            },
+            StreamResult {
+                id: "a".to_string(),
+                rank: 1,
+                stream: SearchStream::Vector,
+            },
+            StreamResult {
+                id: "b".to_string(),
+                rank: 2,
+                stream: SearchStream::Vector,
+            },
         ];
         let graph = vec![
-            StreamResult { id: "b".to_string(), rank: 0, stream: SearchStream::Graph },
-            StreamResult { id: "c".to_string(), rank: 1, stream: SearchStream::Graph },
-            StreamResult { id: "a".to_string(), rank: 2, stream: SearchStream::Graph },
+            StreamResult {
+                id: "b".to_string(),
+                rank: 0,
+                stream: SearchStream::Graph,
+            },
+            StreamResult {
+                id: "c".to_string(),
+                rank: 1,
+                stream: SearchStream::Graph,
+            },
+            StreamResult {
+                id: "a".to_string(),
+                rank: 2,
+                stream: SearchStream::Graph,
+            },
         ];
         (bm25, vector, graph)
     }
@@ -282,8 +325,16 @@ mod tests {
 
     #[test]
     fn test_fuse_results_disjoint_streams() {
-        let bm25 = vec![StreamResult { id: "x".to_string(), rank: 0, stream: SearchStream::Bm25 }];
-        let vector = vec![StreamResult { id: "y".to_string(), rank: 0, stream: SearchStream::Vector }];
+        let bm25 = vec![StreamResult {
+            id: "x".to_string(),
+            rank: 0,
+            stream: SearchStream::Bm25,
+        }];
+        let vector = vec![StreamResult {
+            id: "y".to_string(),
+            rank: 0,
+            stream: SearchStream::Vector,
+        }];
         let fused = fuse_results(&bm25, &vector, &[], &RrfConfig::default());
 
         assert_eq!(fused.len(), 2);

@@ -57,8 +57,10 @@ pub fn build_expand_results(
     ids: &[String],
     observations: &[ExpandedResult],
 ) -> Vec<ExpandedResult> {
-    let obs_map: std::collections::HashMap<&str, &ExpandedResult> =
-        observations.iter().map(|o| (o.obs_id.as_str(), o)).collect();
+    let obs_map: std::collections::HashMap<&str, &ExpandedResult> = observations
+        .iter()
+        .map(|o| (o.obs_id.as_str(), o))
+        .collect();
 
     ids.iter()
         .take(MAX_EXPAND_IDS)

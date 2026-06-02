@@ -75,8 +75,10 @@ pub fn select_eviction_candidates(
     config: &EvictionConfig,
     target_count: usize,
 ) -> EvictionResult {
-    let score_map: std::collections::HashMap<&str, &RetentionScore> =
-        retention_scores.iter().map(|s| (s.memory_id.as_str(), s)).collect();
+    let score_map: std::collections::HashMap<&str, &RetentionScore> = retention_scores
+        .iter()
+        .map(|s| (s.memory_id.as_str(), s))
+        .collect();
 
     // Filter eligible memories
     let eligible: Vec<&Memory> = memories
@@ -116,7 +118,9 @@ pub fn select_eviction_candidates(
                 let b_score = score_map.get(b.id.as_str());
                 let a_strength = a_score.map(|s| s.retention_strength).unwrap_or(0.0);
                 let b_strength = b_score.map(|s| s.retention_strength).unwrap_or(0.0);
-                a_strength.partial_cmp(&b_strength).unwrap_or(std::cmp::Ordering::Equal)
+                a_strength
+                    .partial_cmp(&b_strength)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
         EvictionStrategy::OldestFirst => {
@@ -193,7 +197,9 @@ pub fn eviction_priority(
 
     // Recency component (0-0.3)
     let now = Utc::now();
-    let days_since_access = now.signed_duration_since(retention_score.last_accessed).num_days() as f64;
+    let days_since_access = now
+        .signed_duration_since(retention_score.last_accessed)
+        .num_days() as f64;
     let recency_score = (-0.1 * days_since_access).exp();
     score += recency_score * 0.3;
 
@@ -343,10 +349,7 @@ mod tests {
 
     #[test]
     fn test_protection_threshold() {
-        let memories = vec![
-            test_memory("mem-1", 10),
-            test_memory("mem-2", 5),
-        ];
+        let memories = vec![test_memory("mem-1", 10), test_memory("mem-2", 5)];
         let scores = vec![
             test_retention_score("mem-1", 0.3, 0, 30),
             test_retention_score("mem-2", 0.8, 10, 1),

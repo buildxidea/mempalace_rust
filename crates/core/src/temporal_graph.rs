@@ -69,10 +69,7 @@ impl From<Triple> for TimelineEntry {
     }
 }
 
-pub fn temporal_query(
-    kg: &KnowledgeGraph,
-    query: &TemporalQuery,
-) -> Result<TemporalState> {
+pub fn temporal_query(kg: &KnowledgeGraph, query: &TemporalQuery) -> Result<TemporalState> {
     let current_edges = if query.include_history {
         kg.query_entity(&query.entity_name, None, None, "both")?
             .into_iter()
@@ -120,7 +117,8 @@ pub fn temporal_query(
         Vec::new()
     };
 
-    let timeline = kg.timeline(Some(&query.entity_name))?
+    let timeline = kg
+        .timeline(Some(&query.entity_name))?
         .into_iter()
         .map(TimelineEntry::from)
         .collect();
@@ -188,7 +186,19 @@ mod tests {
     #[test]
     fn test_temporal_query_current_state() {
         let mut kg = test_kg();
-        kg.add_triple("Alice", "works_at", "Acme", None, None, Some(0.9), None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "Acme",
+            None,
+            None,
+            Some(0.9),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let query = TemporalQuery {
             entity_name: "Alice".to_string(),
@@ -206,12 +216,42 @@ mod tests {
     #[test]
     fn test_temporal_query_as_of() {
         let mut kg = test_kg();
-        kg.add_triple("Alice", "works_at", "Acme", Some("2020-01-01"), Some("2023-01-01"), Some(0.9), None, None, None, None).unwrap();
-        kg.add_triple("Alice", "works_at", "NewCo", Some("2023-01-01"), None, Some(0.9), None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "Acme",
+            Some("2020-01-01"),
+            Some("2023-01-01"),
+            Some(0.9),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "NewCo",
+            Some("2023-01-01"),
+            None,
+            Some(0.9),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let query = TemporalQuery {
             entity_name: "Alice".to_string(),
-            as_of: Some(chrono::NaiveDate::from_ymd_opt(2021, 6, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc()),
+            as_of: Some(
+                chrono::NaiveDate::from_ymd_opt(2021, 6, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc(),
+            ),
             from: None,
             to: None,
             include_history: true,
@@ -223,8 +263,32 @@ mod tests {
     #[test]
     fn test_temporal_query_with_timeline() {
         let mut kg = test_kg();
-        kg.add_triple("Alice", "works_at", "Acme", Some("2020-01-01"), None, None, None, None, None, None).unwrap();
-        kg.add_triple("Alice", "lives_in", "NYC", Some("2021-01-01"), None, None, None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "Acme",
+            Some("2020-01-01"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        kg.add_triple(
+            "Alice",
+            "lives_in",
+            "NYC",
+            Some("2021-01-01"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let query = TemporalQuery {
             entity_name: "Alice".to_string(),
@@ -240,7 +304,10 @@ mod tests {
     #[test]
     fn test_query_at_transaction_time() {
         let mut kg = test_kg();
-        kg.add_triple("Alice", "works_at", "Acme", None, None, None, None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice", "works_at", "Acme", None, None, None, None, None, None, None,
+        )
+        .unwrap();
 
         let now = chrono::Utc::now().to_rfc3339();
         let entries = query_at_transaction_time(&kg, "Alice", &now).unwrap();
@@ -251,10 +318,30 @@ mod tests {
     #[test]
     fn test_query_range() {
         let mut kg = test_kg();
-        kg.add_triple("Alice", "works_at", "Acme", Some("2020-01-01"), None, None, None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "Acme",
+            Some("2020-01-01"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
-        let from = chrono::NaiveDate::from_ymd_opt(2019, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
-        let to = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let from = chrono::NaiveDate::from_ymd_opt(2019, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let to = chrono::NaiveDate::from_ymd_opt(2025, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
         let entries = query_range(&kg, "Alice", &from, &to).unwrap();
         assert!(!entries.is_empty());
     }

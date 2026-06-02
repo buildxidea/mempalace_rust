@@ -59,12 +59,21 @@ impl LeaseStore {
         let existing = self.get_active_lease(action_id)?;
         if let Some(lease) = existing {
             if lease.agent_id != agent_id {
-                return Err(anyhow!("Action {} is leased by {}", action_id, lease.agent_id));
+                return Err(anyhow!(
+                    "Action {} is leased by {}",
+                    action_id,
+                    lease.agent_id
+                ));
             }
-            return self.renew(&lease.id, Duration::minutes(ttl_minutes.unwrap_or(DEFAULT_TTL_MINUTES)));
+            return self.renew(
+                &lease.id,
+                Duration::minutes(ttl_minutes.unwrap_or(DEFAULT_TTL_MINUTES)),
+            );
         }
 
-        let ttl = ttl_minutes.unwrap_or(DEFAULT_TTL_MINUTES).min(MAX_TTL_MINUTES);
+        let ttl = ttl_minutes
+            .unwrap_or(DEFAULT_TTL_MINUTES)
+            .min(MAX_TTL_MINUTES);
         let now = Utc::now();
         let expires = now + Duration::minutes(ttl);
         let id = format!("lease_{}_{}", action_id, agent_id);
@@ -91,17 +100,23 @@ impl LeaseStore {
                 params![r, lease_id],
             )?;
         }
-        self.conn.execute("DELETE FROM leases WHERE id = ?1", params![lease_id])?;
+        self.conn
+            .execute("DELETE FROM leases WHERE id = ?1", params![lease_id])?;
         Ok(())
     }
 
     pub fn renew(&self, lease_id: &str, extend: Duration) -> Result<Lease> {
-        let lease = self.get_lease(lease_id)?
+        let lease = self
+            .get_lease(lease_id)?
             .ok_or_else(|| anyhow!("Lease {} not found", lease_id))?;
 
         let now = Utc::now();
         let current_expiry = lease.expires_at;
-        let base = if current_expiry > now { current_expiry } else { now };
+        let base = if current_expiry > now {
+            current_expiry
+        } else {
+            now
+        };
         let new_expiry = base + extend;
 
         self.conn.execute(
@@ -117,18 +132,17 @@ impl LeaseStore {
 
     pub fn cleanup(&self) -> Result<usize> {
         let now = Utc::now().to_rfc3339();
-        let changed = self.conn.execute(
-            "DELETE FROM leases WHERE expires_at < ?1",
-            params![now],
-        )?;
+        let changed = self
+            .conn
+            .execute("DELETE FROM leases WHERE expires_at < ?1", params![now])?;
         Ok(changed)
     }
 
     pub fn get_active_lease(&self, action_id: &str) -> Result<Option<Lease>> {
         let now = Utc::now().to_rfc3339();
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM leases WHERE action_id = ?1 AND expires_at > ?2",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM leases WHERE action_id = ?1 AND expires_at > ?2")?;
         let mut rows = stmt.query(params![action_id, now])?;
         if let Some(row) = rows.next()? {
             Ok(Some(self.row_to_lease(row)?))
@@ -149,9 +163,9 @@ impl LeaseStore {
 
     pub fn get_agent_leases(&self, agent_id: &str) -> Result<Vec<Lease>> {
         let now = Utc::now().to_rfc3339();
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM leases WHERE agent_id = ?1 AND expires_at > ?2",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM leases WHERE agent_id = ?1 AND expires_at > ?2")?;
         let rows = stmt.query_map(params![agent_id, now], |row| self.row_to_lease(row))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -161,9 +175,11 @@ impl LeaseStore {
             id: row.get("id")?,
             action_id: row.get("action_id")?,
             agent_id: row.get("agent_id")?,
-            acquired_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("acquired_at")?)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
+            acquired_at: chrono::DateTime::parse_from_rfc3339(
+                &row.get::<_, String>("acquired_at")?,
+            )
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now()),
             expires_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("expires_at")?)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
@@ -227,10 +243,13 @@ mod tests {
         store.acquire("a-1", "agent-1", Some(1)).unwrap();
 
         let expired = Utc::now() - Duration::minutes(5);
-        store.conn.execute(
-            "UPDATE leases SET expires_at = ?1 WHERE action_id = ?2",
-            params![expired.to_rfc3339(), "a-1"],
-        ).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE leases SET expires_at = ?1 WHERE action_id = ?2",
+                params![expired.to_rfc3339(), "a-1"],
+            )
+            .unwrap();
 
         let cleaned = store.cleanup().unwrap();
         assert_eq!(cleaned, 1);

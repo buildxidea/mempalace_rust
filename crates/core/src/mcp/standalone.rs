@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::{de::DeserializeOwned, Serialize, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 /// An entry with optional TTL.
@@ -93,10 +93,11 @@ impl InMemoryStore {
         let store = self.store.read().await;
         match store.get(key) {
             Some(entry_val) => {
-                let entry: Entry<serde_json::Value> = match serde_json::from_value(entry_val.clone()) {
-                    Ok(e) => e,
-                    Err(_) => return false,
-                };
+                let entry: Entry<serde_json::Value> =
+                    match serde_json::from_value(entry_val.clone()) {
+                        Ok(e) => e,
+                        Err(_) => return false,
+                    };
                 !entry.is_expired()
             }
             None => false,
@@ -147,7 +148,7 @@ use std::sync::OnceLock;
 static STANDALONE_STORE: OnceLock<InMemoryStore> = OnceLock::new();
 
 /// Get the global standalone store instance.
-pub fn get_standalone_store() ->&'static InMemoryStore {
+pub fn get_standalone_store() -> &'static InMemoryStore {
     STANDALONE_STORE.get_or_init(InMemoryStore::new)
 }
 
@@ -168,7 +169,7 @@ pub fn should_use_standalone_mode() -> bool {
 }
 
 /// Check if the MemPalace server at the given URL is reachable.
-fn is_server_reachable(url:&str) -> bool {
+fn is_server_reachable(url: &str) -> bool {
     // Simple TCP check — try to connect to the host
     let url = url.trim_end_matches('/');
     let has_scheme = url.starts_with("http://") || url.starts_with("https://");

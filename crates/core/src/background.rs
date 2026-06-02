@@ -2,8 +2,9 @@
 //!
 //! Schedules and runs long-running periodic tasks using tokio intervals:
 //! - Auto-forget (60 min): evicts old memories based on age heuristics
-//! - Consolidation (2h): placeholder for consolidation_pipeline::run_consolidation_pipeline
-//! - Lesson decay (daily): logs potential lesson decay (actual decay needs higher-level API)
+//! - Consolidation (2h): synthesizes long-term memories via the configured LLM
+//!   provider and persists them as insights (no-op when no LLM is configured)
+//! - Lesson decay (daily): applies Ebbinghaus decay and persists reduced confidence
 //! - Insight decay (daily): removes stale insights
 //! - Index persistence (periodic): flushes palace state to disk
 
@@ -24,8 +25,8 @@ const INDEX_PERSIST_INTERVAL_MINUTES: u64 = 30;
 ///
 /// Spawns tokio tasks on intervals for:
 /// - Auto-forget: evicts memories that have decayed below retention threshold
-/// - Consolidation: placeholder for the 3-stage consolidation pipeline
-/// - Lesson decay: logs potential lesson decay (decay implementation needs higher-level API)
+/// - Consolidation: LLM-driven synthesis of long-term memories, persisted as insights
+/// - Lesson decay: applies Ebbinghaus decay and persists reduced confidence
 /// - Insight decay: removes low-confidence stale insights
 /// - Index persistence: flushes vector index to disk
 pub struct BackgroundRunner {
@@ -109,26 +110,60 @@ impl BackgroundRunner {
     ///
     /// The actual consolidation pipeline requires LLM provider and other dependencies.
     /// This is a placeholder that logs the intent.
-    async fn run_consolidation(&self) -> Result<crate::consolidation_pipeline::PipelineResult, anyhow::Error> {
+    /// Run the consolidation pipeline: synthesize long-term memories from
+    /// stored drawers via the configured LLM provider and persist them as
+    /// insights. Requires an LLM provider — when none is configured
+    /// (`create_llm_provider_from_env` yields the noop provider) this is a
+    /// no-op, since consolidation is inherently LLM-driven.
+    async fn run_consolidation(
+        &self,
+    ) -> Result<crate::consolidation_pipeline::PipelineResult, anyhow::Error> {
         use crate::consolidation_pipeline::PipelineResult;
 
-        // Placeholder - actual implementation would call run_consolidation_pipeline
-        info!("Consolidation task triggered (placeholder - full pipeline not yet wired)");
+        let provider = crate::llm::create_llm_provider_from_env();
+        if provider.name() == "noop" {
+            info!(
+                "Consolidation skipped: no LLM provider configured (set OPENAI_API_KEY/ANTHROPIC_API_KEY)"
+            );
+            return Ok(PipelineResult::default());
+        }
+
+        let mut db = crate::palace_db::PalaceDb::open(&self.palace_path)?;
+        let observations = gather_observations(&db, 500);
+        let existing = db.get_memories(None, 500);
+
+        let result =
+            crate::consolidation::consolidate(provider.as_ref(), &observations, &existing).await;
+
+        // Persist synthesized memories as insights (mempalace's semantic store).
+        let now = chrono::Utc::now().to_rfc3339();
+        let stamp = chrono::Utc::now().timestamp_millis();
+        for (i, m) in result.memories.iter().enumerate() {
+            let rec = crate::palace_db::InsightRecord {
+                id: format!("consolidated-{stamp}-{i}"),
+                content: format!("{}: {}", m.title, m.content),
+                confidence: m.strength,
+                project: m.project.clone(),
+                cluster_id: m.concepts.first().cloned().unwrap_or_default(),
+                reinforced_count: 0,
+                created_at: now.clone(),
+            };
+            if let Err(e) = db.insight_create(&rec) {
+                warn!("Failed to persist consolidated insight {}: {}", rec.id, e);
+            }
+        }
 
         Ok(PipelineResult {
-            semantic_new_facts: 0,
+            semantic_new_facts: result.consolidated,
             procedural_new: 0,
             semantic_decayed: 0,
             procedural_decayed: 0,
         })
     }
 
-    /// Run lesson decay: log potential decay (actual implementation needs higher-level API).
-    ///
-    /// Note: PalaceDb lesson_list returns LessonRecord but doesn't have a lesson_update method.
-    /// This method logs the potential decay rather than applying it directly.
+    /// Run lesson decay: apply Ebbinghaus decay and persist the reduced confidence.
     fn run_lesson_decay(&self) -> Result<LessonDecayResult, anyhow::Error> {
-        let db = crate::palace_db::PalaceDb::open(&self.palace_path)?;
+        let mut db = crate::palace_db::PalaceDb::open(&self.palace_path)?;
         let lessons = db.lesson_list(None, None)?;
 
         let mut decayed = 0;
@@ -139,9 +174,10 @@ impl BackgroundRunner {
             // Apply Ebbinghaus decay: confidence = max(0.1, confidence * 0.9)
             let new_confidence = (lesson.confidence * decay_rate).max(min_confidence_threshold);
             if new_confidence < lesson.confidence {
-                // Log but don't actually update since PalaceDb doesn't have lesson_update
-                info!("Lesson {} would decay from {:.3} to {:.3}", lesson.id, lesson.confidence, new_confidence);
-                decayed += 1;
+                match db.lesson_set_confidence(&lesson.id, new_confidence) {
+                    Ok(_) => decayed += 1,
+                    Err(e) => warn!("Failed to decay lesson {}: {}", lesson.id, e),
+                }
             }
         }
 
@@ -185,6 +221,65 @@ impl BackgroundRunner {
 
         Ok(IndexPersistResult { persisted: true })
     }
+}
+
+/// Synthesize [`CompressedObservation`]s from stored drawers so the LLM-driven
+/// consolidation engine has input. Uses room/wing metadata as concepts (so
+/// related drawers group together) and a default importance that passes the
+/// engine's `importance >= 5` filter.
+fn gather_observations(
+    db: &crate::palace_db::PalaceDb,
+    limit: usize,
+) -> Vec<crate::types::CompressedObservation> {
+    use crate::types::{CompressedObservation, ObservationType};
+    let mut observations = Vec::new();
+    for qr in db.get_all(None, None, limit) {
+        for ((id, content), metadata) in qr.ids.into_iter().zip(qr.documents).zip(qr.metadatas) {
+            let get = |k: &str| metadata.get(k).and_then(|v| v.as_str()).map(String::from);
+            let title = get("title").unwrap_or_else(|| {
+                content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(80)
+                    .collect()
+            });
+            if title.trim().is_empty() {
+                continue;
+            }
+            let mut concepts = Vec::new();
+            for key in ["room", "wing"] {
+                if let Some(v) = get(key) {
+                    if v != "unknown" && !v.is_empty() {
+                        concepts.push(v);
+                    }
+                }
+            }
+            let session_id = get("session_id")
+                .or_else(|| get("source_file"))
+                .unwrap_or_else(|| id.clone());
+            observations.push(CompressedObservation {
+                id,
+                session_id,
+                timestamp: Utc::now(),
+                observation_type: ObservationType::Other,
+                title,
+                subtitle: None,
+                facts: vec![],
+                narrative: content,
+                concepts,
+                files: get("source_file").into_iter().collect(),
+                importance: 5,
+                confidence: 0.5,
+                image_ref: None,
+                image_description: None,
+                modality: "text".to_string(),
+                agent_id: None,
+            });
+        }
+    }
+    observations
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +565,39 @@ mod tests {
     }
 
     #[test]
+    fn test_lesson_decay_persists() {
+        use crate::palace_db::{LessonRecord, PalaceDb};
+        let path = test_palace_path();
+        {
+            let mut db = PalaceDb::open(&path).unwrap();
+            db.lesson_create(&LessonRecord {
+                id: "lesson-decay-1".to_string(),
+                content: "always run tests before commit".to_string(),
+                context: "ci".to_string(),
+                confidence: 1.0,
+                project: "demo".to_string(),
+                tags: String::new(),
+                reinforced_at: chrono::Utc::now().to_rfc3339(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .unwrap();
+        }
+
+        let runner = BackgroundRunner::new(path.clone());
+        let result = runner.run_lesson_decay().unwrap();
+        assert_eq!(result.decayed, 1, "one lesson should decay");
+
+        let db = PalaceDb::open(&path).unwrap();
+        let lessons = db.lesson_list(None, None).unwrap();
+        let lesson = lessons.iter().find(|l| l.id == "lesson-decay-1").unwrap();
+        assert!(
+            (lesson.confidence - 0.9).abs() < 1e-9,
+            "confidence should be persisted as 0.9, got {}",
+            lesson.confidence
+        );
+    }
+
+    #[test]
     fn test_insight_decay_with_empty_palace() {
         let path = test_palace_path();
         let runner = BackgroundRunner::new(path);
@@ -496,5 +624,40 @@ mod tests {
         assert_eq!(LESSON_DECAY_INTERVAL_MINUTES, 1440);
         assert_eq!(INSIGHT_DECAY_INTERVAL_MINUTES, 1440);
         assert_eq!(INDEX_PERSIST_INTERVAL_MINUTES, 30);
+    }
+
+    #[tokio::test]
+    async fn test_consolidation_skips_without_llm() {
+        let _lock = crate::test_env_lock().lock().unwrap();
+        // SAFETY: env mutation serialized under test_env_lock.
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var("ANTHROPIC_API_KEY");
+            std::env::remove_var("OPENAI_BASE_URL");
+        }
+        let path = test_palace_path();
+        let runner = BackgroundRunner::new(path);
+        let result = runner.run_consolidation().await.unwrap();
+        // No LLM configured -> consolidation is a no-op.
+        assert_eq!(result.semantic_new_facts, 0);
+    }
+
+    #[test]
+    fn test_gather_observations_from_drawers() {
+        use crate::palace_db::PalaceDb;
+        let path = test_palace_path();
+        let mut db = PalaceDb::open(&path).unwrap();
+        db.add(
+            &[("d1", "content about auth tokens")],
+            &[&[("wing", "proj"), ("room", "auth"), ("title", "T1")]],
+        )
+        .unwrap();
+        db.flush().unwrap();
+
+        let obs = gather_observations(&db, 10);
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].title, "T1");
+        assert_eq!(obs[0].importance, 5);
+        assert!(obs[0].concepts.contains(&"auth".to_string()));
     }
 }

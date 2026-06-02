@@ -1,6 +1,5 @@
 /// Consolidation prompt templates.
 /// 1:1 port from agentmemory `src/prompts/consolidation.ts`.
-
 use crate::types::CompressedObservation;
 
 /// System prompt for semantic memory merging.
@@ -77,7 +76,12 @@ mod tests {
     use crate::types::ObservationType;
     use chrono::Utc;
 
-    fn make_compressed_obs(id: &str, title: &str, narrative: &str, concepts: Vec<&str>) -> CompressedObservation {
+    fn make_compressed_obs(
+        id: &str,
+        title: &str,
+        narrative: &str,
+        concepts: Vec<&str>,
+    ) -> CompressedObservation {
         CompressedObservation {
             id: id.to_string(),
             session_id: "sess-1".to_string(),
@@ -115,8 +119,18 @@ mod tests {
     #[test]
     fn test_build_semantic_merge_prompt() {
         let episodes = vec![
-            make_compressed_obs("obs-1", "Architectural decision", "We decided to use SQLite for persistence.", vec!["SQLite", "persistence"]),
-            make_compressed_obs("obs-2", "Database setup", "Discovered that SQLite is an embedded database.", vec!["SQLite"]),
+            make_compressed_obs(
+                "obs-1",
+                "Architectural decision",
+                "We decided to use SQLite for persistence.",
+                vec!["SQLite", "persistence"],
+            ),
+            make_compressed_obs(
+                "obs-2",
+                "Database setup",
+                "Discovered that SQLite is an embedded database.",
+                vec!["SQLite"],
+            ),
         ];
 
         let prompt = build_semantic_merge_prompt(&episodes);

@@ -22,8 +22,7 @@ pub fn calculate_retention(
     let elapsed = now.signed_duration_since(retention_score.last_accessed);
     let elapsed_days = elapsed.num_seconds() as f64 / 86400.0;
 
-    let retention = config.initial_retention
-        * (-config.decay_rate * elapsed_days).exp();
+    let retention = config.initial_retention * (-config.decay_rate * elapsed_days).exp();
 
     retention.max(0.0).min(1.0)
 }

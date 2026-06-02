@@ -241,7 +241,7 @@ pub struct Config {
     /// "all-MiniLM-L6-v2" = fast English embeddings
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
-#[serde(default)]
+    #[serde(default)]
     pub languages: Vec<String>,
     #[serde(default)]
     pub llm_provider: Option<String>,

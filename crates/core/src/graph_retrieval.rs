@@ -40,7 +40,8 @@ pub fn search_by_entities(
     let mut visited_entities = HashSet::new();
     let mut visited_edges = HashSet::new();
     let mut relationships = Vec::new();
-    let mut queue: VecDeque<(String, usize)> = entity_names.iter().map(|n| (n.to_string(), 0)).collect();
+    let mut queue: VecDeque<(String, usize)> =
+        entity_names.iter().map(|n| (n.to_string(), 0)).collect();
 
     for name in entity_names {
         visited_entities.insert(name.to_lowercase().replace(' ', "_").replace('\'', ""));
@@ -140,7 +141,10 @@ pub fn graph_stats(kg: &KnowledgeGraph) -> Result<HashMap<String, usize>> {
     map.insert("total_triples".to_string(), stats.total_triples);
     map.insert("current_facts".to_string(), stats.current_facts);
     map.insert("expired_facts".to_string(), stats.expired_facts);
-    map.insert("relationship_types".to_string(), stats.relationship_types.len());
+    map.insert(
+        "relationship_types".to_string(),
+        stats.relationship_types.len(),
+    );
     Ok(map)
 }
 
@@ -157,8 +161,32 @@ mod tests {
     #[test]
     fn test_search_by_entities_single_entity() {
         let mut kg = test_kg();
-        kg.add_triple("Alice", "works_at", "Acme", None, None, Some(0.9), None, None, None, None).unwrap();
-        kg.add_triple("Alice", "knows", "Bob", None, None, Some(0.7), None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "Acme",
+            None,
+            None,
+            Some(0.9),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        kg.add_triple(
+            "Alice",
+            "knows",
+            "Bob",
+            None,
+            None,
+            Some(0.7),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let result = search_by_entities(&kg, &["Alice"], 2, 10).unwrap();
         assert!(!result.entities.is_empty());
@@ -168,9 +196,45 @@ mod tests {
     #[test]
     fn test_search_by_entities_with_depth() {
         let mut kg = test_kg();
-        kg.add_triple("A", "knows", "B", None, None, Some(0.8), None, None, None, None).unwrap();
-        kg.add_triple("B", "knows", "C", None, None, Some(0.8), None, None, None, None).unwrap();
-        kg.add_triple("C", "knows", "D", None, None, Some(0.8), None, None, None, None).unwrap();
+        kg.add_triple(
+            "A",
+            "knows",
+            "B",
+            None,
+            None,
+            Some(0.8),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        kg.add_triple(
+            "B",
+            "knows",
+            "C",
+            None,
+            None,
+            Some(0.8),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        kg.add_triple(
+            "C",
+            "knows",
+            "D",
+            None,
+            None,
+            Some(0.8),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let result = search_by_entities(&kg, &["A"], 1, 10).unwrap();
         assert!(result.relationships.len() >= 1);
@@ -182,7 +246,19 @@ mod tests {
     fn test_search_by_entities_with_limit() {
         let mut kg = test_kg();
         for i in 0..10 {
-            kg.add_triple("Root", &format!("rel_{}", i), &format!("Target{}", i), None, None, Some(0.5), None, None, None, None).unwrap();
+            kg.add_triple(
+                "Root",
+                &format!("rel_{}", i),
+                &format!("Target{}", i),
+                None,
+                None,
+                Some(0.5),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
         }
 
         let result = search_by_entities(&kg, &["Root"], 1, 3).unwrap();
@@ -192,18 +268,67 @@ mod tests {
     #[test]
     fn test_expand_from_chunks() {
         let mut kg = test_kg();
-        kg.add_triple("obs-1", "mentions", "Alice", None, None, Some(0.8), None, None, None, None).unwrap();
-        kg.add_triple("obs-2", "mentions", "Bob", None, None, Some(0.8), None, None, None, None).unwrap();
+        kg.add_triple(
+            "obs-1",
+            "mentions",
+            "Alice",
+            None,
+            None,
+            Some(0.8),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        kg.add_triple(
+            "obs-2",
+            "mentions",
+            "Bob",
+            None,
+            None,
+            Some(0.8),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
-        let result = expand_from_chunks(&kg, &["obs-1".to_string(), "obs-2".to_string()], 1, 10).unwrap();
+        let result =
+            expand_from_chunks(&kg, &["obs-1".to_string(), "obs-2".to_string()], 1, 10).unwrap();
         assert!(!result.entities.is_empty());
     }
 
     #[test]
     fn test_query_by_predicate() {
         let mut kg = test_kg();
-        kg.add_triple("Alice", "works_at", "Acme", None, None, Some(0.9), None, None, None, None).unwrap();
-        kg.add_triple("Bob", "works_at", "NewCo", None, None, Some(0.9), None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "Acme",
+            None,
+            None,
+            Some(0.9),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        kg.add_triple(
+            "Bob",
+            "works_at",
+            "NewCo",
+            None,
+            None,
+            Some(0.9),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let results = query_by_predicate(&kg, "works_at", None).unwrap();
         assert_eq!(results.len(), 2);
@@ -214,7 +339,10 @@ mod tests {
     fn test_graph_stats() {
         let mut kg = test_kg();
         kg.add_entity("Alice", "person", None).unwrap();
-        kg.add_triple("Alice", "knows", "Bob", None, None, None, None, None, None, None).unwrap();
+        kg.add_triple(
+            "Alice", "knows", "Bob", None, None, None, None, None, None, None,
+        )
+        .unwrap();
 
         let stats = graph_stats(&kg).unwrap();
         assert_eq!(stats["total_entities"], 2);

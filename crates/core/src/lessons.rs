@@ -154,10 +154,20 @@ impl LessonStore {
                     tags: serde_json::from_str(&tags).unwrap_or_default(),
                     reinforcement_count: row.get(9)?,
                     decay_rate: row.get(10)?,
-                    last_reinforced: row.get::<_, Option<String>>(11)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-                    last_decayed_at: row.get::<_, Option<String>>(12)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-                    updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(13)?).unwrap().with_timezone(&Utc),
-                    created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(14)?).unwrap().with_timezone(&Utc),
+                    last_reinforced: row
+                        .get::<_, Option<String>>(11)?
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    last_decayed_at: row
+                        .get::<_, Option<String>>(12)?
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(13)?)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(14)?)
+                        .unwrap()
+                        .with_timezone(&Utc),
                     deleted: row.get::<_, i32>(15)? != 0,
                 })
             })?
@@ -165,14 +175,20 @@ impl LessonStore {
             .collect();
 
         if let Some(proj) = project {
-            Ok(lessons.into_iter().filter(|l| l.project.as_deref() == Some(proj)).take(limit).collect())
+            Ok(lessons
+                .into_iter()
+                .filter(|l| l.project.as_deref() == Some(proj))
+                .take(limit)
+                .collect())
         } else {
             Ok(lessons)
         }
     }
 
     pub fn strengthen(&self, id: &str) -> Result<Lesson> {
-        let mut lesson = self.get(id)?.ok_or_else(|| anyhow::anyhow!("Lesson not found"))?;
+        let mut lesson = self
+            .get(id)?
+            .ok_or_else(|| anyhow::anyhow!("Lesson not found"))?;
         if lesson.deleted {
             return Err(anyhow::anyhow!("Lesson is deleted"));
         }
@@ -244,10 +260,20 @@ impl LessonStore {
                 tags: serde_json::from_str(&tags).unwrap_or_default(),
                 reinforcement_count: row.get(9)?,
                 decay_rate: row.get(10)?,
-                last_reinforced: row.get::<_, Option<String>>(11)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-                last_decayed_at: row.get::<_, Option<String>>(12)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(13)?).unwrap().with_timezone(&Utc),
-                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(14)?).unwrap().with_timezone(&Utc),
+                last_reinforced: row
+                    .get::<_, Option<String>>(11)?
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+                last_decayed_at: row
+                    .get::<_, Option<String>>(12)?
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(13)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(14)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
                 deleted: row.get::<_, i32>(15)? != 0,
             }))
         } else {
@@ -262,12 +288,21 @@ impl LessonStore {
                                   last_reinforced, last_decayed_at, updated_at, created_at, deleted)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
-                lesson.id, lesson.content, lesson.context, lesson.retention, lesson.confidence,
-                lesson.project, lesson.source, serde_json::to_string(&lesson.source_ids)?,
-                serde_json::to_string(&lesson.tags)?, lesson.reinforcement_count, lesson.decay_rate,
+                lesson.id,
+                lesson.content,
+                lesson.context,
+                lesson.retention,
+                lesson.confidence,
+                lesson.project,
+                lesson.source,
+                serde_json::to_string(&lesson.source_ids)?,
+                serde_json::to_string(&lesson.tags)?,
+                lesson.reinforcement_count,
+                lesson.decay_rate,
                 lesson.last_reinforced.map(|d| d.to_rfc3339()),
                 lesson.last_decayed_at.map(|d| d.to_rfc3339()),
-                lesson.updated_at.to_rfc3339(), lesson.created_at.to_rfc3339(),
+                lesson.updated_at.to_rfc3339(),
+                lesson.created_at.to_rfc3339(),
                 lesson.deleted as i32
             ],
         )?;
@@ -282,12 +317,21 @@ impl LessonStore {
                                 last_reinforced=?12, last_decayed_at=?13,
                                 updated_at=?14, deleted=?15 WHERE id=?1",
             params![
-                lesson.id, lesson.content, lesson.context, lesson.retention, lesson.confidence,
-                lesson.project, lesson.source, serde_json::to_string(&lesson.source_ids)?,
-                serde_json::to_string(&lesson.tags)?, lesson.reinforcement_count, lesson.decay_rate,
+                lesson.id,
+                lesson.content,
+                lesson.context,
+                lesson.retention,
+                lesson.confidence,
+                lesson.project,
+                lesson.source,
+                serde_json::to_string(&lesson.source_ids)?,
+                serde_json::to_string(&lesson.tags)?,
+                lesson.reinforcement_count,
+                lesson.decay_rate,
                 lesson.last_reinforced.map(|d| d.to_rfc3339()),
                 lesson.last_decayed_at.map(|d| d.to_rfc3339()),
-                lesson.updated_at.to_rfc3339(), lesson.deleted as i32
+                lesson.updated_at.to_rfc3339(),
+                lesson.deleted as i32
             ],
         )?;
         Ok(())
@@ -322,7 +366,17 @@ mod tests {
     #[test]
     fn test_save_creates_lesson() {
         let store = test_store();
-        let lesson = store.save("Always use Rust", None, 0.8, None, vec![], Some("manual"), vec![]).unwrap();
+        let lesson = store
+            .save(
+                "Always use Rust",
+                None,
+                0.8,
+                None,
+                vec![],
+                Some("manual"),
+                vec![],
+            )
+            .unwrap();
         assert!(lesson.id.starts_with("lsn-"));
         assert_eq!(lesson.content, "Always use Rust");
         assert!((lesson.confidence - 0.8).abs() < 0.01);
@@ -331,8 +385,12 @@ mod tests {
     #[test]
     fn test_save_deduplicates_and_strengthens() {
         let store = test_store();
-        store.save("Always use Rust", None, 0.5, None, vec![], None, vec![]).unwrap();
-        let lesson2 = store.save("always use rust", None, 0.5, None, vec![], None, vec![]).unwrap();
+        store
+            .save("Always use Rust", None, 0.5, None, vec![], None, vec![])
+            .unwrap();
+        let lesson2 = store
+            .save("always use rust", None, 0.5, None, vec![], None, vec![])
+            .unwrap();
         assert_eq!(lesson2.reinforcement_count, 1);
         assert!(lesson2.confidence > 0.5);
     }
@@ -340,8 +398,28 @@ mod tests {
     #[test]
     fn test_recall_scores_by_relevance() {
         let store = test_store();
-        store.save("JWT auth middleware", None, 0.8, None, vec!["auth".to_string()], None, vec![]).unwrap();
-        store.save("CSS layout fix", None, 0.8, None, vec!["css".to_string()], None, vec![]).unwrap();
+        store
+            .save(
+                "JWT auth middleware",
+                None,
+                0.8,
+                None,
+                vec!["auth".to_string()],
+                None,
+                vec![],
+            )
+            .unwrap();
+        store
+            .save(
+                "CSS layout fix",
+                None,
+                0.8,
+                None,
+                vec!["css".to_string()],
+                None,
+                vec![],
+            )
+            .unwrap();
         let results = store.recall("JWT auth", None, 0.1, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].0.content.contains("JWT"));
@@ -350,8 +428,12 @@ mod tests {
     #[test]
     fn test_list_filters_by_project() {
         let store = test_store();
-        store.save("Lesson A", None, 0.8, Some("proj-a"), vec![], None, vec![]).unwrap();
-        store.save("Lesson B", None, 0.8, Some("proj-b"), vec![], None, vec![]).unwrap();
+        store
+            .save("Lesson A", None, 0.8, Some("proj-a"), vec![], None, vec![])
+            .unwrap();
+        store
+            .save("Lesson B", None, 0.8, Some("proj-b"), vec![], None, vec![])
+            .unwrap();
         let lessons = store.list(Some("proj-a"), 0.0, 10).unwrap();
         assert_eq!(lessons.len(), 1);
         assert_eq!(lessons[0].content, "Lesson A");
@@ -360,7 +442,9 @@ mod tests {
     #[test]
     fn test_strengthen_increases_confidence() {
         let store = test_store();
-        let lesson = store.save("Test lesson", None, 0.5, None, vec![], None, vec![]).unwrap();
+        let lesson = store
+            .save("Test lesson", None, 0.5, None, vec![], None, vec![])
+            .unwrap();
         let strengthened = store.strengthen(&lesson.id).unwrap();
         assert!(strengthened.confidence > 0.5);
         assert_eq!(strengthened.reinforcement_count, 1);
@@ -369,7 +453,9 @@ mod tests {
     #[test]
     fn test_decay_sweep_reduces_confidence() {
         let store = test_store();
-        let mut lesson = store.save("Old lesson", None, 0.8, None, vec![], None, vec![]).unwrap();
+        let mut lesson = store
+            .save("Old lesson", None, 0.8, None, vec![], None, vec![])
+            .unwrap();
         lesson.created_at = Utc::now() - chrono::Duration::weeks(4);
         lesson.last_reinforced = Some(Utc::now() - chrono::Duration::weeks(4));
         store.update(&lesson).unwrap();
@@ -382,8 +468,12 @@ mod tests {
     #[test]
     fn test_list_filters_by_min_confidence() {
         let store = test_store();
-        store.save("High conf", None, 0.9, None, vec![], None, vec![]).unwrap();
-        store.save("Low conf", None, 0.2, None, vec![], None, vec![]).unwrap();
+        store
+            .save("High conf", None, 0.9, None, vec![], None, vec![])
+            .unwrap();
+        store
+            .save("Low conf", None, 0.2, None, vec![], None, vec![])
+            .unwrap();
         let lessons = store.list(None, 0.5, 10).unwrap();
         assert_eq!(lessons.len(), 1);
         assert_eq!(lessons[0].content, "High conf");
@@ -392,7 +482,9 @@ mod tests {
     #[test]
     fn test_recall_empty_query() {
         let store = test_store();
-        store.save("Test lesson", None, 0.8, None, vec![], None, vec![]).unwrap();
+        store
+            .save("Test lesson", None, 0.8, None, vec![], None, vec![])
+            .unwrap();
         let results = store.recall("", None, 0.1, 10).unwrap();
         assert!(results.is_empty());
     }

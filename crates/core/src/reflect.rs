@@ -40,7 +40,10 @@ pub fn build_reflect_prompt(observations: &[CompressedObservation]) -> String {
             )
         })
         .collect();
-    format!("Analyze these observations and generate insights:\n\n{}", items.join("\n"))
+    format!(
+        "Analyze these observations and generate insights:\n\n{}",
+        items.join("\n")
+    )
 }
 
 pub fn parse_insights_xml(xml: &str) -> Result<Vec<Insight>> {
@@ -81,7 +84,10 @@ pub fn parse_insights_xml(xml: &str) -> Result<Vec<Insight>> {
 
         let now = Utc::now();
         insights.push(Insight {
-            id: format!("insight-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()),
+            id: format!(
+                "insight-{}",
+                uuid::Uuid::new_v4().to_string()[..8].to_string()
+            ),
             title,
             content,
             confidence,
@@ -264,28 +270,26 @@ mod tests {
     #[test]
     fn test_apply_decay() {
         let now = Utc::now();
-        let mut insights = vec![
-            Insight {
-                id: "i-1".into(),
-                title: "Test".into(),
-                content: "Content".into(),
-                confidence: 0.9,
-                reinforcements: 0,
-                source_observation_id: None,
-                source_concept_cluster: None,
-                source_memory_ids: vec![],
-                source_lesson_ids: vec![],
-                source_crystal_ids: vec![],
-                project: None,
-                tags: vec![],
-                decay_rate: 0.05,
-                last_reinforced_at: Some(now - chrono::Duration::days(10)),
-                last_decayed_at: None,
-                updated_at: now,
-                deleted: false,
-                created_at: now,
-            },
-        ];
+        let mut insights = vec![Insight {
+            id: "i-1".into(),
+            title: "Test".into(),
+            content: "Content".into(),
+            confidence: 0.9,
+            reinforcements: 0,
+            source_observation_id: None,
+            source_concept_cluster: None,
+            source_memory_ids: vec![],
+            source_lesson_ids: vec![],
+            source_crystal_ids: vec![],
+            project: None,
+            tags: vec![],
+            decay_rate: 0.05,
+            last_reinforced_at: Some(now - chrono::Duration::days(10)),
+            last_decayed_at: None,
+            updated_at: now,
+            deleted: false,
+            created_at: now,
+        }];
         let results = apply_decay(&mut insights, 0.05);
         assert_eq!(results.len(), 1);
         assert!(results[0].new_confidence < results[0].old_confidence);
@@ -354,9 +358,17 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LlmProvider for MockLlm {
-        fn name(&self) -> &str { "mock" }
-        fn model(&self) -> &str { "mock-model" }
-        async fn complete(&self, _system: &str, _prompt: &str) -> Result<crate::llm::provider::LlmCompletion, crate::llm::provider::LlmError> {
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn model(&self) -> &str {
+            "mock-model"
+        }
+        async fn complete(
+            &self,
+            _system: &str,
+            _prompt: &str,
+        ) -> Result<crate::llm::provider::LlmCompletion, crate::llm::provider::LlmError> {
             Ok(crate::llm::provider::LlmCompletion {
                 text: "<insights></insights>".to_string(),
                 model: "mock".to_string(),
@@ -364,6 +376,8 @@ mod tests {
                 usage: None,
             })
         }
-        async fn check_available(&self) -> Result<(), String> { Ok(()) }
+        async fn check_available(&self) -> Result<(), String> {
+            Ok(())
+        }
     }
 }

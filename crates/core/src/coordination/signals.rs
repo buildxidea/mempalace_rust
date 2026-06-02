@@ -68,7 +68,8 @@ impl SignalStore {
         signal_type: Option<SignalType>,
     ) -> Result<Vec<Signal>> {
         let mut sql = "SELECT * FROM signals WHERE to_agent = ?1".to_string();
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(agent_id.to_string())];
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(agent_id.to_string())];
         let mut param_idx = 2;
 
         if unread_only {
@@ -86,7 +87,8 @@ impl SignalStore {
         }
         sql.push_str(" ORDER BY created_at DESC");
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
             self.row_to_signal(row)
@@ -111,12 +113,16 @@ impl SignalStore {
             let thread_id: String = row.get(0)?;
             let count: i64 = row.get(1)?;
             let participants: String = row.get(2)?;
-            Ok((thread_id, ThreadSummary {
-                count: count as usize,
-                participants: participants.split(',').map(|s| s.to_string()).collect(),
-            }))
+            Ok((
+                thread_id,
+                ThreadSummary {
+                    count: count as usize,
+                    participants: participants.split(',').map(|s| s.to_string()).collect(),
+                },
+            ))
         })?;
-        rows.collect::<Result<HashMap<_, _>, _>>().map_err(Into::into)
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(Into::into)
     }
 }
 
@@ -142,10 +148,12 @@ impl SignalStore {
             created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("created_at")?)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            read_at: row.get::<_, Option<String>>("read_at")?
+            read_at: row
+                .get::<_, Option<String>>("read_at")?
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
-            expires_at: row.get::<_, Option<String>>("expires_at")?
+            expires_at: row
+                .get::<_, Option<String>>("expires_at")?
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
         })
@@ -199,7 +207,9 @@ mod tests {
         s2.signal_type = SignalType::Info;
         store.send(&s2).unwrap();
 
-        let alerts = store.read_signals("Bob", true, None, Some(SignalType::Alert)).unwrap();
+        let alerts = store
+            .read_signals("Bob", true, None, Some(SignalType::Alert))
+            .unwrap();
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].signal_type, SignalType::Alert);
     }
@@ -215,7 +225,9 @@ mod tests {
         s2.thread_id = Some("thread-2".to_string());
         store.send(&s2).unwrap();
 
-        let thread_signals = store.read_signals("Bob", true, Some("thread-1"), None).unwrap();
+        let thread_signals = store
+            .read_signals("Bob", true, Some("thread-1"), None)
+            .unwrap();
         assert_eq!(thread_signals.len(), 1);
         assert_eq!(thread_signals[0].thread_id, Some("thread-1".to_string()));
     }

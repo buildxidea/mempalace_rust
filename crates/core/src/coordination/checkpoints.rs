@@ -1,5 +1,7 @@
 use crate::coordination::actions::ActionStore;
-use crate::types::{Action, ActionEdgeType, ActionStatus, Checkpoint, CheckpointStatus, CheckpointType};
+use crate::types::{
+    Action, ActionEdgeType, ActionStatus, Checkpoint, CheckpointStatus, CheckpointType,
+};
 use anyhow::Result;
 use chrono::Utc;
 use rusqlite::{params, Connection};
@@ -109,7 +111,9 @@ impl CheckpointStore {
     }
 
     pub fn get_checkpoint(&self, id: &str) -> Result<Option<Checkpoint>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM checkpoints WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM checkpoints WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(self.row_to_checkpoint(row)?))
@@ -119,7 +123,9 @@ impl CheckpointStore {
     }
 
     pub fn get_action_checkpoints(&self, action_id: &str) -> Result<Vec<Checkpoint>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM checkpoints WHERE action_id = ?1 ORDER BY created_at")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM checkpoints WHERE action_id = ?1 ORDER BY created_at")?;
         let rows = stmt.query_map(params![action_id], |row| self.row_to_checkpoint(row))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -141,7 +147,8 @@ impl CheckpointStore {
             created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("created_at")?)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            resolved_at: row.get::<_, Option<String>>("resolved_at")?
+            resolved_at: row
+                .get::<_, Option<String>>("resolved_at")?
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
         })
@@ -197,7 +204,9 @@ mod tests {
             created_at: Utc::now(),
             resolved_at: None,
         };
-        checkpoint_store.create_checkpoint(&action_store, &checkpoint, None).unwrap();
+        checkpoint_store
+            .create_checkpoint(&action_store, &checkpoint, None)
+            .unwrap();
 
         let action = action_store.get_action("a-1").unwrap().unwrap();
         assert_eq!(action.status, ActionStatus::Blocked);
@@ -217,9 +226,19 @@ mod tests {
             created_at: Utc::now(),
             resolved_at: None,
         };
-        checkpoint_store.create_checkpoint(&action_store, &checkpoint, None).unwrap();
+        checkpoint_store
+            .create_checkpoint(&action_store, &checkpoint, None)
+            .unwrap();
 
-        checkpoint_store.resolve_checkpoint(&action_store, "cp-1", CheckpointStatus::Passed, "agent-1", None).unwrap();
+        checkpoint_store
+            .resolve_checkpoint(
+                &action_store,
+                "cp-1",
+                CheckpointStatus::Passed,
+                "agent-1",
+                None,
+            )
+            .unwrap();
         let action = action_store.get_action("a-1").unwrap().unwrap();
         assert_eq!(action.status, ActionStatus::Pending);
     }
@@ -239,7 +258,9 @@ mod tests {
             resolved_at: None,
         };
         let expired = Utc::now() - chrono::Duration::minutes(5);
-        checkpoint_store.create_checkpoint(&action_store, &checkpoint, Some(expired)).unwrap();
+        checkpoint_store
+            .create_checkpoint(&action_store, &checkpoint, Some(expired))
+            .unwrap();
 
         let expired_count = checkpoint_store.expire_checkpoints().unwrap();
         assert_eq!(expired_count, 1);
@@ -262,7 +283,9 @@ mod tests {
             created_at: Utc::now(),
             resolved_at: None,
         };
-        checkpoint_store.create_checkpoint(&action_store, &cp1, None).unwrap();
+        checkpoint_store
+            .create_checkpoint(&action_store, &cp1, None)
+            .unwrap();
 
         let cps = checkpoint_store.get_action_checkpoints("a-1").unwrap();
         assert_eq!(cps.len(), 1);

@@ -77,9 +77,7 @@ impl ActionStore {
     }
 
     pub fn get_action(&self, id: &str) -> Result<Option<Action>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM actions WHERE id = ?1",
-        )?;
+        let mut stmt = self.conn.prepare("SELECT * FROM actions WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(self.row_to_action(row)?))
@@ -88,7 +86,11 @@ impl ActionStore {
         }
     }
 
-    pub fn list_actions(&self, project: Option<&str>, status: Option<ActionStatus>) -> Result<Vec<Action>> {
+    pub fn list_actions(
+        &self,
+        project: Option<&str>,
+        status: Option<ActionStatus>,
+    ) -> Result<Vec<Action>> {
         let mut sql = "SELECT * FROM actions WHERE 1=1".to_string();
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -103,7 +105,8 @@ impl ActionStore {
         sql.push_str(" ORDER BY priority ASC, created_at DESC");
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
             self.row_to_action(row)
         })?;
@@ -121,7 +124,12 @@ impl ActionStore {
     }
 
     pub fn add_edge(&self, from_id: &str, to_id: &str, edge_type: ActionEdgeType) -> Result<()> {
-        let id = format!("ae_{}_{}_{}", from_id, to_id, format!("{:?}", edge_type).to_lowercase());
+        let id = format!(
+            "ae_{}_{}_{}",
+            from_id,
+            to_id,
+            format!("{:?}", edge_type).to_lowercase()
+        );
         self.conn.execute(
             "INSERT INTO action_edges (id, from_id, to_id, edge_type) VALUES (?1, ?2, ?3, ?4)",
             params![id, from_id, to_id, format!("{:?}", edge_type)],
@@ -184,7 +192,10 @@ impl ActionStore {
             id: row.get("id")?,
             title: row.get("title")?,
             description: row.get("description")?,
-            status: row.get::<_, String>("status")?.parse().unwrap_or(ActionStatus::Pending),
+            status: row
+                .get::<_, String>("status")?
+                .parse()
+                .unwrap_or(ActionStatus::Pending),
             priority: row.get("priority")?,
             created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("created_at")?)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -196,8 +207,12 @@ impl ActionStore {
             assigned_to: row.get("assigned_to")?,
             project: row.get("project")?,
             tags: serde_json::from_str(&row.get::<_, String>("tags")?).unwrap_or_default(),
-            source_observation_ids: serde_json::from_str(&row.get::<_, String>("source_observation_ids")?).unwrap_or_default(),
-            source_memory_ids: serde_json::from_str(&row.get::<_, String>("source_memory_ids")?).unwrap_or_default(),
+            source_observation_ids: serde_json::from_str(
+                &row.get::<_, String>("source_observation_ids")?,
+            )
+            .unwrap_or_default(),
+            source_memory_ids: serde_json::from_str(&row.get::<_, String>("source_memory_ids")?)
+                .unwrap_or_default(),
             result: row.get("result")?,
             parent_id: row.get("parent_id")?,
             metadata: serde_json::from_str(&row.get::<_, String>("metadata")?).unwrap_or_default(),
@@ -262,7 +277,9 @@ mod tests {
     fn test_update_action_status() {
         let store = test_store();
         store.create_action(&test_action("a-1")).unwrap();
-        store.update_action_status("a-1", ActionStatus::InProgress).unwrap();
+        store
+            .update_action_status("a-1", ActionStatus::InProgress)
+            .unwrap();
         let action = store.get_action("a-1").unwrap().unwrap();
         assert_eq!(action.status, ActionStatus::InProgress);
     }
@@ -272,7 +289,9 @@ mod tests {
         let store = test_store();
         store.create_action(&test_action("a-1")).unwrap();
         store.create_action(&test_action("a-2")).unwrap();
-        store.add_edge("a-1", "a-2", ActionEdgeType::DependsOn).unwrap();
+        store
+            .add_edge("a-1", "a-2", ActionEdgeType::DependsOn)
+            .unwrap();
 
         let deps = store.get_dependencies("a-2").unwrap();
         assert_eq!(deps.len(), 1);
@@ -286,9 +305,13 @@ mod tests {
         let mut a2 = test_action("a-2");
         a2.status = ActionStatus::Blocked;
         store.create_action(&a2).unwrap();
-        store.add_edge("a-1", "a-2", ActionEdgeType::DependsOn).unwrap();
+        store
+            .add_edge("a-1", "a-2", ActionEdgeType::DependsOn)
+            .unwrap();
 
-        store.update_action_status("a-1", ActionStatus::Completed).unwrap();
+        store
+            .update_action_status("a-1", ActionStatus::Completed)
+            .unwrap();
         let a2 = store.get_action("a-2").unwrap().unwrap();
         assert_eq!(a2.status, ActionStatus::Pending);
     }
@@ -298,7 +321,9 @@ mod tests {
         let store = test_store();
         store.create_action(&test_action("a-1")).unwrap();
         store.create_action(&test_action("a-2")).unwrap();
-        store.add_edge("a-1", "a-2", ActionEdgeType::DependsOn).unwrap();
+        store
+            .add_edge("a-1", "a-2", ActionEdgeType::DependsOn)
+            .unwrap();
 
         let dependents = store.get_dependents("a-1").unwrap();
         assert_eq!(dependents.len(), 1);

@@ -2,7 +2,6 @@
 /// from raw observation data without calling an LLM.
 /// 1:1 port from agentmemory `src/functions/compress-synthetic.ts`.
 /// Enhanced with heuristic fact extraction, entity extraction, and importance scoring.
-
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -49,7 +48,10 @@ pub fn infer_type(tool_name: Option<&str>, hook_type: &HookType) -> ObservationT
     if ["fetch", "http", "web"].iter().any(|w| has_word(w)) {
         return ObservationType::WebFetch;
     }
-    if ["grep", "search", "glob", "find"].iter().any(|w| has_word(w)) {
+    if ["grep", "search", "glob", "find"]
+        .iter()
+        .any(|w| has_word(w))
+    {
         return ObservationType::Search;
     }
     if ["bash", "shell", "exec", "run"].iter().any(|w| has_word(w)) {
@@ -78,7 +80,12 @@ pub fn infer_type(tool_name: Option<&str>, hook_type: &HookType) -> ObservationT
 /// 1:1 port of `extractFiles()` from agentmemory.
 pub fn extract_files(input: &Value) -> Vec<String> {
     let file_keys = [
-        "file_path", "filepath", "path", "filePath", "file", "pattern",
+        "file_path",
+        "filepath",
+        "path",
+        "filePath",
+        "file",
+        "pattern",
     ];
 
     let Value::Object(map) = input else {
@@ -141,15 +148,14 @@ pub fn extract_facts(input: &Value) -> Vec<String> {
             parts.join("; ")
         }
         Value::String(s) => s.clone(),
-        Value::Array(arr) => {
-            arr.iter()
-                .filter_map(|v| match v {
-                    Value::String(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        }
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
         _ => return facts,
     };
 
@@ -260,10 +266,26 @@ pub fn extract_entities(input: &Value) -> (Vec<String>, Vec<String>) {
 
     // Extract important keywords
     let important_patterns = [
-        "error", "exception", "warning", "failed", "success",
-        "created", "updated", "deleted", "read", "wrote", "edited",
-        "executed", "ran", "built", "compiled", "tested",
-        "config", "settings", "options", "parameters",
+        "error",
+        "exception",
+        "warning",
+        "failed",
+        "success",
+        "created",
+        "updated",
+        "deleted",
+        "read",
+        "wrote",
+        "edited",
+        "executed",
+        "ran",
+        "built",
+        "compiled",
+        "tested",
+        "config",
+        "settings",
+        "options",
+        "parameters",
     ];
 
     let text_lower = text.to_lowercase();
@@ -276,7 +298,8 @@ pub fn extract_entities(input: &Value) -> (Vec<String>, Vec<String>) {
     }
 
     // Extract error messages
-    let error_regex = regex::Regex::new(r#"(?i)(?:error|exception|failed)[:\s]+([^\n]{5,150})"#).ok();
+    let error_regex =
+        regex::Regex::new(r#"(?i)(?:error|exception|failed)[:\s]+([^\n]{5,150})"#).ok();
     if let Some(re) = error_regex {
         for cap in re.captures_iter(&text) {
             if let Some(m) = cap.get(1) {
@@ -421,9 +444,7 @@ pub fn generate_summary(
             || output_lower.contains("failed")
         {
             parts.push("[FAILED]".to_string());
-        } else if output_lower.contains("success")
-            || output_lower.contains("completed")
-        {
+        } else if output_lower.contains("success") || output_lower.contains("completed") {
             parts.push("[OK]".to_string());
         }
 
@@ -749,7 +770,8 @@ mod tests {
             title: "A good title".to_string(),
             subtitle: None,
             facts: vec!["f1".to_string(), "f2".to_string(), "f3".to_string()],
-            narrative: "This is a narrative that is long enough to get the full score here".to_string(),
+            narrative: "This is a narrative that is long enough to get the full score here"
+                .to_string(),
             concepts: vec!["concept1".to_string()],
             files: vec![],
             importance: 7,

@@ -508,15 +508,24 @@ impl CoordinationDb {
     ) -> anyhow::Result<bool> {
         let mut updated = false;
         if let Some(s) = status {
-            self.conn.execute("UPDATE actions SET status = ?1, updated_at = ?2 WHERE id = ?3", params![s, chrono::Utc::now().to_rfc3339(), id])?;
+            self.conn.execute(
+                "UPDATE actions SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                params![s, chrono::Utc::now().to_rfc3339(), id],
+            )?;
             updated = true;
         }
         if let Some(r) = result {
-            self.conn.execute("UPDATE actions SET description = ?1, updated_at = ?2 WHERE id = ?3", params![r, chrono::Utc::now().to_rfc3339(), id])?;
+            self.conn.execute(
+                "UPDATE actions SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                params![r, chrono::Utc::now().to_rfc3339(), id],
+            )?;
             updated = true;
         }
         if let Some(p) = priority {
-            self.conn.execute("UPDATE actions SET priority = ?1, updated_at = ?2 WHERE id = ?3", params![p, chrono::Utc::now().to_rfc3339(), id])?;
+            self.conn.execute(
+                "UPDATE actions SET priority = ?1, updated_at = ?2 WHERE id = ?3",
+                params![p, chrono::Utc::now().to_rfc3339(), id],
+            )?;
             updated = true;
         }
         Ok(updated)
@@ -545,7 +554,11 @@ impl CoordinationDb {
         }
     }
 
-    pub fn action_add_dependency(&mut self, action_id: &str, depends_on: &str) -> anyhow::Result<()> {
+    pub fn action_add_dependency(
+        &mut self,
+        action_id: &str,
+        depends_on: &str,
+    ) -> anyhow::Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO action_dependencies (action_id, depends_on_action_id) VALUES (?1, ?2)",
             params![action_id, depends_on],
@@ -553,7 +566,11 @@ impl CoordinationDb {
         Ok(())
     }
 
-    pub fn action_list_unblocked(&self, project: Option<&str>, limit: usize) -> anyhow::Result<Vec<Action>> {
+    pub fn action_list_unblocked(
+        &self,
+        project: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Action>> {
         let query = if project.is_some() {
             "SELECT a.id, a.title, a.description, a.status, a.priority, a.project, a.tags, a.parent_id, a.created_at, a.updated_at
              FROM actions a
@@ -646,17 +663,20 @@ impl CoordinationDb {
     }
 
     pub fn lease_release(&mut self, id: &str) -> anyhow::Result<bool> {
-        let rows = self
-            .conn
-            .execute("UPDATE leases SET status = 'released' WHERE id = ?1", params![id])?;
+        let rows = self.conn.execute(
+            "UPDATE leases SET status = 'released' WHERE id = ?1",
+            params![id],
+        )?;
         Ok(rows > 0)
     }
 
     pub fn lease_renew(&mut self, id: &str, ttl_ms: i64) -> anyhow::Result<bool> {
-        let new_expires = (chrono::Utc::now() + chrono::Duration::milliseconds(ttl_ms)).to_rfc3339();
-        let rows = self
-            .conn
-            .execute("UPDATE leases SET expires_at = ?1 WHERE id = ?2 AND status = 'active'", params![new_expires, id])?;
+        let new_expires =
+            (chrono::Utc::now() + chrono::Duration::milliseconds(ttl_ms)).to_rfc3339();
+        let rows = self.conn.execute(
+            "UPDATE leases SET expires_at = ?1 WHERE id = ?2 AND status = 'active'",
+            params![new_expires, id],
+        )?;
         Ok(rows > 0)
     }
 
@@ -718,9 +738,9 @@ impl CoordinationDb {
     }
 
     pub fn routine_list_all(&self) -> anyhow::Result<Vec<Routine>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, steps, created_at FROM routines ORDER BY created_at DESC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, steps, created_at FROM routines ORDER BY created_at DESC")?;
         let mut rows = stmt.query([])?;
         let mut routines = Vec::new();
         while let Some(row) = rows.next()? {
@@ -757,7 +777,9 @@ impl CoordinationDb {
     }
 
     pub fn routine_get(&self, id: &str) -> anyhow::Result<Option<Routine>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, steps, created_at FROM routines WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, steps, created_at FROM routines WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(Routine {
@@ -889,7 +911,8 @@ impl CoordinationDb {
     }
 
     pub fn sentinel_delete(&self, sentinel_id: &str) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM sentinels WHERE id = ?1", params![sentinel_id])?;
+        self.conn
+            .execute("DELETE FROM sentinels WHERE id = ?1", params![sentinel_id])?;
         Ok(())
     }
 
@@ -1004,6 +1027,37 @@ impl EmbeddingDb {
     /// Return the number of drawers stored.
     pub(crate) fn len(&self) -> usize {
         self.documents.len()
+    }
+}
+
+/// Run an async embedding future to completion from a synchronous context,
+/// whether or not a tokio runtime is already active on the current thread.
+///
+/// When called from inside a runtime (the normal MCP/CLI/test case), a bare
+/// `Handle::block_on` panics with "Cannot start a runtime from within a
+/// runtime". We instead offload to a dedicated OS thread that owns its own
+/// runtime — fastembed's internal `spawn_blocking` still works because that
+/// thread has a live runtime. Outside any runtime we just build one inline.
+fn run_off_runtime<T, Fut, M>(make: M) -> anyhow::Result<T>
+where
+    M: FnOnce() -> Fut + Send,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+    T: Send,
+{
+    let run = move || -> anyhow::Result<T> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(make())
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::scope(|s| {
+            s.spawn(run)
+                .join()
+                .map_err(|_| anyhow::anyhow!("embedding worker thread panicked"))?
+        })
+    } else {
+        run()
     }
 }
 
@@ -1124,9 +1178,7 @@ impl PalaceDb {
 
     pub fn slot_append(&mut self, label: &str, text: &str) -> Result<i32, DbErr> {
         let mut conn = self.coordination.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT content, size_limit FROM slots WHERE label = ?1",
-        )?;
+        let mut stmt = conn.prepare("SELECT content, size_limit FROM slots WHERE label = ?1")?;
         let mut rows = stmt.query(params![label])?;
         let (current_content, size_limit): (String, i32) = match rows.next()? {
             Some(row) => (row.get(0)?, row.get(1)?),
@@ -1362,7 +1414,11 @@ impl PalaceDb {
         Ok(())
     }
 
-    pub fn facet_list(&self, target_id: Option<&str>, dimension: Option<&str>) -> Result<Vec<FacetRecord>, DbErr> {
+    pub fn facet_list(
+        &self,
+        target_id: Option<&str>,
+        dimension: Option<&str>,
+    ) -> Result<Vec<FacetRecord>, DbErr> {
         let conn = self.coordination.lock().unwrap();
         let mut facets = Vec::new();
         match (target_id, dimension) {
@@ -1471,7 +1527,11 @@ impl PalaceDb {
         Ok(())
     }
 
-    pub fn lesson_list(&self, project: Option<&str>, min_confidence: Option<f64>) -> Result<Vec<LessonRecord>, DbErr> {
+    pub fn lesson_list(
+        &self,
+        project: Option<&str>,
+        min_confidence: Option<f64>,
+    ) -> Result<Vec<LessonRecord>, DbErr> {
         let conn = self.coordination.lock().unwrap();
         let mut lessons = Vec::new();
         match (project, min_confidence) {
@@ -1573,6 +1633,17 @@ impl PalaceDb {
         Ok(())
     }
 
+    /// Set a lesson's confidence to an explicit value (e.g. after Ebbinghaus decay).
+    /// Returns the number of rows updated.
+    pub fn lesson_set_confidence(&mut self, id: &str, confidence: f64) -> Result<usize, DbErr> {
+        let mut conn = self.coordination.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE lessons SET confidence = ?1 WHERE id = ?2",
+            params![confidence, id],
+        )?;
+        Ok(n)
+    }
+
     pub fn insight_create(&mut self, insight: &InsightRecord) -> Result<(), DbErr> {
         let mut conn = self.coordination.lock().unwrap();
         conn.execute(
@@ -1591,7 +1662,11 @@ impl PalaceDb {
         Ok(())
     }
 
-    pub fn insight_list(&self, project: Option<&str>, min_confidence: Option<f64>) -> Result<Vec<InsightRecord>, DbErr> {
+    pub fn insight_list(
+        &self,
+        project: Option<&str>,
+        min_confidence: Option<f64>,
+    ) -> Result<Vec<InsightRecord>, DbErr> {
         let conn = self.coordination.lock().unwrap();
         let mut insights = Vec::new();
         let sql = match (project, min_confidence) {
@@ -1816,8 +1891,8 @@ impl PalaceDb {
         wing: Option<&str>,
         room: Option<&str>,
     ) -> anyhow::Result<Vec<QueryResult>> {
-        use crate::search::rrf::{fuse_results, SearchStream, StreamResult, RrfConfig};
         use crate::search::diversify::diversify_by_session;
+        use crate::search::rrf::{fuse_results, RrfConfig, SearchStream, StreamResult};
 
         let over_fetch = (limit * 3).min(300);
 
@@ -1868,25 +1943,23 @@ impl PalaceDb {
 
         // Vector search using real embeddings (async embedder in sync context)
         let vector_results: Vec<StreamResult> = {
-            // Try to get current runtime handle, fall back to empty results if none
-            let handle = match tokio::runtime::Handle::try_current() {
-                Ok(h) => h,
-                Err(_) => {
-                    tracing::debug!("no tokio runtime for vector search");
-                    return Ok(vec![]);
-                }
-            };
-            let query_embedding = match handle.block_on(self.embedder.embed(query_text)) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::debug!("embedding failed: {}", e);
-                    return Ok(vec![]);
+            let query_embedding = {
+                let embedder = self.embedder.clone();
+                let q = query_text.to_string();
+                match run_off_runtime(move || async move { embedder.embed(&q).await }) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::debug!("embedding failed: {}", e);
+                        return Ok(vec![]);
+                    }
                 }
             };
             let normalized_query = normalize_embedding(&query_embedding);
 
             // Query embedding db with pre-computed vector
-            let embedding_results = self.embedding_db.query_by_vector(&normalized_query, over_fetch);
+            let embedding_results = self
+                .embedding_db
+                .query_by_vector(&normalized_query, over_fetch);
 
             match embedding_results {
                 Ok(results) => results
@@ -1913,7 +1986,9 @@ impl PalaceDb {
         };
 
         let mut graph_results: Vec<StreamResult> = vec![];
-        if let Ok(kg) = crate::knowledge_graph::KnowledgeGraph::open(&self.palace_path.join("knowledge_graph.db")) {
+        if let Ok(kg) = crate::knowledge_graph::KnowledgeGraph::open(
+            &self.palace_path.join("knowledge_graph.db"),
+        ) {
             let query_words: Vec<&str> = query_lower.split_whitespace().take(5).collect();
             for word in query_words {
                 if let Ok(triples) = kg.query_entity(word, None, None, "both") {
@@ -1939,20 +2014,24 @@ impl PalaceDb {
         let config = RrfConfig::default();
         let fused = fuse_results(&bm25_results, &vector_results, &graph_results, &config);
 
-        let diversified: Vec<_> = fused.into_iter().take(over_fetch).filter_map(|fr| {
-            let doc = self.documents.get(&fr.id)?;
-            let session_id = doc
-                .metadata
-                .get("session_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("default")
-                .to_string();
-            Some(crate::search::diversify::DiversifiableResult {
-                id: fr.id.clone(),
-                session_id,
-                score: fr.combined_score,
+        let diversified: Vec<_> = fused
+            .into_iter()
+            .take(over_fetch)
+            .filter_map(|fr| {
+                let doc = self.documents.get(&fr.id)?;
+                let session_id = doc
+                    .metadata
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default")
+                    .to_string();
+                Some(crate::search::diversify::DiversifiableResult {
+                    id: fr.id.clone(),
+                    session_id,
+                    score: fr.combined_score,
+                })
             })
-        }).collect();
+            .collect();
 
         let diversified = diversify_by_session(&diversified, limit, 3);
 
@@ -2001,7 +2080,8 @@ impl PalaceDb {
             );
 
             // Index document in BM25
-            self.bm25.upsert(bm25::Document::new(id.to_string(), redacted.clone()));
+            self.bm25
+                .upsert(bm25::Document::new(id.to_string(), redacted.clone()));
         }
 
         // Don't auto-save on every add - caller should call flush() when done batching
@@ -2009,7 +2089,9 @@ impl PalaceDb {
     }
 
     /// Sync all documents to embedding index. Call after loading or batch adding.
-    /// Returns Ok(()) if no runtime is available (tests).
+    /// Builds a fresh embedding index over every stored document and installs it
+    /// as `self.embedding_db`. Runs safely whether or not a tokio runtime is
+    /// already active; on embedding failure it logs and leaves the index as-is.
     pub fn sync_embeddings(&mut self) -> anyhow::Result<()> {
         let items: Vec<(String, String)> = self
             .documents
@@ -2019,19 +2101,15 @@ impl PalaceDb {
         if items.is_empty() {
             return Ok(());
         }
-        // Embed async via block_in_place if runtime is available
         let embedder = self.embedder.clone();
-        let items_clone = items;
-        // Check if a runtime is available before attempting async operations
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let result = handle.block_on(async {
-                let mut db = EmbeddingDb::with_embedder(embedder)?;
-                db.add_batch(&items_clone).await
-            });
-            // If embed failed, log but don't fail
-            if let Err(e) = result {
-                tracing::debug!("embedding sync skipped: {}", e);
-            }
+        let built = run_off_runtime(move || async move {
+            let mut db = EmbeddingDb::with_embedder(embedder)?;
+            db.add_batch(&items).await?;
+            anyhow::Ok(db)
+        });
+        match built {
+            Ok(db) => self.embedding_db = db,
+            Err(e) => tracing::debug!("embedding sync skipped: {}", e),
         }
         Ok(())
     }
@@ -2051,7 +2129,8 @@ impl PalaceDb {
                     metadata: metadata.clone(),
                 },
             );
-            self.bm25.upsert(bm25::Document::new(id.clone(), redacted.clone()));
+            self.bm25
+                .upsert(bm25::Document::new(id.clone(), redacted.clone()));
         }
 
         Ok(())
@@ -2187,9 +2266,9 @@ impl PalaceDb {
     ) -> Vec<(String, String, HashMap<String, serde_json::Value>)> {
         ids.iter()
             .filter_map(|id| {
-                self.documents.get(id).map(|entry| {
-                    (id.clone(), entry.content.clone(), entry.metadata.clone())
-                })
+                self.documents
+                    .get(id)
+                    .map(|entry| (id.clone(), entry.content.clone(), entry.metadata.clone()))
             })
             .collect()
     }
@@ -2286,11 +2365,7 @@ impl PalaceDb {
 
     /// Get memories as typed Memory structs from documents.
     /// Falls back to constructing minimal Memory entries when metadata is incomplete.
-    pub fn get_memories(
-        &self,
-        wing: Option<&str>,
-        limit: usize,
-    ) -> Vec<crate::types::Memory> {
+    pub fn get_memories(&self, wing: Option<&str>, limit: usize) -> Vec<crate::types::Memory> {
         let results = self.get_all(wing, None, limit);
         results
             .into_iter()
@@ -2925,7 +3000,8 @@ mod tests {
         std::fs::create_dir_all(&palace).unwrap();
 
         let embedder = crate::embed::NullEmbedder::new(384);
-        let _ = PalaceDb::open_with_embedder(&palace, Arc::new(embedder.clone()), "null-test").unwrap();
+        let _ =
+            PalaceDb::open_with_embedder(&palace, Arc::new(embedder.clone()), "null-test").unwrap();
         let original = crate::embed::EmbeddingManifest::read(&palace)
             .unwrap()
             .unwrap();

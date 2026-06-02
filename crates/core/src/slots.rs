@@ -86,18 +86,23 @@ impl SlotStore {
     }
 
     pub fn delete_slot(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM slots WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM slots WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn list_slots(&self) -> Result<Vec<MemorySlot>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM slots ORDER BY priority ASC, last_updated DESC")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM slots ORDER BY priority ASC, last_updated DESC")?;
         let rows = stmt.query_map([], |row| self.row_to_slot(row))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_pinned_slots(&self) -> Result<Vec<MemorySlot>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM slots WHERE pinned = 1 ORDER BY priority ASC")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM slots WHERE pinned = 1 ORDER BY priority ASC")?;
         let rows = stmt.query_map([], |row| self.row_to_slot(row))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -111,9 +116,11 @@ impl SlotStore {
             content: row.get("content")?,
             token_count: row.get("token_count")?,
             priority: row.get("priority")?,
-            last_updated: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("last_updated")?)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
+            last_updated: chrono::DateTime::parse_from_rfc3339(
+                &row.get::<_, String>("last_updated")?,
+            )
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now()),
         })
     }
 }
@@ -184,7 +191,10 @@ mod tests {
     fn test_get_pinned_slots() {
         let store = test_store();
         store.create_slot(&test_slot("s-1", "pinned-slot")).unwrap();
-        store.conn.execute("UPDATE slots SET pinned = 1 WHERE id = 's-1'", []).unwrap();
+        store
+            .conn
+            .execute("UPDATE slots SET pinned = 1 WHERE id = 's-1'", [])
+            .unwrap();
         let pinned = store.get_pinned_slots().unwrap();
         assert_eq!(pinned.len(), 1);
         assert_eq!(pinned[0].name, "pinned-slot");

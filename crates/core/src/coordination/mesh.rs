@@ -28,7 +28,13 @@ impl Mesh {
         }
     }
 
-    pub fn register(&mut self, url: &str, name: &str, shared_scopes: Option<Vec<String>>, sync_filter: Option<SyncFilter>) -> Result<MeshPeer> {
+    pub fn register(
+        &mut self,
+        url: &str,
+        name: &str,
+        shared_scopes: Option<Vec<String>>,
+        sync_filter: Option<SyncFilter>,
+    ) -> Result<MeshPeer> {
         Self::validate_url(url)?;
 
         if self.peers.values().any(|p| p.url == url) {
@@ -40,7 +46,12 @@ impl Mesh {
             url: url.to_string(),
             name: name.to_string(),
             status: "disconnected".to_string(),
-            shared_scopes: shared_scopes.unwrap_or_else(|| DEFAULT_SHARED_SCOPES.iter().map(|s| s.to_string()).collect()),
+            shared_scopes: shared_scopes.unwrap_or_else(|| {
+                DEFAULT_SHARED_SCOPES
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            }),
             sync_filter,
             last_sync_at: None,
         };
@@ -67,7 +78,8 @@ impl Mesh {
     }
 
     pub fn remove_peer(&mut self, peer_id: &str) -> Result<()> {
-        self.peers.remove(peer_id)
+        self.peers
+            .remove(peer_id)
             .ok_or_else(|| anyhow::anyhow!("peer not found"))?;
         self.record_audit(
             "mesh_sync",
@@ -100,11 +112,15 @@ impl Mesh {
         let host = host_port.split(':').next().unwrap_or("").to_lowercase();
 
         if host.is_empty() || host == "localhost" {
-            return Err(anyhow::anyhow!("URL blocked: private/local address not allowed"));
+            return Err(anyhow::anyhow!(
+                "URL blocked: private/local address not allowed"
+            ));
         }
 
         if Self::is_private_ip(&host) {
-            return Err(anyhow::anyhow!("URL blocked: private/local address not allowed"));
+            return Err(anyhow::anyhow!(
+                "URL blocked: private/local address not allowed"
+            ));
         }
 
         Ok(())
@@ -170,12 +186,9 @@ mod tests {
     #[test]
     fn test_register_peer() {
         let mut mesh = Mesh::new(None);
-        let peer = mesh.register(
-            "https://peer.example.com/agentmemory",
-            "peer-1",
-            None,
-            None,
-        ).unwrap();
+        let peer = mesh
+            .register("https://peer.example.com/agentmemory", "peer-1", None, None)
+            .unwrap();
 
         assert_eq!(peer.name, "peer-1");
         assert_eq!(peer.status, "disconnected");
@@ -186,7 +199,8 @@ mod tests {
     #[test]
     fn test_register_duplicate_url() {
         let mut mesh = Mesh::new(None);
-        mesh.register("https://peer.example.com/agentmemory", "peer-1", None, None).unwrap();
+        mesh.register("https://peer.example.com/agentmemory", "peer-1", None, None)
+            .unwrap();
         let result = mesh.register("https://peer.example.com/agentmemory", "peer-2", None, None);
         assert!(result.is_err());
     }
@@ -223,7 +237,12 @@ mod tests {
     #[test]
     fn test_register_blocks_172_31x() {
         let mut mesh = Mesh::new(None);
-        let result = mesh.register("http://172.31.255.255:8080/agentmemory", "peer-1", None, None);
+        let result = mesh.register(
+            "http://172.31.255.255:8080/agentmemory",
+            "peer-1",
+            None,
+            None,
+        );
         assert!(result.is_err());
     }
 
@@ -244,7 +263,9 @@ mod tests {
     #[test]
     fn test_remove_peer() {
         let mut mesh = Mesh::new(None);
-        let peer = mesh.register("https://peer.example.com/agentmemory", "peer-1", None, None).unwrap();
+        let peer = mesh
+            .register("https://peer.example.com/agentmemory", "peer-1", None, None)
+            .unwrap();
         mesh.remove_peer(&peer.id).unwrap();
         assert!(mesh.list_peers().is_empty());
     }
@@ -268,7 +289,8 @@ mod tests {
     #[test]
     fn test_register_records_audit() {
         let mut mesh = Mesh::new(None);
-        mesh.register("https://peer.example.com/agentmemory", "peer-1", None, None).unwrap();
+        mesh.register("https://peer.example.com/agentmemory", "peer-1", None, None)
+            .unwrap();
         assert_eq!(mesh.audit_log().len(), 1);
         assert_eq!(mesh.audit_log()[0].function_id, "mem::mesh-register");
     }
@@ -276,24 +298,33 @@ mod tests {
     #[test]
     fn test_custom_shared_scopes() {
         let mut mesh = Mesh::new(None);
-        let peer = mesh.register(
-            "https://peer.example.com/agentmemory",
-            "peer-1",
-            Some(vec!["memories".to_string(), "actions".to_string()]),
-            None,
-        ).unwrap();
+        let peer = mesh
+            .register(
+                "https://peer.example.com/agentmemory",
+                "peer-1",
+                Some(vec!["memories".to_string(), "actions".to_string()]),
+                None,
+            )
+            .unwrap();
         assert_eq!(peer.shared_scopes.len(), 2);
     }
 
     #[test]
     fn test_register_with_sync_filter() {
         let mut mesh = Mesh::new(None);
-        let peer = mesh.register(
-            "https://peer.example.com/agentmemory",
-            "peer-1",
-            None,
-            Some(SyncFilter { project: Some("my-project".to_string()) }),
-        ).unwrap();
-        assert_eq!(peer.sync_filter.as_ref().unwrap().project.as_deref(), Some("my-project"));
+        let peer = mesh
+            .register(
+                "https://peer.example.com/agentmemory",
+                "peer-1",
+                None,
+                Some(SyncFilter {
+                    project: Some("my-project".to_string()),
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            peer.sync_filter.as_ref().unwrap().project.as_deref(),
+            Some("my-project")
+        );
     }
 }

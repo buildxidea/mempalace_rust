@@ -12,5 +12,7 @@ pub use embedding_provider::{
 };
 pub use image_quota::ImageQuotaCleanup;
 pub use image_refs::ImageRefStore;
-pub use image_store::{delete_image, is_managed_image_path, max_bytes, save_image_to_disk, touch_image, images_dir};
+pub use image_store::{
+    delete_image, images_dir, is_managed_image_path, max_bytes, save_image_to_disk, touch_image,
+};
 pub use vision_search::{EmbedResult, SearchResult, VisionSearchStore};

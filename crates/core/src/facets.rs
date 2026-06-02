@@ -25,10 +25,18 @@ impl FacetStore {
         Ok(Self { conn })
     }
 
-    pub fn tag(&self, target_id: &str, target_type: &str, dimension: &str, value: &str) -> Result<Facet> {
+    pub fn tag(
+        &self,
+        target_id: &str,
+        target_type: &str,
+        dimension: &str,
+        value: &str,
+    ) -> Result<Facet> {
         let valid_types = ["action", "memory", "observation"];
         if !valid_types.contains(&target_type) {
-            return Err(anyhow::anyhow!("targetType must be one of: action, memory, observation"));
+            return Err(anyhow::anyhow!(
+                "targetType must be one of: action, memory, observation"
+            ));
         }
 
         let existing = self.list()?;
@@ -52,27 +60,48 @@ impl FacetStore {
         self.conn.execute(
             "INSERT INTO facets (id, name, value, target_id, target_type, dimension, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![facet.id, facet.name, facet.value, facet.target_id, facet.target_type, facet.dimension, facet.created_at.to_rfc3339()],
+            params![
+                facet.id,
+                facet.name,
+                facet.value,
+                facet.target_id,
+                facet.target_type,
+                facet.dimension,
+                facet.created_at.to_rfc3339()
+            ],
         )?;
         Ok(facet)
     }
 
     pub fn untag(&self, target_id: &str, dimension: &str, value: Option<&str>) -> Result<usize> {
         let all = self.list()?;
-        let matches: Vec<&Facet> = all.iter().filter(|f| {
-            f.target_id == target_id && f.dimension == dimension &&
-            value.map_or(true, |v| f.value == v)
-        }).collect();
+        let matches: Vec<&Facet> = all
+            .iter()
+            .filter(|f| {
+                f.target_id == target_id
+                    && f.dimension == dimension
+                    && value.map_or(true, |v| f.value == v)
+            })
+            .collect();
 
         for f in &matches {
-            self.conn.execute("DELETE FROM facets WHERE id = ?1", params![f.id])?;
+            self.conn
+                .execute("DELETE FROM facets WHERE id = ?1", params![f.id])?;
         }
         Ok(matches.len())
     }
 
-    pub fn query(&self, match_all: Option<&[String]>, match_any: Option<&[String]>, target_type: Option<&str>, limit: usize) -> Result<Vec<(String, String, Vec<String>)>> {
+    pub fn query(
+        &self,
+        match_all: Option<&[String]>,
+        match_any: Option<&[String]>,
+        target_type: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, String, Vec<String>)>> {
         if match_all.map_or(true, |a| a.is_empty()) && match_any.map_or(true, |a| a.is_empty()) {
-            return Err(anyhow::anyhow!("at least one of matchAll or matchAny is required"));
+            return Err(anyhow::anyhow!(
+                "at least one of matchAll or matchAny is required"
+            ));
         }
 
         let all = self.list()?;
@@ -84,7 +113,9 @@ impl FacetStore {
         let mut target_map: HashMap<String, (String, HashSet<String>)> = HashMap::new();
         for f in filtered {
             let key = format!("{}:{}", f.dimension, f.value);
-            let entry = target_map.entry(f.target_id.clone()).or_insert_with(|| (f.target_type.clone(), HashSet::new()));
+            let entry = target_map
+                .entry(f.target_id.clone())
+                .or_insert_with(|| (f.target_type.clone(), HashSet::new()));
             entry.1.insert(key);
         }
 
@@ -93,17 +124,29 @@ impl FacetStore {
             let mut matched: Vec<String> = Vec::new();
 
             if let Some(all_keys) = match_all {
-                if !all_keys.iter().all(|k| facet_keys.contains(k.as_str())) { continue; }
+                if !all_keys.iter().all(|k| facet_keys.contains(k.as_str())) {
+                    continue;
+                }
                 for k in all_keys {
-                    if !matched.contains(k) { matched.push(k.clone()); }
+                    if !matched.contains(k) {
+                        matched.push(k.clone());
+                    }
                 }
             }
 
             if let Some(any_keys) = match_any {
-                let any_present: Vec<String> = any_keys.iter().filter(|k| facet_keys.contains(k.as_str())).cloned().collect();
-                if any_present.is_empty() { continue; }
+                let any_present: Vec<String> = any_keys
+                    .iter()
+                    .filter(|k| facet_keys.contains(k.as_str()))
+                    .cloned()
+                    .collect();
+                if any_present.is_empty() {
+                    continue;
+                }
                 for k in any_present {
-                    if !matched.contains(&k) { matched.push(k); }
+                    if !matched.contains(&k) {
+                        matched.push(k);
+                    }
                 }
             }
 
@@ -120,13 +163,19 @@ impl FacetStore {
 
         let mut dim_map: HashMap<String, Vec<String>> = HashMap::new();
         for f in target_facets {
-            dim_map.entry(f.dimension.clone()).or_default().push(f.value.clone());
+            dim_map
+                .entry(f.dimension.clone())
+                .or_default()
+                .push(f.value.clone());
         }
 
         Ok(dim_map.into_iter().collect())
     }
 
-    pub fn stats(&self, target_type: Option<&str>) -> Result<(Vec<(String, Vec<(String, usize)>)>, usize)> {
+    pub fn stats(
+        &self,
+        target_type: Option<&str>,
+    ) -> Result<(Vec<(String, Vec<(String, usize)>)>, usize)> {
         let all = self.list()?;
         let filtered: Vec<Facet> = match target_type {
             Some(t) => all.into_iter().filter(|f| f.target_type == t).collect(),
@@ -136,7 +185,12 @@ impl FacetStore {
 
         let mut dim_map: HashMap<String, HashMap<String, usize>> = HashMap::new();
         for f in filtered {
-            dim_map.entry(f.dimension).or_default().entry(f.value).and_modify(|c| *c += 1).or_insert(1);
+            dim_map
+                .entry(f.dimension)
+                .or_default()
+                .entry(f.value)
+                .and_modify(|c| *c += 1)
+                .or_insert(1);
         }
 
         let dimensions: Vec<(String, Vec<(String, usize)>)> = dim_map
@@ -158,20 +212,26 @@ impl FacetStore {
 
     pub fn list(&self) -> Result<Vec<Facet>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, value, target_id, target_type, dimension, created_at FROM facets"
+            "SELECT id, name, value, target_id, target_type, dimension, created_at FROM facets",
         )?;
-        let rows: Vec<rusqlite::Result<Facet>> = stmt.query_map([], |row| {
-            Ok(Facet {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                value: row.get(2)?,
-                target_id: row.get(3)?,
-                target_type: row.get(4)?,
-                dimension: row.get(5)?,
-                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?).unwrap().with_timezone(&Utc),
-            })
-        })?.collect();
-        rows.into_iter().map(|r| r.map_err(|e| anyhow::anyhow!(e))).collect()
+        let rows: Vec<rusqlite::Result<Facet>> = stmt
+            .query_map([], |row| {
+                Ok(Facet {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    value: row.get(2)?,
+                    target_id: row.get(3)?,
+                    target_type: row.get(4)?,
+                    dimension: row.get(5)?,
+                    created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                })
+            })?
+            .collect();
+        rows.into_iter()
+            .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+            .collect()
     }
 }
 
@@ -217,10 +277,14 @@ mod tests {
         store.tag("act-1", "action", "priority", "high").unwrap();
         store.tag("act-1", "action", "status", "urgent").unwrap();
         store.tag("act-2", "action", "priority", "high").unwrap();
-        let results = store.query(
-            Some(&["priority:high".to_string(), "status:urgent".to_string()]),
-            None, None, 10
-        ).unwrap();
+        let results = store
+            .query(
+                Some(&["priority:high".to_string(), "status:urgent".to_string()]),
+                None,
+                None,
+                10,
+            )
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "act-1");
     }

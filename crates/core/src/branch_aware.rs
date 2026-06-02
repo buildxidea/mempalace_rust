@@ -42,9 +42,13 @@ pub fn detect_worktree(project_path: &Path) -> Result<Option<Worktree>> {
 
             let branch = branch_output
                 .ok()
-                .and_then(|o| if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                } else { None })
+                .and_then(|o| {
+                    if o.status.success() {
+                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or_else(|| "HEAD".to_string());
 
             let worktrees = list_worktrees(project_path)?;
@@ -129,13 +133,17 @@ pub fn branch_sessions<'a>(
     sessions: &'a [crate::types::Session],
     branch: &str,
 ) -> Vec<&'a crate::types::Session> {
-    sessions.iter()
+    sessions
+        .iter()
         .filter(|s| s.tags.iter().any(|t| t == &format!("branch:{}", branch)))
         .collect()
 }
 
 /// Tag a session with its current branch.
-pub fn tag_session_with_branch(session: &mut crate::types::Session, project_path: &Path) -> Result<()> {
+pub fn tag_session_with_branch(
+    session: &mut crate::types::Session,
+    project_path: &Path,
+) -> Result<()> {
     if let Some(wt) = detect_worktree(project_path)? {
         let branch_tag = format!("branch:{}", wt.branch);
         if !session.tags.contains(&branch_tag) {
@@ -154,19 +162,33 @@ mod tests {
         use crate::types::Session;
         let sessions = vec![
             Session {
-                id: "s-1".into(), project: "p".into(), cwd: "/tmp".into(),
-                started_at: chrono::Utc::now(), ended_at: None,
-                status: "active".into(), observation_count: 0,
-                model: None, tags: vec!["branch:main".into()],
-                first_prompt: None, summary: None, commit_shas: vec![],
+                id: "s-1".into(),
+                project: "p".into(),
+                cwd: "/tmp".into(),
+                started_at: chrono::Utc::now(),
+                ended_at: None,
+                status: "active".into(),
+                observation_count: 0,
+                model: None,
+                tags: vec!["branch:main".into()],
+                first_prompt: None,
+                summary: None,
+                commit_shas: vec![],
                 agent_id: None,
             },
             Session {
-                id: "s-2".into(), project: "p".into(), cwd: "/tmp".into(),
-                started_at: chrono::Utc::now(), ended_at: None,
-                status: "active".into(), observation_count: 0,
-                model: None, tags: vec!["branch:feature".into()],
-                first_prompt: None, summary: None, commit_shas: vec![],
+                id: "s-2".into(),
+                project: "p".into(),
+                cwd: "/tmp".into(),
+                started_at: chrono::Utc::now(),
+                ended_at: None,
+                status: "active".into(),
+                observation_count: 0,
+                model: None,
+                tags: vec!["branch:feature".into()],
+                first_prompt: None,
+                summary: None,
+                commit_shas: vec![],
                 agent_id: None,
             },
         ];
@@ -179,11 +201,18 @@ mod tests {
     fn test_tag_session_with_branch() {
         use crate::types::Session;
         let mut session = Session {
-            id: "s-1".into(), project: "p".into(), cwd: "/tmp".into(),
-            started_at: chrono::Utc::now(), ended_at: None,
-            status: "active".into(), observation_count: 0,
-            model: None, tags: vec![],
-            first_prompt: None, summary: None, commit_shas: vec![],
+            id: "s-1".into(),
+            project: "p".into(),
+            cwd: "/tmp".into(),
+            started_at: chrono::Utc::now(),
+            ended_at: None,
+            status: "active".into(),
+            observation_count: 0,
+            model: None,
+            tags: vec![],
+            first_prompt: None,
+            summary: None,
+            commit_shas: vec![],
             agent_id: None,
         };
         let dir = std::env::temp_dir().join(format!("branch_test_{}", std::process::id()));
@@ -215,9 +244,21 @@ mod tests {
     fn test_detect_worktree_in_git_repo() {
         let dir = std::env::temp_dir().join(format!("detect_wt_repo_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        Command::new("git").args(["init"]).current_dir(&dir).output().unwrap();
-        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(&dir).output().unwrap();
-        Command::new("git").args(["config", "user.name", "Test"]).current_dir(&dir).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
 
         let result = detect_worktree(&dir).unwrap();
         assert!(result.is_some());
@@ -230,10 +271,26 @@ mod tests {
     fn test_detect_worktree_with_branch() {
         let dir = std::env::temp_dir().join(format!("detect_wt_branch_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        Command::new("git").args(["init"]).current_dir(&dir).output().unwrap();
-        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(&dir).output().unwrap();
-        Command::new("git").args(["config", "user.name", "Test"]).current_dir(&dir).output().unwrap();
-        Command::new("git").args(["checkout", "-b", "feature-branch"]).current_dir(&dir).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feature-branch"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
 
         let result = detect_worktree(&dir).unwrap();
         assert!(result.is_some());

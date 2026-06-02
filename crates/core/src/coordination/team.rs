@@ -77,7 +77,10 @@ impl Team {
         let mut patterns: Vec<String> = Vec::new();
 
         for item in &self.items {
-            if matches!(item.item_type, SharedItemType::Memory | SharedItemType::Pattern) {
+            if matches!(
+                item.item_type,
+                SharedItemType::Memory | SharedItemType::Pattern
+            ) {
                 if let Some(concepts) = item.content.get("concepts").and_then(|c| c.as_array()) {
                     for c in concepts {
                         if let Some(s) = c.as_str() {
@@ -93,7 +96,8 @@ impl Team {
                     }
                 }
                 if matches!(item.item_type, SharedItemType::Pattern) {
-                    if let Some(content_str) = item.content.get("content").and_then(|c| c.as_str()) {
+                    if let Some(content_str) = item.content.get("content").and_then(|c| c.as_str())
+                    {
                         patterns.push(content_str.chars().take(100).collect());
                     }
                 }
@@ -274,8 +278,14 @@ mod tests {
         .unwrap();
 
         let profile = team.profile();
-        assert!(profile.top_concepts.iter().any(|e| e.key == "auth" && e.frequency == 2));
-        assert!(profile.top_files.iter().any(|e| e.key == "src/auth.rs" && e.frequency == 2));
+        assert!(profile
+            .top_concepts
+            .iter()
+            .any(|e| e.key == "auth" && e.frequency == 2));
+        assert!(profile
+            .top_files
+            .iter()
+            .any(|e| e.key == "src/auth.rs" && e.frequency == 2));
         assert_eq!(profile.total_shared_items, 2);
     }
 

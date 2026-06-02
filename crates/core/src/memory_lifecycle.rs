@@ -1,6 +1,5 @@
 /// Memory lifecycle management — versioning, evolution, and retention tracking.
 /// 1:1 port from agentmemory memory lifecycle patterns.
-
 use chrono::Utc;
 
 #[cfg(test)]
@@ -10,18 +9,18 @@ use crate::types::{ConsolidationTier, DecayConfig, Memory, MemoryType, Retention
 
 /// Evolve an existing memory with new content.
 /// Sets the old memory's is_latest to false and creates a new version.
-pub fn evolve_memory(
-    existing: &Memory,
-    new_content: String,
-    new_title: Option<String>,
-) -> Memory {
+pub fn evolve_memory(existing: &Memory, new_content: String, new_title: Option<String>) -> Memory {
     // Mark existing as not latest
     let new_version = existing.version + 1;
     let mut supersedes = existing.supersedes.clone();
     supersedes.push(existing.id.clone());
 
     Memory {
-        id: format!("{}-v{}", existing.id.split('-').next().unwrap_or("mem"), new_version),
+        id: format!(
+            "{}-v{}",
+            existing.id.split('-').next().unwrap_or("mem"),
+            new_version
+        ),
         created_at: Utc::now(),
         updated_at: Utc::now(),
         memory_type: existing.memory_type,
@@ -137,7 +136,11 @@ mod tests {
     #[test]
     fn test_evolve_memory_with_new_title() {
         let existing = make_memory();
-        let evolved = evolve_memory(&existing, "New content".to_string(), Some("New title".to_string()));
+        let evolved = evolve_memory(
+            &existing,
+            "New content".to_string(),
+            Some("New title".to_string()),
+        );
         assert_eq!(evolved.title, "New title");
     }
 

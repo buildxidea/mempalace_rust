@@ -171,7 +171,10 @@ pub struct DimensionGuard<P: EmbeddingProvider> {
 impl<P: EmbeddingProvider> DimensionGuard<P> {
     pub fn new(provider: P) -> Self {
         let expected = provider.dimensions();
-        Self { inner: provider, expected }
+        Self {
+            inner: provider,
+            expected,
+        }
     }
 
     fn check(&self, v: &[f32], where_str: &str) -> Result<Vec<f32>> {

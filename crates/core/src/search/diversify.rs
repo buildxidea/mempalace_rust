@@ -142,10 +142,7 @@ mod tests {
 
     #[test]
     fn test_diversify_single_session() {
-        let results = vec![
-            make_result("a1", "s1", 0.9),
-            make_result("a2", "s1", 0.8),
-        ];
+        let results = vec![make_result("a1", "s1", 0.9), make_result("a2", "s1", 0.8)];
 
         let diversified = diversify_by_session(&results, 5, 3);
         assert_eq!(diversified.len(), 2);

@@ -52,7 +52,8 @@ impl AccessTracker {
     }
 
     pub fn record(&mut self, memory_id: &str) {
-        let log = self.logs
+        let log = self
+            .logs
             .entry(memory_id.to_string())
             .or_insert_with(|| AccessLog::new(memory_id.to_string()));
         log.record_access(self.max_recent);
@@ -71,7 +72,8 @@ impl AccessTracker {
     }
 
     pub fn recent_accesses(&self, memory_id: &str) -> Vec<DateTime<Utc>> {
-        self.logs.get(memory_id)
+        self.logs
+            .get(memory_id)
             .map(|l| l.recent.clone())
             .unwrap_or_default()
     }
@@ -117,9 +119,15 @@ mod tests {
     #[test]
     fn test_most_accessed() {
         let mut tracker = AccessTracker::new(5);
-        for _ in 0..10 { tracker.record("m-1"); }
-        for _ in 0..5 { tracker.record("m-2"); }
-        for _ in 0..1 { tracker.record("m-3"); }
+        for _ in 0..10 {
+            tracker.record("m-1");
+        }
+        for _ in 0..5 {
+            tracker.record("m-2");
+        }
+        for _ in 0..1 {
+            tracker.record("m-3");
+        }
         let top = tracker.most_accessed(2);
         assert_eq!(top.len(), 2);
         assert_eq!(top[0].memory_id, "m-1");

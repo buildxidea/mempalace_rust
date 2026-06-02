@@ -22,11 +22,13 @@ pub fn build_skill_extraction_prompt(
     actions: &[crate::types::Action],
     crystals: &[crate::types::Crystal],
 ) -> String {
-    let action_descriptions: Vec<_> = actions.iter()
+    let action_descriptions: Vec<_> = actions
+        .iter()
         .map(|a| format!("- {} ({}): {}", a.title, a.status, a.description))
         .collect();
 
-    let crystal_narratives: Vec<_> = crystals.iter()
+    let crystal_narratives: Vec<_> = crystals
+        .iter()
         .map(|c| format!("- {}", c.narrative))
         .collect();
 
@@ -46,32 +48,48 @@ pub fn build_skill_extraction_prompt(
 }
 
 /// Parse LLM response into extracted skills.
-pub fn parse_skill_extraction(response: &str, source_action_ids: Vec<String>) -> Result<Vec<ExtractedSkill>> {
+pub fn parse_skill_extraction(
+    response: &str,
+    source_action_ids: Vec<String>,
+) -> Result<Vec<ExtractedSkill>> {
     // Try to parse as JSON array
     if let Ok(skills) = serde_json::from_str::<Vec<serde_json::Value>>(response) {
         let mut extracted = Vec::new();
         for (i, skill) in skills.iter().enumerate() {
-            let name = skill.get("name")
+            let name = skill
+                .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed Skill")
                 .to_string();
 
-            let description = skill.get("description")
+            let description = skill
+                .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
-            let steps = skill.get("steps")
+            let steps = skill
+                .get("steps")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
-            let triggers = skill.get("triggers")
+            let triggers = skill
+                .get("triggers")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
-            let confidence = skill.get("confidence")
+            let confidence = skill
+                .get("confidence")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.5);
 
@@ -106,7 +124,8 @@ pub async fn extract_skills(
     actions: &[crate::types::Action],
     crystals: &[crate::types::Crystal],
 ) -> Result<Vec<ExtractedSkill>> {
-    let completed_actions: Vec<_> = actions.iter()
+    let completed_actions: Vec<_> = actions
+        .iter()
         .filter(|a| matches!(a.status, crate::types::ActionStatus::Completed))
         .cloned()
         .collect();
@@ -134,15 +153,24 @@ mod tests {
     fn test_build_skill_extraction_prompt() {
         use crate::types::{Action, ActionStatus};
         let actions = vec![Action {
-            id: "a-1".into(), title: "Fix auth bug".into(),
+            id: "a-1".into(),
+            title: "Fix auth bug".into(),
             description: "Token expiry issue".into(),
-            status: ActionStatus::Completed, priority: 1,
-            created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-            created_by: None, assigned_to: None, project: "test".into(),
-            tags: vec![], source_observation_ids: vec![], source_memory_ids: vec![],
-            result: Some("Fixed token expiry".to_string()), parent_id: None,
+            status: ActionStatus::Completed,
+            priority: 1,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            created_by: None,
+            assigned_to: None,
+            project: "test".into(),
+            tags: vec![],
+            source_observation_ids: vec![],
+            source_memory_ids: vec![],
+            result: Some("Fixed token expiry".to_string()),
+            parent_id: None,
             metadata: std::collections::HashMap::new(),
-            sketch_id: None, crystallized_into: None,
+            sketch_id: None,
+            crystallized_into: None,
         }];
         let crystals = vec![];
         let prompt = build_skill_extraction_prompt(&actions, &crystals);
@@ -194,23 +222,34 @@ mod tests {
     fn test_build_prompt_with_crystals() {
         use crate::types::{Action, ActionStatus, Crystal};
         let actions = vec![Action {
-            id: "a-1".into(), title: "Setup CI".into(),
+            id: "a-1".into(),
+            title: "Setup CI".into(),
             description: "Added GitHub Actions".into(),
-            status: ActionStatus::Completed, priority: 1,
-            created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-            created_by: None, assigned_to: None, project: "test".into(),
-            tags: vec![], source_observation_ids: vec![], source_memory_ids: vec![],
-            result: None, parent_id: None,
+            status: ActionStatus::Completed,
+            priority: 1,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            created_by: None,
+            assigned_to: None,
+            project: "test".into(),
+            tags: vec![],
+            source_observation_ids: vec![],
+            source_memory_ids: vec![],
+            result: None,
+            parent_id: None,
             metadata: std::collections::HashMap::new(),
-            sketch_id: None, crystallized_into: None,
+            sketch_id: None,
+            crystallized_into: None,
         }];
         let crystals = vec![Crystal {
-            id: "c-1".into(), action_ids: vec!["a-1".into()],
+            id: "c-1".into(),
+            action_ids: vec!["a-1".into()],
             narrative: "CI pipeline established".into(),
             key_outcomes: vec!["Automated testing".into()],
             files_affected: vec![".github/workflows/ci.yml".into()],
             lessons: vec!["Use matrix builds".into()],
-            session_id: Some("s-1".into()), project: Some("test".into()),
+            session_id: Some("s-1".into()),
+            project: Some("test".into()),
             created_at: chrono::Utc::now(),
         }];
         let prompt = build_skill_extraction_prompt(&actions, &crystals);

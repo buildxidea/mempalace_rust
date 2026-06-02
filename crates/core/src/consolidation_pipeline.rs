@@ -1,6 +1,5 @@
 /// Three-stage consolidation pipeline: semantic → procedural → decay.
 /// 1:1 port from agentmemory `src/functions/consolidation-pipeline.ts`.
-
 use chrono::Utc;
 
 use crate::llm::LlmProvider;
@@ -150,9 +149,9 @@ pub async fn run_consolidation_pipeline(
                 let _now = Utc::now();
 
                 for (confidence, fact) in facts {
-                    let existing = existing_semantic.iter().find(|s| {
-                        s.facts.iter().any(|f| f.eq_ignore_ascii_case(&fact))
-                    });
+                    let existing = existing_semantic
+                        .iter()
+                        .find(|s| s.facts.iter().any(|f| f.eq_ignore_ascii_case(&fact)));
 
                     if existing.is_some() {
                         // Would need mutable access in real impl
@@ -178,7 +177,10 @@ pub async fn run_consolidation_pipeline(
     if patterns.len() >= 2 {
         let prompt = build_procedural_extraction_prompt(&patterns);
 
-        match provider.complete(PROCEDURAL_EXTRACTION_SYSTEM, &prompt).await {
+        match provider
+            .complete(PROCEDURAL_EXTRACTION_SYSTEM, &prompt)
+            .await
+        {
             Ok(completion) => {
                 let procedures = parse_procedures(&completion.text);
                 let now = Utc::now();
@@ -235,10 +237,10 @@ mod tests {
     use super::*;
     use crate::llm::noop_provider::NoopProvider;
     use crate::types::ObservationType;
-use chrono::Utc;
+    use chrono::Utc;
 
-#[cfg(test)]
-use chrono::Duration;
+    #[cfg(test)]
+    use chrono::Duration;
 
     fn make_summary(id: &str, title: &str, narrative: &str) -> CompressedObservation {
         CompressedObservation {
@@ -268,8 +270,7 @@ use chrono::Duration;
             .map(|i| make_summary(&format!("s-{i}"), &format!("Summary {i}"), "Narrative"))
             .collect();
 
-        let result =
-            run_consolidation_pipeline(&provider, &summaries, &[], &[], &[], None).await;
+        let result = run_consolidation_pipeline(&provider, &summaries, &[], &[], &[], None).await;
         // NoopProvider returns empty XML, so no facts extracted
         assert_eq!(result.semantic_new_facts, 0);
     }

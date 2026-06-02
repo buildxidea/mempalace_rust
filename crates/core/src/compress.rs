@@ -1,6 +1,5 @@
 /// LLM-powered observation compression engine.
 /// 1:1 port from agentmemory `src/functions/compress.ts`.
-
 use chrono::Utc;
 use serde_json::Value;
 
@@ -224,8 +223,9 @@ pub fn parse_compression_xml(xml: &str) -> Option<CompressedObservation> {
         .map(|v| v.clamp(1, 10))
         .unwrap_or(5);
 
-    let observation_type: crate::types::ObservationType =
-        type_str.parse().unwrap_or(crate::types::ObservationType::Other);
+    let observation_type: crate::types::ObservationType = type_str
+        .parse()
+        .unwrap_or(crate::types::ObservationType::Other);
 
     Some(CompressedObservation {
         id: String::new(),
@@ -338,7 +338,10 @@ mod tests {
         </observation>"#;
 
         let obs = parse_compression_xml(xml).unwrap();
-        assert_eq!(obs.observation_type, crate::types::ObservationType::FileEdit);
+        assert_eq!(
+            obs.observation_type,
+            crate::types::ObservationType::FileEdit
+        );
         assert_eq!(obs.importance, 7);
     }
 

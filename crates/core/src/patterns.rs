@@ -86,7 +86,10 @@ impl PatternStore {
                     .collect();
                 let now = Utc::now();
                 Pattern {
-                    id: format!("pat-err-{}", title.replace(|c: char| !c.is_alphanumeric(), "_")),
+                    id: format!(
+                        "pat-err-{}",
+                        title.replace(|c: char| !c.is_alphanumeric(), "_")
+                    ),
                     pattern_type: "error_repeat".to_string(),
                     description: format!("Error '{}' occurred {} times", title, sessions.len()),
                     files: files.into_iter().collect(),
@@ -114,7 +117,11 @@ impl PatternStore {
 mod tests {
     use super::*;
 
-    fn test_obs(id: &str, files: Vec<&str>, obs_type: crate::types::ObservationType) -> CompressedObservation {
+    fn test_obs(
+        id: &str,
+        files: Vec<&str>,
+        obs_type: crate::types::ObservationType,
+    ) -> CompressedObservation {
         CompressedObservation {
             id: id.to_string(),
             session_id: format!("s-{}", id),
@@ -139,10 +146,26 @@ mod tests {
     fn test_co_change_patterns_finds_frequent_pairs() {
         let store = PatternStore::new();
         let obs = vec![
-            test_obs("1", vec!["src/auth.rs", "src/middleware.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("2", vec!["src/auth.rs", "src/middleware.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("3", vec!["src/auth.rs", "src/middleware.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("4", vec!["src/auth.rs", "src/api.rs"], crate::types::ObservationType::FileEdit),
+            test_obs(
+                "1",
+                vec!["src/auth.rs", "src/middleware.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "2",
+                vec!["src/auth.rs", "src/middleware.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "3",
+                vec!["src/auth.rs", "src/middleware.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "4",
+                vec!["src/auth.rs", "src/api.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
         ];
         let patterns = store.extract_co_change_patterns(&obs, 3).unwrap();
         assert_eq!(patterns.len(), 1);
@@ -154,8 +177,16 @@ mod tests {
     fn test_co_change_below_threshold() {
         let store = PatternStore::new();
         let obs = vec![
-            test_obs("1", vec!["src/a.rs", "src/b.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("2", vec!["src/a.rs", "src/b.rs"], crate::types::ObservationType::FileEdit),
+            test_obs(
+                "1",
+                vec!["src/a.rs", "src/b.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "2",
+                vec!["src/a.rs", "src/b.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
         ];
         let patterns = store.extract_co_change_patterns(&obs, 3).unwrap();
         assert!(patterns.is_empty());
@@ -164,15 +195,33 @@ mod tests {
     #[test]
     fn test_error_repeat_patterns() {
         let store = PatternStore::new();
-        let mut obs1 = test_obs("1", vec!["src/auth.rs"], crate::types::ObservationType::Error);
+        let mut obs1 = test_obs(
+            "1",
+            vec!["src/auth.rs"],
+            crate::types::ObservationType::Error,
+        );
         obs1.title = "Null pointer exception".to_string();
-        let mut obs2 = test_obs("2", vec!["src/auth.rs"], crate::types::ObservationType::Error);
+        let mut obs2 = test_obs(
+            "2",
+            vec!["src/auth.rs"],
+            crate::types::ObservationType::Error,
+        );
         obs2.title = "Null pointer exception".to_string();
-        let mut obs3 = test_obs("3", vec!["src/auth.rs"], crate::types::ObservationType::Error);
+        let mut obs3 = test_obs(
+            "3",
+            vec!["src/auth.rs"],
+            crate::types::ObservationType::Error,
+        );
         obs3.title = "Null pointer exception".to_string();
-        let mut obs4 = test_obs("4", vec!["src/api.rs"], crate::types::ObservationType::Error);
+        let mut obs4 = test_obs(
+            "4",
+            vec!["src/api.rs"],
+            crate::types::ObservationType::Error,
+        );
         obs4.title = "Timeout error".to_string();
-        let patterns = store.extract_error_patterns(&[obs1, obs2, obs3, obs4], 3).unwrap();
+        let patterns = store
+            .extract_error_patterns(&[obs1, obs2, obs3, obs4], 3)
+            .unwrap();
         assert_eq!(patterns.len(), 1);
         assert_eq!(patterns[0].pattern_type, "error_repeat");
     }
@@ -209,9 +258,21 @@ mod tests {
     fn test_co_change_with_many_files() {
         let store = PatternStore::new();
         let obs = vec![
-            test_obs("1", vec!["a.rs", "b.rs", "c.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("2", vec!["a.rs", "b.rs", "c.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("3", vec!["a.rs", "b.rs", "c.rs"], crate::types::ObservationType::FileEdit),
+            test_obs(
+                "1",
+                vec!["a.rs", "b.rs", "c.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "2",
+                vec!["a.rs", "b.rs", "c.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "3",
+                vec!["a.rs", "b.rs", "c.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
         ];
         let patterns = store.extract_co_change_patterns(&obs, 3).unwrap();
         assert!(patterns.len() >= 3);
@@ -230,9 +291,21 @@ mod tests {
     fn test_pattern_id_generation() {
         let store = PatternStore::new();
         let obs = vec![
-            test_obs("1", vec!["src/auth.rs", "src/middleware.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("2", vec!["src/auth.rs", "src/middleware.rs"], crate::types::ObservationType::FileEdit),
-            test_obs("3", vec!["src/auth.rs", "src/middleware.rs"], crate::types::ObservationType::FileEdit),
+            test_obs(
+                "1",
+                vec!["src/auth.rs", "src/middleware.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "2",
+                vec!["src/auth.rs", "src/middleware.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
+            test_obs(
+                "3",
+                vec!["src/auth.rs", "src/middleware.rs"],
+                crate::types::ObservationType::FileEdit,
+            ),
         ];
         let patterns = store.extract_co_change_patterns(&obs, 3).unwrap();
         assert!(patterns[0].id.starts_with("pat-co-"));

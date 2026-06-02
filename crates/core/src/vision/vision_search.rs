@@ -29,12 +29,10 @@ pub struct EmbedResult {
 }
 
 impl VisionSearchStore {
-    pub fn new(
-        conn: Connection,
-        provider: Option<Box<dyn EmbeddingProvider>>,
-    ) -> Result<Self> {
+    pub fn new(conn: Connection, provider: Option<Box<dyn EmbeddingProvider>>) -> Result<Self> {
         // Open a separate connection for image_refs (SQLite doesn't support Connection::try_clone)
-        let db_path = conn.path()
+        let db_path = conn
+            .path()
             .map(|p| p.to_string())
             .unwrap_or_else(|| ":memory:".to_string());
         let ref_conn = Connection::open(&db_path)?;
@@ -66,7 +64,9 @@ impl VisionSearchStore {
         session_id: Option<&str>,
         observation_id: Option<&str>,
     ) -> Result<EmbedResult> {
-        let provider = self.provider.as_ref()
+        let provider = self
+            .provider
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("image embeddings disabled"))?;
 
         let path = image_path.as_ref();
@@ -84,9 +84,7 @@ impl VisionSearchStore {
         let dimensions = vector.len();
         let updated_at = chrono::Utc::now().to_rfc3339();
 
-        let vector_bytes: Vec<u8> = vector.iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
+        let vector_bytes: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
 
         self.conn.execute(
             "INSERT OR REPLACE INTO image_embeddings
@@ -118,7 +116,9 @@ impl VisionSearchStore {
         top_k: Option<usize>,
         session_id: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        let provider = self.provider.as_ref()
+        let provider = self
+            .provider
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("image embeddings disabled"))?;
 
         let requested_top_k = top_k.unwrap_or(10);
@@ -144,7 +144,7 @@ impl VisionSearchStore {
         // Load all stored embeddings
         let mut stmt = self.conn.prepare(
             "SELECT image_ref, vector, dimensions, session_id, observation_id, updated_at
-             FROM image_embeddings"
+             FROM image_embeddings",
         )?;
         let rows = stmt.query_map([], |row| {
             let image_ref: String = row.get(0)?;
@@ -153,12 +153,20 @@ impl VisionSearchStore {
             let session_id: Option<String> = row.get(3)?;
             let observation_id: Option<String> = row.get(4)?;
             let updated_at: String = row.get(5)?;
-            Ok((image_ref, vector_bytes, dimensions, session_id, observation_id, updated_at))
+            Ok((
+                image_ref,
+                vector_bytes,
+                dimensions,
+                session_id,
+                observation_id,
+                updated_at,
+            ))
         })?;
 
         let mut scored: Vec<SearchResult> = Vec::new();
         for row in rows {
-            let (image_ref, vector_bytes, dimensions, row_session_id, observation_id, updated_at) = row?;
+            let (image_ref, vector_bytes, dimensions, row_session_id, observation_id, updated_at) =
+                row?;
 
             // Filter by session if specified
             if let Some(sid) = session_id {
@@ -188,7 +196,11 @@ impl VisionSearchStore {
         }
 
         // Sort by score descending
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(scored.into_iter().take(top_k).collect())
     }
@@ -238,7 +250,9 @@ mod tests {
     #[test]
     fn test_vision_search_empty_results() {
         let store = test_store();
-        let results = store.vision_search(Some("test query"), None, None, None).unwrap();
+        let results = store
+            .vision_search(Some("test query"), None, None, None)
+            .unwrap();
         assert!(results.is_empty());
     }
 
@@ -246,7 +260,9 @@ mod tests {
     fn test_vision_search_top_k_clamping() {
         let store = test_store();
         // top_k > 50 should be clamped to 50
-        let results = store.vision_search(Some("test"), None, Some(100), None).unwrap();
+        let results = store
+            .vision_search(Some("test"), None, Some(100), None)
+            .unwrap();
         assert!(results.len() <= 50);
     }
 
@@ -254,7 +270,9 @@ mod tests {
     fn test_vision_search_top_k_minimum() {
         let store = test_store();
         // top_k < 1 should be clamped to 1
-        let results = store.vision_search(Some("test"), None, Some(0), None).unwrap();
+        let results = store
+            .vision_search(Some("test"), None, Some(0), None)
+            .unwrap();
         assert!(results.len() <= 1);
     }
 
@@ -262,7 +280,9 @@ mod tests {
     fn test_cosine_similarity_in_search() {
         // Verify that search returns results sorted by cosine similarity
         let store = test_store();
-        let results = store.vision_search(Some("query"), None, Some(5), None).unwrap();
+        let results = store
+            .vision_search(Some("query"), None, Some(5), None)
+            .unwrap();
         assert!(results.is_empty()); // No embeddings stored yet
     }
 

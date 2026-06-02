@@ -1,7 +1,6 @@
 /// Consolidation engine — groups observations by concept and synthesizes
 /// them into long-term memories via LLM.
 /// 1:1 port from agentmemory `src/functions/consolidate.ts`.
-
 use std::collections::HashMap;
 
 use crate::llm::LlmProvider;
@@ -24,7 +23,14 @@ Output XML:
   <strength>1-10 how confident/important this memory is</strength>
 </memory>"#;
 
-const VALID_TYPES: &[&str] = &["pattern", "preference", "architecture", "bug", "workflow", "fact"];
+const VALID_TYPES: &[&str] = &[
+    "pattern",
+    "preference",
+    "architecture",
+    "bug",
+    "workflow",
+    "fact",
+];
 
 const MAX_LLM_CALLS: usize = 10;
 const MIN_OBSERVATIONS: usize = 10;
@@ -32,11 +38,13 @@ const MIN_GROUP_SIZE: usize = 3;
 const MAX_OBS_PER_GROUP: usize = 8;
 
 /// Result of a consolidation run.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ConsolidationResult {
     pub consolidated: usize,
     pub total_observations: usize,
     pub llm_calls: usize,
+    /// Newly synthesized memories, returned so callers can persist them.
+    pub memories: Vec<Memory>,
 }
 
 /// Parse memory XML response into a Memory struct (without id/timestamps).
@@ -138,6 +146,7 @@ pub async fn consolidate(
             consolidated: 0,
             total_observations: filtered.len(),
             llm_calls: 0,
+            memories: vec![],
         };
     }
 
@@ -146,10 +155,7 @@ pub async fn consolidate(
     for obs in &filtered {
         for concept in &obs.concepts {
             let key = concept.to_lowercase();
-            concept_groups
-                .entry(key)
-                .or_default()
-                .push(obs.clone());
+            concept_groups.entry(key).or_default().push(obs.clone());
         }
     }
 
@@ -168,6 +174,7 @@ pub async fn consolidate(
 
     let mut consolidated = 0;
     let mut llm_calls = 0;
+    let mut memories: Vec<Memory> = Vec::new();
 
     for (concept, obs_group) in sorted_groups {
         if llm_calls >= MAX_LLM_CALLS {
@@ -200,6 +207,7 @@ pub async fn consolidate(
                     }
 
                     consolidated += 1;
+                    memories.push(memory);
                 }
             }
             Err(e) => {
@@ -212,6 +220,7 @@ pub async fn consolidate(
         consolidated,
         total_observations: filtered.len(),
         llm_calls,
+        memories,
     }
 }
 
@@ -222,7 +231,12 @@ mod tests {
     use crate::types::ObservationType;
     use chrono::Utc;
 
-    fn make_obs(id: &str, title: &str, importance: u8, concepts: Vec<&str>) -> CompressedObservation {
+    fn make_obs(
+        id: &str,
+        title: &str,
+        importance: u8,
+        concepts: Vec<&str>,
+    ) -> CompressedObservation {
         CompressedObservation {
             id: id.to_string(),
             session_id: "sess-1".to_string(),
@@ -257,7 +271,14 @@ mod tests {
     async fn test_consolidate_with_noop_provider() {
         let provider = NoopProvider::default();
         let observations: Vec<_> = (0..12)
-            .map(|i| make_obs(&format!("obs-{i}"), &format!("Test {i}"), 5, vec!["rust", "async"]))
+            .map(|i| {
+                make_obs(
+                    &format!("obs-{i}"),
+                    &format!("Test {i}"),
+                    5,
+                    vec!["rust", "async"],
+                )
+            })
             .collect();
         let result = consolidate(&provider, &observations, &[]).await;
         // NoopProvider returns empty, so XML parse fails -> 0 consolidated

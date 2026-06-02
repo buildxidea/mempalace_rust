@@ -6,8 +6,8 @@
 //! - Each wrapped in its own CircuitBreaker
 //! - If all fail, throw last error
 
-use super::provider::{LlmCompletion, LlmError, LlmProvider};
 use super::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
+use super::provider::{LlmCompletion, LlmError, LlmProvider};
 use std::sync::Arc;
 
 /// A provider wrapped with its own circuit breaker.
@@ -30,7 +30,10 @@ impl FallbackChain {
             .map(|p| {
                 let name = p.name().to_string();
                 WrappedProvider {
-                    circuit_breaker: Arc::new(CircuitBreaker::new(name, CircuitBreakerConfig::default())),
+                    circuit_breaker: Arc::new(CircuitBreaker::new(
+                        name,
+                        CircuitBreakerConfig::default(),
+                    )),
                     provider: p,
                 }
             })
@@ -93,8 +96,8 @@ impl FallbackChain {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::noop_provider::NoopProvider;
+    use super::*;
 
     #[tokio::test]
     async fn test_single_provider() {

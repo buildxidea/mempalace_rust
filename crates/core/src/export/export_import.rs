@@ -78,7 +78,12 @@ impl ExportImportStore {
             actions_json: self.dump_combined_if_exists(&["actions", "action_edges"])?,
             coordination_json: None,
             smart_features_json: self.dump_combined_if_exists(&[
-                "sentinels", "sketches", "crystals", "facets", "lessons", "insights",
+                "sentinels",
+                "sketches",
+                "crystals",
+                "facets",
+                "lessons",
+                "insights",
             ])?,
             pagination,
         })
@@ -93,13 +98,21 @@ impl ExportImportStore {
             "0.9.9", "0.9.10", "0.9.11", "0.9.12", "0.9.13", "0.9.14", "0.9.15", "0.9.16",
             "0.9.17", "0.9.18", "0.9.19", "0.9.20", "0.9.21", "0.9.22", "0.9.23", "0.9.24",
             VERSION,
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
 
         if !supported.contains(data.version.as_str()) {
             return Ok(ImportResult {
                 success: false,
                 strategy: strategy.to_string(),
-                stats: ImportStats { sessions: 0, observations: 0, memories: 0, summaries: 0, skipped: 0 },
+                stats: ImportStats {
+                    sessions: 0,
+                    observations: 0,
+                    memories: 0,
+                    summaries: 0,
+                    skipped: 0,
+                },
                 error: Some(format!("Unsupported export version: {}", data.version)),
             });
         }
@@ -110,18 +123,35 @@ impl ExportImportStore {
             }
         }
 
-        let mut stats = ImportStats { sessions: 0, observations: 0, memories: 0, summaries: 0, skipped: 0 };
+        let mut stats = ImportStats {
+            sessions: 0,
+            observations: 0,
+            memories: 0,
+            summaries: 0,
+            skipped: 0,
+        };
         stats.sessions = self.restore_count(&data.sessions_json, "sessions", strategy)?;
-        stats.observations = self.restore_count(&data.observations_json, "observations", strategy)?;
+        stats.observations =
+            self.restore_count(&data.observations_json, "observations", strategy)?;
         stats.memories = self.restore_count(&data.memories_json, "memories", strategy)?;
-        stats.summaries = self.restore_count(&data.summaries_json, "session_summaries", strategy)?;
+        stats.summaries =
+            self.restore_count(&data.summaries_json, "session_summaries", strategy)?;
 
-        Ok(ImportResult { success: true, strategy: strategy.to_string(), stats, error: None })
+        Ok(ImportResult {
+            success: true,
+            strategy: strategy.to_string(),
+            stats,
+            error: None,
+        })
     }
 
     fn dump_table(&self, table: &str) -> Result<String> {
         let mut stmt = self.conn.prepare(&format!("SELECT * FROM {}", table))?;
-        let cols: Vec<String> = stmt.column_names().into_iter().map(|s| s.to_string()).collect();
+        let cols: Vec<String> = stmt
+            .column_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
         let rows = stmt.query_map([], |row| {
             let mut map = serde_json::Map::new();
             for (i, col) in cols.iter().enumerate() {
@@ -131,7 +161,9 @@ impl ExportImportStore {
             Ok(serde_json::Value::Object(map))
         })?;
         let mut results = Vec::new();
-        for row in rows { results.push(row?); }
+        for row in rows {
+            results.push(row?);
+        }
         Ok(serde_json::to_string(&results)?)
     }
 
@@ -149,13 +181,19 @@ impl ExportImportStore {
                 parts.push(format!("\"{}\":{}", table, json));
             }
         }
-        if parts.is_empty() { Ok(None) } else { Ok(Some(format!("{{{}}}", parts.join(",")))) }
+        if parts.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(format!("{{{}}}", parts.join(","))))
+        }
     }
 
     fn count_table(&self, table: &str) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            &format!("SELECT COUNT(*) FROM {}", table), [], |row| row.get(0),
-        )?;
+        let count: i64 =
+            self.conn
+                .query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |row| {
+                    row.get(0)
+                })?;
         Ok(count as usize)
     }
 
@@ -165,7 +203,9 @@ impl ExportImportStore {
     }
 
     fn restore_count(&self, json: &str, _table: &str, strategy: &str) -> Result<usize> {
-        if json.is_empty() || json == "null" { return Ok(0); }
+        if json.is_empty() || json == "null" {
+            return Ok(0);
+        }
         let values: Vec<serde_json::Value> = serde_json::from_str(json)?;
         let mut skipped = 0;
         for value in &values {
@@ -175,7 +215,11 @@ impl ExportImportStore {
                 }
             }
         }
-        Ok(if strategy == "skip" { skipped } else { values.len() })
+        Ok(if strategy == "skip" {
+            skipped
+        } else {
+            values.len()
+        })
     }
 }
 
@@ -195,10 +239,26 @@ mod tests {
 
     fn test_store() -> ExportImportStore {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, project TEXT, status TEXT)", []).unwrap();
-        conn.execute("CREATE TABLE observations (id TEXT PRIMARY KEY, session_id TEXT, title TEXT)", []).unwrap();
-        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, title TEXT, content TEXT)", []).unwrap();
-        conn.execute("CREATE TABLE session_summaries (session_id TEXT PRIMARY KEY, title TEXT)", []).unwrap();
+        conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, project TEXT, status TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE observations (id TEXT PRIMARY KEY, session_id TEXT, title TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE memories (id TEXT PRIMARY KEY, title TEXT, content TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE session_summaries (session_id TEXT PRIMARY KEY, title TEXT)",
+            [],
+        )
+        .unwrap();
         ExportImportStore::new(conn).unwrap()
     }
 
@@ -213,11 +273,20 @@ mod tests {
     #[test]
     fn test_import_unsupported_version() {
         let store = test_store();
-        let data = ExportData { version: "99.99.99".to_string(), exported_at: String::new(),
-            sessions_json: "[]".to_string(), observations_json: "[]".to_string(),
-            memories_json: "[]".to_string(), summaries_json: "[]".to_string(),
-            profiles_json: None, graph_json: None, actions_json: None,
-            coordination_json: None, smart_features_json: None, pagination: None };
+        let data = ExportData {
+            version: "99.99.99".to_string(),
+            exported_at: String::new(),
+            sessions_json: "[]".to_string(),
+            observations_json: "[]".to_string(),
+            memories_json: "[]".to_string(),
+            summaries_json: "[]".to_string(),
+            profiles_json: None,
+            graph_json: None,
+            actions_json: None,
+            coordination_json: None,
+            smart_features_json: None,
+            pagination: None,
+        };
         let result = store.import(&data, "merge").unwrap();
         assert!(!result.success);
     }
@@ -225,11 +294,20 @@ mod tests {
     #[test]
     fn test_import_merge_strategy() {
         let store = test_store();
-        let data = ExportData { version: VERSION.to_string(), exported_at: String::new(),
-            sessions_json: "[]".to_string(), observations_json: "[]".to_string(),
-            memories_json: "[]".to_string(), summaries_json: "[]".to_string(),
-            profiles_json: None, graph_json: None, actions_json: None,
-            coordination_json: None, smart_features_json: None, pagination: None };
+        let data = ExportData {
+            version: VERSION.to_string(),
+            exported_at: String::new(),
+            sessions_json: "[]".to_string(),
+            observations_json: "[]".to_string(),
+            memories_json: "[]".to_string(),
+            summaries_json: "[]".to_string(),
+            profiles_json: None,
+            graph_json: None,
+            actions_json: None,
+            coordination_json: None,
+            smart_features_json: None,
+            pagination: None,
+        };
         let result = store.import(&data, "merge").unwrap();
         assert!(result.success);
     }
@@ -253,14 +331,29 @@ mod tests {
     fn test_sqlite_value_to_json() {
         use rusqlite::types::Value;
         assert_eq!(sqlite_value_to_json(Value::Null), serde_json::Value::Null);
-        assert_eq!(sqlite_value_to_json(Value::Integer(42)), serde_json::json!(42));
-        assert_eq!(sqlite_value_to_json(Value::Real(3.14)), serde_json::json!(3.14));
-        assert_eq!(sqlite_value_to_json(Value::Text("hi".into())), serde_json::json!("hi"));
+        assert_eq!(
+            sqlite_value_to_json(Value::Integer(42)),
+            serde_json::json!(42)
+        );
+        assert_eq!(
+            sqlite_value_to_json(Value::Real(3.14)),
+            serde_json::json!(3.14)
+        );
+        assert_eq!(
+            sqlite_value_to_json(Value::Text("hi".into())),
+            serde_json::json!("hi")
+        );
     }
 
     #[test]
     fn test_import_stats() {
-        let stats = ImportStats { sessions: 5, observations: 100, memories: 20, summaries: 3, skipped: 2 };
+        let stats = ImportStats {
+            sessions: 5,
+            observations: 100,
+            memories: 20,
+            summaries: 3,
+            skipped: 2,
+        };
         assert_eq!(stats.sessions, 5);
     }
 

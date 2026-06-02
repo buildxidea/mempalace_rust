@@ -1354,7 +1354,11 @@ mod tests {
 
     #[test]
     fn circuit_state_roundtrip() {
-        for variant in [CircuitState::Closed, CircuitState::Open, CircuitState::HalfOpen] {
+        for variant in [
+            CircuitState::Closed,
+            CircuitState::Open,
+            CircuitState::HalfOpen,
+        ] {
             let json = serde_json::to_string(&variant).unwrap();
             let parsed: CircuitState = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, parsed);

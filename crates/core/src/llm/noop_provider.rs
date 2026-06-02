@@ -17,7 +17,9 @@ impl NoopProvider {
     }
 
     pub fn with_model(model: impl Into<String>) -> Self {
-        Self { model: model.into() }
+        Self {
+            model: model.into(),
+        }
     }
 }
 

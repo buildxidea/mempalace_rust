@@ -48,20 +48,19 @@ pub fn inject_session_context(
         crate::searcher::search_memories_with_rerank(
             &query,
             palace_path,
-            None, // wing filter - none
-            None, // room filter - none
-            5,    // limit
-            None, // embedding model
-            false, // no BM25 reranking
+            None,    // wing filter - none
+            None,    // room filter - none
+            5,       // limit
+            None,    // embedding model
+            false,   // no BM25 reranking
             Some(3), // max_per_session
-            None, // fusion mode
-        ).await
+            None,    // fusion mode
+        )
+        .await
     });
 
     match result {
-        Ok(response) => {
-            format_context_as_markdown(&response)
-        }
+        Ok(response) => format_context_as_markdown(&response),
         Err(e) => {
             eprintln!("[mempalace] context injection failed: {}", e);
             String::new()

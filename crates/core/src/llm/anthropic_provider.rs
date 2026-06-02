@@ -52,8 +52,7 @@ impl AnthropicProvider {
 
     /// Get the embedding model name from config or environment.
     fn embedding_model(&self) -> String {
-        std::env::var("ANTHROPIC_EMBEDDING_MODEL")
-            .unwrap_or_else(|_| "voyage-3.5".to_string())
+        std::env::var("ANTHROPIC_EMBEDDING_MODEL").unwrap_or_else(|_| "voyage-3.5".to_string())
     }
 }
 
@@ -68,9 +67,13 @@ impl LlmProvider for AnthropicProvider {
     }
 
     async fn complete(&self, system: &str, user: &str) -> Result<LlmCompletion, LlmError> {
-        let api_key = self.config.api_key.as_ref().ok_or_else(|| LlmError::MissingApiKey {
-            provider: self.name().to_string(),
-        })?;
+        let api_key = self
+            .config
+            .api_key
+            .as_ref()
+            .ok_or_else(|| LlmError::MissingApiKey {
+                provider: self.name().to_string(),
+            })?;
 
         let body = serde_json::json!({
             "model": self.config.model,
@@ -124,7 +127,8 @@ impl LlmProvider for AnthropicProvider {
 
         let usage = data.get("usage").map(|u| LlmUsage {
             prompt_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-            completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                as usize,
             total_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize
                 + u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         });
@@ -143,9 +147,13 @@ impl LlmProvider for AnthropicProvider {
         mime: &str,
         prompt: &str,
     ) -> Result<LlmCompletion, LlmError> {
-        let api_key = self.config.api_key.as_ref().ok_or_else(|| LlmError::MissingApiKey {
-            provider: self.name().to_string(),
-        })?;
+        let api_key = self
+            .config
+            .api_key
+            .as_ref()
+            .ok_or_else(|| LlmError::MissingApiKey {
+                provider: self.name().to_string(),
+            })?;
 
         let body = serde_json::json!({
             "model": self.config.model,
@@ -221,9 +229,13 @@ impl LlmProvider for AnthropicProvider {
     }
 
     async fn embed_text(&self, text: &str) -> Result<Vec<f32>, LlmError> {
-        let api_key = self.config.api_key.as_ref().ok_or_else(|| LlmError::MissingApiKey {
-            provider: self.name().to_string(),
-        })?;
+        let api_key = self
+            .config
+            .api_key
+            .as_ref()
+            .ok_or_else(|| LlmError::MissingApiKey {
+                provider: self.name().to_string(),
+            })?;
 
         let embedding_model = self.embedding_model();
         let body = serde_json::json!({
@@ -265,9 +277,7 @@ impl LlmProvider for AnthropicProvider {
                     .map(|f| f as f32)
                     .collect()
             })
-            .ok_or_else(|| {
-                LlmError::Shape("no embedding array in response".to_string())
-            })?;
+            .ok_or_else(|| LlmError::Shape("no embedding array in response".to_string()))?;
 
         Ok(embedding)
     }

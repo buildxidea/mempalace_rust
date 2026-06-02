@@ -70,7 +70,8 @@ impl RoutineStore {
         routine_id: &str,
         project: &str,
     ) -> Result<String> {
-        let routine = self.get_routine(routine_id)?
+        let routine = self
+            .get_routine(routine_id)?
             .ok_or_else(|| anyhow::anyhow!("Routine {} not found", routine_id))?;
 
         if routine.frozen {
@@ -92,7 +93,11 @@ impl RoutineStore {
                 id: action_id.clone(),
                 title: format!("[{}] {}", routine.name, step.action_id),
                 description: step.condition.clone().unwrap_or_default(),
-                status: if prev_action_id.is_some() { ActionStatus::Blocked } else { ActionStatus::Pending },
+                status: if prev_action_id.is_some() {
+                    ActionStatus::Blocked
+                } else {
+                    ActionStatus::Pending
+                },
                 priority: 2,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
@@ -111,7 +116,11 @@ impl RoutineStore {
             action_store.create_action(&action)?;
 
             if let Some(prev_id) = prev_action_id {
-                action_store.add_edge(&prev_id, &action_id, crate::types::ActionEdgeType::DependsOn)?;
+                action_store.add_edge(
+                    &prev_id,
+                    &action_id,
+                    crate::types::ActionEdgeType::DependsOn,
+                )?;
             }
 
             prev_action_id = Some(action_id);
@@ -121,19 +130,25 @@ impl RoutineStore {
     }
 
     pub fn get_run_status(&self, action_store: &ActionStore, run_id: &str) -> Result<RoutineRun> {
-        let mut stmt = self.conn.prepare("SELECT * FROM routine_runs WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM routine_runs WHERE id = ?1")?;
         let mut rows = stmt.query(params![run_id])?;
-        let row = rows.next()?.ok_or_else(|| anyhow::anyhow!("Run {} not found", run_id))?;
+        let row = rows
+            .next()?
+            .ok_or_else(|| anyhow::anyhow!("Run {} not found", run_id))?;
 
         let routine_id: String = row.get("routine_id")?;
         let started_at = chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("started_at")?)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
-        let completed_at = row.get::<_, Option<String>>("completed_at")?
+        let completed_at = row
+            .get::<_, Option<String>>("completed_at")?
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
         let status: String = row.get("status")?;
-        let step_results: HashMap<String, String> = serde_json::from_str(&row.get::<_, String>("step_results")?).unwrap_or_default();
+        let step_results: HashMap<String, String> =
+            serde_json::from_str(&row.get::<_, String>("step_results")?).unwrap_or_default();
 
         Ok(RoutineRun {
             id: run_id.to_string(),
@@ -171,7 +186,10 @@ impl RoutineStore {
                 .unwrap_or_else(|_| Utc::now()),
             frozen: row.get::<_, i64>("frozen")? != 0,
             tags: serde_json::from_str(&row.get::<_, String>("tags")?).unwrap_or_default(),
-            source_procedural_ids: serde_json::from_str(&row.get::<_, String>("source_procedural_ids")?).unwrap_or_default(),
+            source_procedural_ids: serde_json::from_str(
+                &row.get::<_, String>("source_procedural_ids")?,
+            )
+            .unwrap_or_default(),
         })
     }
 }
@@ -195,8 +213,16 @@ mod tests {
             name: "Test Routine".to_string(),
             description: "A test routine".to_string(),
             steps: vec![
-                RoutineStep { action_id: "step-1".to_string(), order: 0, condition: None },
-                RoutineStep { action_id: "step-2".to_string(), order: 1, condition: Some("if needed".to_string()) },
+                RoutineStep {
+                    action_id: "step-1".to_string(),
+                    order: 0,
+                    condition: None,
+                },
+                RoutineStep {
+                    action_id: "step-2".to_string(),
+                    order: 1,
+                    condition: Some("if needed".to_string()),
+                },
             ],
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -219,9 +245,21 @@ mod tests {
             name: "Deploy".to_string(),
             description: "Deploy routine".to_string(),
             steps: vec![
-                RoutineStep { action_id: "build".to_string(), order: 0, condition: None },
-                RoutineStep { action_id: "test".to_string(), order: 1, condition: None },
-                RoutineStep { action_id: "deploy".to_string(), order: 2, condition: None },
+                RoutineStep {
+                    action_id: "build".to_string(),
+                    order: 0,
+                    condition: None,
+                },
+                RoutineStep {
+                    action_id: "test".to_string(),
+                    order: 1,
+                    condition: None,
+                },
+                RoutineStep {
+                    action_id: "deploy".to_string(),
+                    order: 2,
+                    condition: None,
+                },
             ],
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -231,13 +269,23 @@ mod tests {
         };
         routine_store.create_routine(&routine).unwrap();
 
-        let run_id = routine_store.run_routine(&action_store, "r-1", "test-project").unwrap();
+        let run_id = routine_store
+            .run_routine(&action_store, "r-1", "test-project")
+            .unwrap();
         assert!(run_id.starts_with("run_r-1_"));
 
-        let actions = action_store.list_actions(Some("test-project"), None).unwrap();
+        let actions = action_store
+            .list_actions(Some("test-project"), None)
+            .unwrap();
         assert_eq!(actions.len(), 3);
         assert!(actions.iter().any(|a| a.status == ActionStatus::Pending));
-        assert!(actions.iter().filter(|a| a.status == ActionStatus::Blocked).count() >= 2);
+        assert!(
+            actions
+                .iter()
+                .filter(|a| a.status == ActionStatus::Blocked)
+                .count()
+                >= 2
+        );
     }
 
     #[test]
@@ -267,7 +315,11 @@ mod tests {
             id: "r-1".to_string(),
             name: "Test".to_string(),
             description: "".to_string(),
-            steps: vec![RoutineStep { action_id: "step-1".to_string(), order: 0, condition: None }],
+            steps: vec![RoutineStep {
+                action_id: "step-1".to_string(),
+                order: 0,
+                condition: None,
+            }],
             created_at: Utc::now(),
             updated_at: Utc::now(),
             frozen: false,
@@ -276,8 +328,12 @@ mod tests {
         };
         routine_store.create_routine(&routine).unwrap();
 
-        let run_id = routine_store.run_routine(&action_store, "r-1", "test").unwrap();
-        let status = routine_store.get_run_status(&action_store, &run_id).unwrap();
+        let run_id = routine_store
+            .run_routine(&action_store, "r-1", "test")
+            .unwrap();
+        let status = routine_store
+            .get_run_status(&action_store, &run_id)
+            .unwrap();
         assert_eq!(status.status, "running");
         assert_eq!(status.routine_id, "r-1");
     }

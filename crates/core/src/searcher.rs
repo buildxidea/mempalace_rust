@@ -4,6 +4,37 @@ use crate::palace_db::{self, PalaceDb, PalaceState, QueryResult};
 use crate::palace_graph::cached_graph;
 use anyhow::Context;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Open the palace for search using a real vector embedder so the hybrid RRF
+/// (BM25 + vector + graph) stream actually uses embeddings (G1 / benchmark
+/// parity). `open_with_embedder` re-syncs embeddings from stored drawer text
+/// on open, so this upgrades retrieval without changing the mining path.
+///
+/// Falls back to the default (`NullEmbedder`, BM25-only) open path when no
+/// embedder is available (feature off, model download blocked) or when the
+/// stored embedding manifest disagrees — graceful degradation, never a hard
+/// failure for a query.
+fn open_for_search(palace_path: &Path, embedding_model: Option<&str>) -> anyhow::Result<PalaceDb> {
+    let resolved = match embedding_model {
+        Some(name) => crate::embed::resolve_embedder(name),
+        None => crate::embed::embedder_from_env(),
+    };
+    match resolved {
+        Ok(boxed) => {
+            let model_name = embedding_model
+                .map(String::from)
+                .or_else(|| std::env::var("MEMPALACE_EMBED_MODEL").ok())
+                .unwrap_or_else(|| crate::embed::DEFAULT_EMBED_MODEL.to_string());
+            let embedder: Arc<dyn crate::embed::Embedder> = Arc::from(boxed);
+            match PalaceDb::open_with_embedder(palace_path, embedder, &model_name) {
+                Ok(db) => Ok(db),
+                Err(_) => PalaceDb::open(palace_path),
+            }
+        }
+        Err(_) => PalaceDb::open(palace_path),
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -111,7 +142,7 @@ pub async fn search_memories(
     wing: Option<&str>,
     room: Option<&str>,
     n_results: usize,
-    _embedding_model: Option<&str>,
+    embedding_model: Option<&str>,
 ) -> anyhow::Result<SearchResponse> {
     search_memories_with_rerank(
         query,
@@ -119,7 +150,7 @@ pub async fn search_memories(
         wing,
         room,
         n_results,
-        _embedding_model,
+        embedding_model,
         false,
         None,
         None,
@@ -135,7 +166,7 @@ pub async fn search_memories_with_rerank(
     wing: Option<&str>,
     room: Option<&str>,
     n_results: usize,
-    _embedding_model: Option<&str>,
+    embedding_model: Option<&str>,
     use_bm25: bool,
     max_per_session: Option<usize>,
     fusion_mode: Option<FusionMode>,
@@ -155,7 +186,10 @@ pub async fn search_memories_with_rerank(
         PalaceState::Ready => {}
     }
 
-    let palace_db = PalaceDb::open(palace_path)
+    // G1: open with a real vector embedder so the hybrid RRF vector stream is
+    // live (mainline parity with the benchmark path). Falls back internally
+    // to the BM25-only null-embedder open on any error.
+    let palace_db = open_for_search(palace_path, embedding_model)
         .map_err(|_| SearchError::NoPalace(palace_path.display().to_string()))?;
 
     // Fetch more results for reranking (3x requested)

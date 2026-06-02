@@ -10,7 +10,6 @@
 /// - [`graph_extraction`] — Knowledge graph entity/relationship extraction prompts
 /// - [`vision`] — Image description prompt
 /// - [`xml`] — XML parsing utilities for LLM response extraction
-
 pub mod compression;
 pub mod consolidation;
 pub mod graph_extraction;
@@ -18,12 +17,12 @@ pub mod vision;
 pub mod xml;
 
 // Re-export key constants for ergonomic access
-pub use compression::{COMPRESSION_SYSTEM, STRICTER_SUFFIX, build_compression_prompt};
+pub use compression::{build_compression_prompt, COMPRESSION_SYSTEM, STRICTER_SUFFIX};
 pub use consolidation::{
-    PROCEDURAL_EXTRACTION_SYSTEM, SEMANTIC_MERGE_SYSTEM, build_procedural_extraction_prompt,
-    build_semantic_merge_prompt,
+    build_procedural_extraction_prompt, build_semantic_merge_prompt, PROCEDURAL_EXTRACTION_SYSTEM,
+    SEMANTIC_MERGE_SYSTEM,
 };
-pub use graph_extraction::{GRAPH_EXTRACTION_SYSTEM, build_graph_extraction_prompt};
-pub use vision::VISION_DESCRIPTION_SYSTEM;
+pub use graph_extraction::{build_graph_extraction_prompt, GRAPH_EXTRACTION_SYSTEM};
 pub use vision::VISION_DESCRIPTION_PROMPT;
+pub use vision::VISION_DESCRIPTION_SYSTEM;
 pub use xml::{get_xml_children, get_xml_tag};

@@ -32,9 +32,7 @@ pub fn build_crystallize_prompt(actions: &[Action]) -> String {
     let items: Vec<String> = actions
         .iter()
         .filter(|a| a.status == ActionStatus::Completed)
-        .map(|a| {
-            format!("- {}: {}", a.id, a.description)
-        })
+        .map(|a| format!("- {}: {}", a.id, a.description))
         .collect();
     format!(
         "Crystallize these completed actions:\n\n{}",
@@ -48,7 +46,8 @@ pub fn parse_crystal_json(json: &str) -> Result<CrystalJson> {
         .trim_start_matches("```json")
         .trim_end_matches("```")
         .trim();
-    serde_json::from_str(cleaned).map_err(|e| anyhow::anyhow!("Failed to parse crystal JSON: {}", e))
+    serde_json::from_str(cleaned)
+        .map_err(|e| anyhow::anyhow!("Failed to parse crystal JSON: {}", e))
 }
 
 pub async fn crystallize(
@@ -74,7 +73,10 @@ pub async fn crystallize(
     let action_ids: Vec<String> = completed.iter().map(|a| a.id.clone()).collect();
 
     Ok(Crystal {
-        id: format!("crystal-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()),
+        id: format!(
+            "crystal-{}",
+            uuid::Uuid::new_v4().to_string()[..8].to_string()
+        ),
         action_ids,
         narrative: parsed.narrative,
         key_outcomes: parsed.key_outcomes,
@@ -116,9 +118,7 @@ pub fn group_actions_for_crystallization(
 
     let eligible: Vec<Action> = actions
         .iter()
-        .filter(|a| {
-            a.status == ActionStatus::Completed && a.updated_at < cutoff
-        })
+        .filter(|a| a.status == ActionStatus::Completed && a.updated_at < cutoff)
         .cloned()
         .collect();
 

@@ -43,10 +43,10 @@ use std::sync::Arc;
 pub mod builder;
 pub mod store;
 
+pub use crate::session::SessionStore;
 pub use builder::PalaceBuilder;
 pub use store::embedvec::EmbedvecStore;
 pub use store::StoreTier;
-pub use crate::session::SessionStore;
 
 // ---------------------------------------------------------------------------
 // Public types (mirroring the §3 Concrete API Sketch)
@@ -631,7 +631,8 @@ impl MemoryProvider for Palace {
         if kind == DrawerKind::Raw {
             if let Some(ref llm) = self.llm {
                 let raw_obs = self.make_raw_observation(&content);
-                let compressed = crate::compress::compress_observation(llm.as_ref(), &raw_obs).await;
+                let compressed =
+                    crate::compress::compress_observation(llm.as_ref(), &raw_obs).await;
                 let fact_drawer = Drawer::new(compressed.narrative)
                     .kind(DrawerKind::Fact)
                     .derived_from(vec![id.clone()]);

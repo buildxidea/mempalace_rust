@@ -44,7 +44,10 @@ pub fn parse_memory_md(content: &str) -> ParsedMemory {
     for line in content.lines() {
         if line.starts_with("## ") {
             if !current_section.is_empty() {
-                sections.insert(current_section.clone(), current_content.join("\n").trim().to_string());
+                sections.insert(
+                    current_section.clone(),
+                    current_content.join("\n").trim().to_string(),
+                );
             }
             current_section = line[3..].trim().to_string();
             current_content.clear();
@@ -53,7 +56,10 @@ pub fn parse_memory_md(content: &str) -> ParsedMemory {
         }
     }
     if !current_section.is_empty() {
-        sections.insert(current_section, current_content.join("\n").trim().to_string());
+        sections.insert(
+            current_section,
+            current_content.join("\n").trim().to_string(),
+        );
     }
 
     ParsedMemory {
@@ -82,10 +88,12 @@ pub fn serialize_to_memory_md(
     lines.push("## Key Memories".to_string());
     lines.push(String::new());
 
-    let mut sorted: Vec<_> = memories.iter()
-        .filter(|m| m.is_latest)
-        .collect();
-    sorted.sort_by(|a, b| b.strength.partial_cmp(&a.strength).unwrap_or(std::cmp::Ordering::Equal));
+    let mut sorted: Vec<_> = memories.iter().filter(|m| m.is_latest).collect();
+    sorted.sort_by(|a, b| {
+        b.strength
+            .partial_cmp(&a.strength)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for mem in sorted {
         if lines.len() >= line_budget - 2 {
@@ -128,7 +136,9 @@ pub fn sync_to_claude(
     if !config.enabled {
         return Err(anyhow::anyhow!("Claude bridge not enabled"));
     }
-    let path = config.memory_file_path.as_ref()
+    let path = config
+        .memory_file_path
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("memory_file_path not configured"))?;
 
     let md = serialize_to_memory_md(memories, project_summary, config.line_budget);
@@ -141,7 +151,9 @@ pub fn read_from_claude(config: &ClaudeBridgeConfig) -> Result<ParsedMemory> {
     if !config.enabled {
         return Err(anyhow::anyhow!("Claude bridge not enabled"));
     }
-    let path = config.memory_file_path.as_ref()
+    let path = config
+        .memory_file_path
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("memory_file_path not configured"))?;
 
     if !Path::new(path).exists() {
@@ -180,13 +192,25 @@ mod tests {
     fn test_serialize_to_memory_md() {
         use crate::types::{Memory, MemoryType};
         let memories = vec![Memory {
-            id: "m-1".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-            memory_type: MemoryType::Semantic, title: "Auth uses JWT".into(),
+            id: "m-1".into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            memory_type: MemoryType::Semantic,
+            title: "Auth uses JWT".into(),
             content: "The project uses JWT for auth".into(),
-            concepts: vec!["auth".into()], files: vec![], session_ids: vec![],
-            strength: 0.9, version: 1, parent_id: None, supersedes: vec![],
-            related_ids: vec![], source_observation_ids: vec![], is_latest: true,
-            forget_after: None, image_ref: None, agent_id: None,
+            concepts: vec!["auth".into()],
+            files: vec![],
+            session_ids: vec![],
+            strength: 0.9,
+            version: 1,
+            parent_id: None,
+            supersedes: vec![],
+            related_ids: vec![],
+            source_observation_ids: vec![],
+            is_latest: true,
+            forget_after: None,
+            image_ref: None,
+            agent_id: None,
             project: "test".into(),
         }];
         let md = serialize_to_memory_md(&memories, "Test project", 200);
@@ -198,13 +222,25 @@ mod tests {
     fn test_serialize_respects_line_budget() {
         use crate::types::{Memory, MemoryType};
         let memories = vec![Memory {
-            id: "m-1".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-            memory_type: MemoryType::Semantic, title: "Test".into(),
+            id: "m-1".into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            memory_type: MemoryType::Semantic,
+            title: "Test".into(),
             content: "line1\nline2\nline3\nline4\nline5".into(),
-            concepts: vec![], files: vec![], session_ids: vec![],
-            strength: 0.9, version: 1, parent_id: None, supersedes: vec![],
-            related_ids: vec![], source_observation_ids: vec![], is_latest: true,
-            forget_after: None, image_ref: None, agent_id: None,
+            concepts: vec![],
+            files: vec![],
+            session_ids: vec![],
+            strength: 0.9,
+            version: 1,
+            parent_id: None,
+            supersedes: vec![],
+            related_ids: vec![],
+            source_observation_ids: vec![],
+            is_latest: true,
+            forget_after: None,
+            image_ref: None,
+            agent_id: None,
             project: "test".into(),
         }];
         let md = serialize_to_memory_md(&memories, "", 10);

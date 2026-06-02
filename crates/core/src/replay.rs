@@ -48,13 +48,11 @@ pub fn parse_jsonl(path: &Path) -> Result<Vec<ClaudeSessionLine>> {
 }
 
 /// Import sessions from a Claude Code JSONL file.
-pub fn import_jsonl(
-    path: &Path,
-    project: &str,
-) -> Result<ImportedSession> {
+pub fn import_jsonl(path: &Path, project: &str) -> Result<ImportedSession> {
     let lines = parse_jsonl(path)?;
 
-    let session_id = lines.iter()
+    let session_id = lines
+        .iter()
         .find_map(|l| l.session_id.clone())
         .unwrap_or_else(|| format!("imported-{}", Utc::now().timestamp()));
 
@@ -66,15 +64,15 @@ pub fn import_jsonl(
 
         if line.line_type == "assistant" || line.line_type == "user" {
             if let Some(ref msg) = line.message {
-                let content = msg.get("content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("");
+                let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
                 if !content.is_empty() {
                     observations.push(crate::types::CompressedObservation {
                         id: format!("replay-{}-{}", session_id, i),
                         session_id: session_id.clone(),
-                        timestamp: line.timestamp.as_ref()
+                        timestamp: line
+                            .timestamp
+                            .as_ref()
                             .and_then(|t| t.parse().ok())
                             .unwrap_or(Utc::now()),
                         observation_type: if line.line_type == "user" {
@@ -143,7 +141,8 @@ pub fn load_all_sessions() -> Result<Vec<ImportedSession>> {
     let mut sessions = Vec::new();
 
     for file in files {
-        let project = file.parent()
+        let project = file
+            .parent()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");

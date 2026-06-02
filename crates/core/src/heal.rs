@@ -31,25 +31,23 @@ pub fn heal_blocked_actions(
     let mut fixed = Vec::new();
     let failed = Vec::new();
 
-    let action_map: std::collections::HashMap<_, _> = actions.iter()
-        .map(|a| (a.id.clone(), a.clone()))
-        .collect();
+    let action_map: std::collections::HashMap<_, _> =
+        actions.iter().map(|a| (a.id.clone(), a.clone())).collect();
 
     for action in actions.iter_mut() {
         if action.status != crate::types::ActionStatus::Blocked {
             continue;
         }
 
-        let deps: Vec<_> = edges.iter()
-            .filter(|e| e.from_id == action.id)
-            .collect();
+        let deps: Vec<_> = edges.iter().filter(|e| e.from_id == action.id).collect();
 
         if deps.is_empty() {
             continue;
         }
 
         let all_done = deps.iter().all(|e| {
-            action_map.get(&e.to_id)
+            action_map
+                .get(&e.to_id)
                 .map(|a| matches!(a.status, crate::types::ActionStatus::Completed))
                 .unwrap_or(false)
         });
@@ -65,7 +63,11 @@ pub fn heal_blocked_actions(
         }
     }
 
-    Ok(HealResult { fixed, failed, dry_run })
+    Ok(HealResult {
+        fixed,
+        failed,
+        dry_run,
+    })
 }
 
 /// Auto-fix expired leases by releasing them.
@@ -85,7 +87,11 @@ pub fn heal_expired_leases(
         }
     });
 
-    Ok(HealResult { fixed, failed: Vec::new(), dry_run })
+    Ok(HealResult {
+        fixed,
+        failed: Vec::new(),
+        dry_run,
+    })
 }
 
 /// Heal all fixable issues across categories.
@@ -120,18 +126,32 @@ mod tests {
 
     fn test_action(id: &str, status: ActionStatus) -> Action {
         Action {
-            id: id.into(), title: format!("Action {}", id), description: "".into(),
-            status, priority: 1, created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-            created_by: None, assigned_to: None, project: "test".into(), tags: vec![],
-            source_observation_ids: vec![], source_memory_ids: vec![],
-            result: None, parent_id: None, metadata: std::collections::HashMap::new(),
-            sketch_id: None, crystallized_into: None,
+            id: id.into(),
+            title: format!("Action {}", id),
+            description: "".into(),
+            status,
+            priority: 1,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            created_by: None,
+            assigned_to: None,
+            project: "test".into(),
+            tags: vec![],
+            source_observation_ids: vec![],
+            source_memory_ids: vec![],
+            result: None,
+            parent_id: None,
+            metadata: std::collections::HashMap::new(),
+            sketch_id: None,
+            crystallized_into: None,
         }
     }
 
     fn test_lease(id: &str, action_id: &str, hours_until_expiry: i64) -> Lease {
         Lease {
-            id: id.into(), action_id: action_id.into(), holder: "agent".into(),
+            id: id.into(),
+            action_id: action_id.into(),
+            holder: "agent".into(),
             acquired_at: chrono::Utc::now(),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(hours_until_expiry),
             project: "test".into(),
@@ -145,7 +165,8 @@ mod tests {
             test_action("a-2", ActionStatus::Blocked),
         ];
         let edges = vec![ActionEdge {
-            from_id: "a-2".into(), to_id: "a-1".into(),
+            from_id: "a-2".into(),
+            to_id: "a-1".into(),
             edge_type: ActionEdgeType::DependsOn,
         }];
 
@@ -161,7 +182,8 @@ mod tests {
             test_action("a-2", ActionStatus::Blocked),
         ];
         let edges = vec![ActionEdge {
-            from_id: "a-2".into(), to_id: "a-1".into(),
+            from_id: "a-2".into(),
+            to_id: "a-1".into(),
             edge_type: ActionEdgeType::DependsOn,
         }];
 
@@ -174,7 +196,7 @@ mod tests {
     fn test_heal_expired_leases() {
         let mut leases = vec![
             test_lease("l-1", "a-1", -1), // expired
-            test_lease("l-2", "a-2", 24),  // not expired
+            test_lease("l-2", "a-2", 24), // not expired
         ];
 
         let result = heal_expired_leases(&mut leases, false).unwrap();
@@ -189,7 +211,8 @@ mod tests {
             test_action("a-2", ActionStatus::Blocked),
         ];
         let edges = vec![ActionEdge {
-            from_id: "a-2".into(), to_id: "a-1".into(),
+            from_id: "a-2".into(),
+            to_id: "a-1".into(),
             edge_type: ActionEdgeType::DependsOn,
         }];
 
@@ -217,7 +240,8 @@ mod tests {
             test_action("a-2", ActionStatus::Blocked),
         ];
         let edges = vec![ActionEdge {
-            from_id: "a-2".into(), to_id: "a-1".into(),
+            from_id: "a-2".into(),
+            to_id: "a-1".into(),
             edge_type: ActionEdgeType::DependsOn,
         }];
         let mut leases = vec![test_lease("l-1", "a-1", -1)];

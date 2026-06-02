@@ -33,7 +33,10 @@ pub enum CascadeChange {
     /// Invalidate/update cached data.
     Invalidate,
     /// Update a field with a new value.
-    UpdateField { field: String, value: serde_json::Value },
+    UpdateField {
+        field: String,
+        value: serde_json::Value,
+    },
     /// Tag with metadata.
     Tag { tag: String },
     /// Propagate deletion (soft delete).
@@ -132,7 +135,10 @@ pub fn compute_cascade_updates(
     let mut updates = Vec::new();
 
     // Only trigger cascade for configured entity types
-    if !config.trigger_on_types.contains(&changed_entity_type.to_lowercase()) {
+    if !config
+        .trigger_on_types
+        .contains(&changed_entity_type.to_lowercase())
+    {
         return updates;
     }
 
@@ -167,8 +173,7 @@ pub fn compute_cascade_updates(
             change: CascadeChange::Invalidate,
             reason: format!(
                 "Related to changed {} via {} relation",
-                changed_entity_id,
-                predicate
+                changed_entity_id, predicate
             ),
         });
     }
@@ -188,10 +193,7 @@ pub fn apply_to_observations(
 }
 
 /// Apply cascade updates to actions.
-pub fn apply_to_actions(
-    updates: &[CascadeUpdate],
-    _actions: &mut [crate::types::Action],
-) {
+pub fn apply_to_actions(updates: &[CascadeUpdate], _actions: &mut [crate::types::Action]) {
     let _count = updates
         .iter()
         .filter(|u| u.target_type == CascadeTargetType::Action)
@@ -220,15 +222,12 @@ pub fn cascade_update(
     let summary = if total_updated > 0 {
         format!(
             "Cascaded change to {} {} entities (max depth: {})",
-            total_updated,
-            changed_entity_type,
-            max_depth_reached
+            total_updated, changed_entity_type, max_depth_reached
         )
     } else {
         format!(
             "No cascade needed for {} {}",
-            changed_entity_id,
-            changed_entity_type
+            changed_entity_id, changed_entity_type
         )
     };
 
@@ -276,8 +275,7 @@ mod tests {
     fn test_compute_cascade_updates_respects_trigger_types() {
         let config = CascadeConfig::default();
         let related: Vec<(Entity, String, usize)> = vec![];
-        let updates =
-            compute_cascade_updates("e-1", "unknown_type", &related, &config);
+        let updates = compute_cascade_updates("e-1", "unknown_type", &related, &config);
         assert!(updates.is_empty());
     }
 
@@ -286,8 +284,12 @@ mod tests {
         // When there's no KG, cascade returns empty updates
         // (KG would need actual DB file to work)
         let config = CascadeConfig::default();
-        let result =
-            cascade_update("unknown-id", "file", Path::new("/nonexistent"), Some(config));
+        let result = cascade_update(
+            "unknown-id",
+            "file",
+            Path::new("/nonexistent"),
+            Some(config),
+        );
         // Expected to fail due to no KG, but we test config works
         assert!(result.is_err() || result.unwrap().total_updated == 0);
     }

@@ -2,10 +2,14 @@
 
 These scripts expose the same shell-hook surface as the Python reference hooks, but delegate the logic to the Rust CLI:
 
-- `hooks/mempal_save_hook.sh`
-- `hooks/mempal_precompact_hook.sh`
+- `hooks/mempal_save_hook.sh` — `stop` hook (auto-save)
+- `hooks/mempal_precompact_hook.sh` — `precompact` hook
+- `hooks/mempal_hook.sh <kind> [harness]` — generic dispatcher for **all** lifecycle kinds:
+  `session-start`, `session-end`, `stop`, `precompact`, `post-tool-use`, `post-tool-failure`,
+  `prompt-submit`, `notification`, `subagent-start`, `subagent-stop`, `task-completed`
 
-Both scripts read JSON from stdin and print JSON to stdout.
+All scripts read JSON from stdin and print JSON to stdout. Every kind is also callable
+directly via `mpr hook run --hook <kind> --harness <claude-code|codex>` without a wrapper.
 
 ## Usage
 

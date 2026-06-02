@@ -42,7 +42,13 @@ pub fn format_rerank_input(query: &str, title: &str, content: &str) -> String {
         // Truncate content to fit
         let prefix_len = query.len() + sep.len() + title.len() + 1;
         let content_max = MAX_INPUT_LENGTH.saturating_sub(prefix_len);
-        format!("{}{}{} {}", query, sep, title, &content[..content_max.min(content.len())])
+        format!(
+            "{}{}{} {}",
+            query,
+            sep,
+            title,
+            &content[..content_max.min(content.len())]
+        )
     }
 }
 
@@ -85,10 +91,9 @@ where
 /// Mock reranker for testing — returns scores based on ID hash.
 pub fn mock_score_fn(text: &str) -> f64 {
     // Simple hash-based mock score between 0 and 1
-    let hash: u64 = text
-        .bytes()
-        .enumerate()
-        .fold(0u64, |acc, (i, b)| acc.wrapping_add((b as u64).wrapping_mul((i as u64).wrapping_add(1))));
+    let hash: u64 = text.bytes().enumerate().fold(0u64, |acc, (i, b)| {
+        acc.wrapping_add((b as u64).wrapping_mul((i as u64).wrapping_add(1)))
+    });
     (hash % 1000) as f64 / 1000.0
 }
 
@@ -130,7 +135,11 @@ mod tests {
 
         // Use deterministic scores: "a" → 0.1, "b" → 0.9
         let scores = |text: &str| -> f64 {
-            if text.contains("high") { 0.9 } else { 0.1 }
+            if text.contains("high") {
+                0.9
+            } else {
+                0.1
+            }
         };
 
         let results = rerank_with_scores("query", &inputs, scores, 10);

@@ -62,9 +62,9 @@ impl ImageRefStore {
     }
 
     pub fn list_unreferenced(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT file_path FROM image_refs WHERE ref_count <= 0"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file_path FROM image_refs WHERE ref_count <= 0")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         let mut paths = Vec::new();
         for row in rows {

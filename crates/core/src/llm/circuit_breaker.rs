@@ -7,7 +7,7 @@
 //! - Open: deny all. After 30s -> HalfOpen
 //! - HalfOpen: allow single probe. Success -> Closed, Failure -> Open
 
-use crate::types::{CircuitState, CircuitBreakerState as CircuitBreakerData};
+use crate::types::{CircuitBreakerState as CircuitBreakerData, CircuitState};
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 

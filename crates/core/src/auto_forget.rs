@@ -122,14 +122,19 @@ pub fn evaluate_batch(
     auto_config: &AutoForgetConfig,
     now: Option<DateTime<Utc>>,
 ) -> Vec<ForgetEvaluation> {
-    let score_map: std::collections::HashMap<&str, &RetentionScore> =
-        retention_scores.iter().map(|s| (s.memory_id.as_str(), s)).collect();
+    let score_map: std::collections::HashMap<&str, &RetentionScore> = retention_scores
+        .iter()
+        .map(|s| (s.memory_id.as_str(), s))
+        .collect();
 
     memories
         .iter()
         .map(|memory| {
             let default_score = default_retention_score(&memory.id);
-            let score = score_map.get(memory.id.as_str()).copied().unwrap_or(&default_score);
+            let score = score_map
+                .get(memory.id.as_str())
+                .copied()
+                .unwrap_or(&default_score);
             evaluate_memory(memory, score, config, auto_config, now)
         })
         .collect()
@@ -139,10 +144,7 @@ pub fn evaluate_batch(
 ///
 /// Sets `is_latest = false` and updates `updated_at` for each forgettable memory.
 /// Returns the updated memories.
-pub fn apply_forgetting(
-    evaluations: &[ForgetEvaluation],
-    memories: &[Memory],
-) -> Vec<Memory> {
+pub fn apply_forgetting(evaluations: &[ForgetEvaluation], memories: &[Memory]) -> Vec<Memory> {
     let forget_ids: std::collections::HashSet<&str> = evaluations
         .iter()
         .filter(|e| e.should_forget)

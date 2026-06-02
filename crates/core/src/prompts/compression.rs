@@ -1,6 +1,5 @@
 /// Compression prompt templates.
 /// 1:1 port from agentmemory `src/prompts/compression.ts`.
-
 use crate::types::RawObservation;
 
 /// System prompt for memory compression.

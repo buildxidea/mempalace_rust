@@ -1,6 +1,5 @@
 /// XML parsing utilities for extracting structured data from LLM responses.
 /// 1:1 port from agentmemory `src/prompts/xml.ts`.
-
 use regex::Regex;
 
 /// Valid XML tag pattern: starts with letter or underscore, followed by alphanumeric, underscore, or hyphen.
@@ -29,7 +28,10 @@ pub fn get_xml_tag(xml: &str, tag: &str) -> String {
     };
 
     match re.captures(xml) {
-        Some(caps) => caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default(),
+        Some(caps) => caps
+            .get(1)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default(),
         None => String::new(),
     }
 }

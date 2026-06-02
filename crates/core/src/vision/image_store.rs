@@ -18,7 +18,10 @@ pub fn max_bytes() -> u64 {
 }
 
 pub fn is_managed_image_path<P: AsRef<Path>>(path: P) -> bool {
-    let resolved = path.as_ref().canonicalize().unwrap_or_else(|_| path.as_ref().to_path_buf());
+    let resolved = path
+        .as_ref()
+        .canonicalize()
+        .unwrap_or_else(|_| path.as_ref().to_path_buf());
     let images = images_dir();
     let normalized = images.canonicalize().unwrap_or(images);
     resolved.starts_with(&normalized)

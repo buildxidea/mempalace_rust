@@ -122,7 +122,10 @@ impl LlmProvider for OpenAICompatProvider {
 
         let usage = data.get("usage").map(|u| LlmUsage {
             prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-            completion_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            completion_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize,
             total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         });
 
@@ -135,7 +138,11 @@ impl LlmProvider for OpenAICompatProvider {
     }
 
     async fn check_available(&self) -> Result<(), String> {
-        let base = self.config.base_url.trim_end_matches('/').trim_end_matches("/v1");
+        let base = self
+            .config
+            .base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/v1");
         let url = format!("{base}/v1/models");
 
         let mut request = self.client.get(&url);

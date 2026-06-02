@@ -91,7 +91,10 @@ pub fn compress_markdown(content: &str) -> String {
         // Compress list items (remove leading whitespace beyond 2 spaces)
         if line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
             let trimmed = line.trim_start();
-            if trimmed.starts_with('-') || trimmed.starts_with('*') || trimmed.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            if trimmed.starts_with('-')
+                || trimmed.starts_with('*')
+                || trimmed.chars().next().map_or(false, |c| c.is_ascii_digit())
+            {
                 result.push_str(line);
                 result.push('\n');
                 continue;

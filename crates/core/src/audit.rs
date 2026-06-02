@@ -47,7 +47,14 @@ impl AuditStore {
         user_id: Option<String>,
     ) {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.record(operation, function_id, target_ids, details, quality_score, user_id);
+            self.record(
+                operation,
+                function_id,
+                target_ids,
+                details,
+                quality_score,
+                user_id,
+            );
         })) {
             Ok(_) => {}
             Err(e) => {
@@ -139,9 +146,30 @@ mod tests {
     #[test]
     fn test_query_by_operation() {
         let mut store = AuditStore::new();
-        store.record("share", "mem::team-share", vec!["1".into()], make_details(), None, None);
-        store.record("delete", "mem::forget", vec!["2".into()], make_details(), None, None);
-        store.record("share", "mem::team-share", vec!["3".into()], make_details(), None, None);
+        store.record(
+            "share",
+            "mem::team-share",
+            vec!["1".into()],
+            make_details(),
+            None,
+            None,
+        );
+        store.record(
+            "delete",
+            "mem::forget",
+            vec!["2".into()],
+            make_details(),
+            None,
+            None,
+        );
+        store.record(
+            "share",
+            "mem::team-share",
+            vec!["3".into()],
+            make_details(),
+            None,
+            None,
+        );
 
         let shares = store.query(Some("share"), None, None, 100);
         assert_eq!(shares.len(), 2);

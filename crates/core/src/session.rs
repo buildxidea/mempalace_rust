@@ -17,13 +17,17 @@ impl SessionStore {
         }
         let conn = rusqlite::Connection::open(db_path)?;
         Self::migrate(&conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn in_memory() -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open_in_memory()?;
         Self::migrate(&conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -45,7 +49,7 @@ impl SessionStore {
                 modality TEXT NOT NULL DEFAULT 'text', image_data TEXT, agent_id TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_obs_session ON observations(session_id);
-            CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);"
+            CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);",
         )?;
         Ok(())
     }
@@ -83,14 +87,18 @@ impl SessionStore {
     pub fn list_sessions(&self, project: Option<&str>) -> anyhow::Result<Vec<Session>> {
         let conn = self.conn.blocking_lock();
         let query = match project {
-            Some(_) => "SELECT id, project, cwd, started_at, ended_at, status,
+            Some(_) => {
+                "SELECT id, project, cwd, started_at, ended_at, status,
                                observation_count, model, tags, first_prompt, summary,
                                commit_shas, agent_id
-                        FROM sessions WHERE project = ?1 ORDER BY started_at DESC",
-            None => "SELECT id, project, cwd, started_at, ended_at, status,
+                        FROM sessions WHERE project = ?1 ORDER BY started_at DESC"
+            }
+            None => {
+                "SELECT id, project, cwd, started_at, ended_at, status,
                             observation_count, model, tags, first_prompt, summary,
                             commit_shas, agent_id
-                     FROM sessions ORDER BY started_at DESC",
+                     FROM sessions ORDER BY started_at DESC"
+            }
         };
         let mut stmt = conn.prepare(query)?;
         let rows = if let Some(p) = project {
@@ -117,8 +125,11 @@ impl SessionStore {
 
     pub fn add_observation(&self, obs: &RawObservation) -> anyhow::Result<()> {
         let conn = self.conn.blocking_lock();
-        let image_data = obs.image_data.as_ref()
-            .map(|img| serde_json::to_string(img)).transpose()?;
+        let image_data = obs
+            .image_data
+            .as_ref()
+            .map(|img| serde_json::to_string(img))
+            .transpose()?;
         conn.execute(
             "INSERT INTO observations (
                 id, session_id, timestamp, hook_type, tool_name, tool_input,
@@ -126,10 +137,19 @@ impl SessionStore {
                 image_data, agent_id
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
-                obs.id, obs.session_id, obs.timestamp.to_rfc3339(),
-                obs.hook_type.to_string(), obs.tool_name, obs.tool_input,
-                obs.tool_output, obs.user_prompt, obs.assistant_response,
-                obs.raw, obs.modality, image_data, obs.agent_id,
+                obs.id,
+                obs.session_id,
+                obs.timestamp.to_rfc3339(),
+                obs.hook_type.to_string(),
+                obs.tool_name,
+                obs.tool_input,
+                obs.tool_output,
+                obs.user_prompt,
+                obs.assistant_response,
+                obs.raw,
+                obs.modality,
+                image_data,
+                obs.agent_id,
             ],
         )?;
         conn.execute(
@@ -155,7 +175,10 @@ impl SessionStore {
         Ok(observations)
     }
 
-    pub fn list_all_observations(&self, project: Option<&str>) -> anyhow::Result<Vec<RawObservation>> {
+    pub fn list_all_observations(
+        &self,
+        project: Option<&str>,
+    ) -> anyhow::Result<Vec<RawObservation>> {
         let conn = self.conn.blocking_lock();
         let query = match project {
             Some(_) => "SELECT o.id, o.session_id, o.timestamp, o.hook_type, o.tool_name, o.tool_input,
@@ -192,9 +215,16 @@ fn parse_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         started_at: row.get::<_, String>(3).and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })
         })?,
-        ended_at: row.get::<_, Option<String>>(4)?
+        ended_at: row
+            .get::<_, Option<String>>(4)?
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc)),
         status: row.get(5)?,
@@ -212,8 +242,14 @@ fn parse_observation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawObserva
     let image_data: Option<String> = row.get(11)?;
     let hook_type_str: String = row.get(3)?;
     let hook_type: HookType = hook_type_str.parse().map_err(|_| {
-        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("unknown HookType: {hook_type_str}"))))
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown HookType: {hook_type_str}"),
+            )),
+        )
     })?;
     Ok(RawObservation {
         id: row.get(0)?,
@@ -221,7 +257,13 @@ fn parse_observation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawObserva
         timestamp: row.get::<_, String>(2).and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })
         })?,
         hook_type,
         tool_name: row.get(4)?,
@@ -243,7 +285,9 @@ mod tests {
     #[test]
     fn test_session_crud() {
         let store = SessionStore::in_memory().unwrap();
-        let session = store.create_session("s-1", "my-project", "/tmp/proj").unwrap();
+        let session = store
+            .create_session("s-1", "my-project", "/tmp/proj")
+            .unwrap();
         assert_eq!(session.id, "s-1");
         let fetched = store.get_session("s-1").unwrap().unwrap();
         assert_eq!(fetched.id, "s-1");
@@ -267,19 +311,26 @@ mod tests {
             let store = SessionStore::in_memory().unwrap();
             store.create_session("s-1", "proj", "/tmp").unwrap();
             let obs = RawObservation {
-                id: "o-1".into(), session_id: "s-1".into(),
+                id: "o-1".into(),
+                session_id: "s-1".into(),
                 timestamp: chrono::Utc::now(),
                 hook_type: HookType::PostToolUse,
                 tool_name: Some("Read".into()),
                 tool_input: Some("file.txt".into()),
                 tool_output: Some("content".into()),
-                user_prompt: None, assistant_response: None, raw: None,
-                modality: "text".into(), image_data: None, agent_id: None,
+                user_prompt: None,
+                assistant_response: None,
+                raw: None,
+                modality: "text".into(),
+                image_data: None,
+                agent_id: None,
             };
             store.add_observation(&obs).unwrap();
             let observations = store.get_observations("s-1").unwrap();
             assert_eq!(observations.len(), 1);
             assert_eq!(observations[0].id, "o-1");
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     }
 }

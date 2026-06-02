@@ -20,10 +20,10 @@ pub struct QueryExpansion {
 
 /// Stop words to exclude from entity extraction.
 const STOP_WORDS: &[&str] = &[
-    "The", "This", "That", "What", "When", "Where", "How", "Why", "Who", "Which",
-    "Did", "Does", "Do", "Is", "Are", "Was", "Were", "Has", "Have", "Had",
-    "Can", "Could", "Would", "Should", "Will", "May", "Might",
-    "If", "And", "But", "Or", "Not", "For", "From", "With", "About", "After", "Before", "Between",
+    "The", "This", "That", "What", "When", "Where", "How", "Why", "Who", "Which", "Did", "Does",
+    "Do", "Is", "Are", "Was", "Were", "Has", "Have", "Had", "Can", "Could", "Would", "Should",
+    "Will", "May", "Might", "If", "And", "But", "Or", "Not", "For", "From", "With", "About",
+    "After", "Before", "Between",
 ];
 
 /// System prompt for query expansion.
@@ -68,14 +68,20 @@ pub fn extract_entities_from_query(query: &str) -> Vec<String> {
     let mut entities: Vec<String> = Vec::new();
 
     // Extract quoted strings
-    for cap in regex::Regex::new(r#""([^"]+)""#).unwrap().captures_iter(query) {
+    for cap in regex::Regex::new(r#""([^"]+)""#)
+        .unwrap()
+        .captures_iter(query)
+    {
         if let Some(m) = cap.get(1) {
             entities.push(m.as_str().to_string());
         }
     }
 
     // Extract capitalized words
-    for cap in regex::Regex::new(r"\b[A-Z][a-zA-Z0-9_.-]+\b").unwrap().captures_iter(query) {
+    for cap in regex::Regex::new(r"\b[A-Z][a-zA-Z0-9_.-]+\b")
+        .unwrap()
+        .captures_iter(query)
+    {
         let word = cap.get(0).unwrap().as_str();
         if !STOP_WORDS.contains(&word) && !entities.contains(&word.to_string()) {
             entities.push(word.to_string());
@@ -150,7 +156,9 @@ pub async fn expand_query(
     let max_reformulations = clamp(max_reformulations.unwrap_or(5), 1, 10);
 
     let system_prompt = QUERY_EXPANSION_SYSTEM_PROMPT.to_string();
-    let user_prompt = format!("Original query: {query}\nGenerate expansion with max {max_reformulations} reformulations.");
+    let user_prompt = format!(
+        "Original query: {query}\nGenerate expansion with max {max_reformulations} reformulations."
+    );
 
     match provider.complete(&system_prompt, &user_prompt).await {
         Ok(completion) => {
@@ -171,10 +179,7 @@ pub async fn expand_query(
 }
 
 /// Build the full set of queries for search (original + reformulations + temporal).
-pub fn build_search_queries(
-    original: &str,
-    expansion: &QueryExpansion,
-) -> Vec<String> {
+pub fn build_search_queries(original: &str, expansion: &QueryExpansion) -> Vec<String> {
     let mut queries = vec![original.to_string()];
     queries.extend(expansion.reformulations.iter().cloned());
     queries.extend(expansion.temporal_concretizations.iter().cloned());
@@ -182,10 +187,7 @@ pub fn build_search_queries(
 }
 
 /// Build the full set of entities for search (extracted + LLM-identified).
-pub fn build_search_entities(
-    original: &str,
-    expansion: &QueryExpansion,
-) -> Vec<String> {
+pub fn build_search_entities(original: &str, expansion: &QueryExpansion) -> Vec<String> {
     let mut entities = extract_entities_from_query(original);
     for entity in &expansion.entity_extractions {
         if !entities.contains(entity) {

@@ -32,41 +32,44 @@ pub fn filter_memories<'a>(
 ) -> Vec<&'a crate::types::Memory> {
     let now = Utc::now();
 
-    memories.iter().filter(|m| {
-        if let Some(max_age) = filter.max_age_days {
-            let age_days = (now - m.created_at).num_days() as u64;
-            if age_days < max_age {
-                return false;
+    memories
+        .iter()
+        .filter(|m| {
+            if let Some(max_age) = filter.max_age_days {
+                let age_days = (now - m.created_at).num_days() as u64;
+                if age_days < max_age {
+                    return false;
+                }
             }
-        }
 
-        if let Some(min_strength) = filter.min_strength {
-            if m.strength > min_strength {
-                return false;
+            if let Some(min_strength) = filter.min_strength {
+                if m.strength > min_strength {
+                    return false;
+                }
             }
-        }
 
-        if let Some(ref mem_type) = filter.memory_type {
-            if format!("{:?}", m.memory_type).to_lowercase() != mem_type.to_lowercase() {
-                return false;
+            if let Some(ref mem_type) = filter.memory_type {
+                if format!("{:?}", m.memory_type).to_lowercase() != mem_type.to_lowercase() {
+                    return false;
+                }
             }
-        }
 
-        if let Some(ref project) = filter.project {
-            if &m.project != project {
-                return false;
+            if let Some(ref project) = filter.project {
+                if &m.project != project {
+                    return false;
+                }
             }
-        }
 
-        if !filter.tags.is_empty() {
-            let has_tag = filter.tags.iter().any(|t| m.concepts.contains(t));
-            if !has_tag {
-                return false;
+            if !filter.tags.is_empty() {
+                let has_tag = filter.tags.iter().any(|t| m.concepts.contains(t));
+                if !has_tag {
+                    return false;
+                }
             }
-        }
 
-        true
-    }).collect()
+            true
+        })
+        .collect()
 }
 
 /// Bulk delete memories matching a filter.
@@ -111,7 +114,13 @@ mod tests {
     use super::*;
     use crate::types::{Memory, MemoryType};
 
-    fn test_memory(id: &str, created_days_ago: i64, strength: f64, mem_type: MemoryType, concepts: Vec<&str>) -> Memory {
+    fn test_memory(
+        id: &str,
+        created_days_ago: i64,
+        strength: f64,
+        mem_type: MemoryType,
+        concepts: Vec<&str>,
+    ) -> Memory {
         Memory {
             id: id.into(),
             created_at: Utc::now() - chrono::Duration::days(created_days_ago),
@@ -120,10 +129,18 @@ mod tests {
             title: format!("Memory {}", id),
             content: format!("Content for {}", id),
             concepts: concepts.into_iter().map(String::from).collect(),
-            files: vec![], session_ids: vec![],
-            strength, version: 1, parent_id: None, supersedes: vec![],
-            related_ids: vec![], source_observation_ids: vec![],
-            is_latest: true, forget_after: None, image_ref: None, agent_id: None,
+            files: vec![],
+            session_ids: vec![],
+            strength,
+            version: 1,
+            parent_id: None,
+            supersedes: vec![],
+            related_ids: vec![],
+            source_observation_ids: vec![],
+            is_latest: true,
+            forget_after: None,
+            image_ref: None,
+            agent_id: None,
             project: "test".into(),
         }
     }

@@ -69,8 +69,11 @@ fn is_image_data(s: &str) -> bool {
 }
 
 fn is_image_path(s: &str) -> bool {
-    s.ends_with(".png") || s.ends_with(".jpg") || s.ends_with(".jpeg")
-        || s.ends_with(".webp") || s.ends_with(".gif")
+    s.ends_with(".png")
+        || s.ends_with(".jpg")
+        || s.ends_with(".jpeg")
+        || s.ends_with(".webp")
+        || s.ends_with(".gif")
 }
 
 /// Create a fingerprint for deduplication.
@@ -79,35 +82,73 @@ pub fn fingerprint_observation(payload: &HookPayload) -> String {
     let mut hasher = Sha256::new();
     hasher.update(payload.session_id.as_bytes());
     hasher.update(format!("{:?}", payload.hook_type).as_bytes());
-    hasher.update(serde_json::to_string(&payload.data).unwrap_or_default().as_bytes());
+    hasher.update(
+        serde_json::to_string(&payload.data)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
     format!("{:x}", hasher.finalize())
 }
 
 /// Process a hook payload into a raw observation.
 pub fn process_observation(payload: &HookPayload) -> Result<RawObservation> {
     let id = format!("obs-{}", short_id(&payload.session_id, &payload.timestamp));
-    let image_data = extract_image(&serde_json::Value::Object(payload.data.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
-        .map(|s| crate::types::ImageData {
-            base64: if is_image_data(&s) { Some(s.clone()) } else { None },
-            path: if is_image_path(&s) { Some(s.clone()) } else { None },
-            mime_type: "image/png".to_string(),
-            description: None,
-        });
+    let image_data = extract_image(&serde_json::Value::Object(
+        payload
+            .data
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    ))
+    .map(|s| crate::types::ImageData {
+        base64: if is_image_data(&s) {
+            Some(s.clone())
+        } else {
+            None
+        },
+        path: if is_image_path(&s) {
+            Some(s.clone())
+        } else {
+            None
+        },
+        mime_type: "image/png".to_string(),
+        description: None,
+    });
 
     Ok(RawObservation {
         id,
         session_id: payload.session_id.clone(),
         timestamp: payload.timestamp,
         hook_type: payload.hook_type,
-        tool_name: payload.data.get("toolName").and_then(|v| v.as_str()).map(String::from),
+        tool_name: payload
+            .data
+            .get("toolName")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         tool_input: payload.data.get("toolInput").map(|v| v.to_string()),
         tool_output: payload.data.get("toolOutput").map(|v| v.to_string()),
-        user_prompt: payload.data.get("userPrompt").and_then(|v| v.as_str()).map(String::from),
-        assistant_response: payload.data.get("assistantResponse").and_then(|v| v.as_str()).map(String::from),
+        user_prompt: payload
+            .data
+            .get("userPrompt")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        assistant_response: payload
+            .data
+            .get("assistantResponse")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         raw: Some(serde_json::to_string(&payload.data).unwrap_or_default()),
-        modality: if image_data.is_some() { "mixed".to_string() } else { "text".to_string() },
+        modality: if image_data.is_some() {
+            "mixed".to_string()
+        } else {
+            "text".to_string()
+        },
         image_data,
-        agent_id: payload.data.get("agentId").and_then(|v| v.as_str()).map(String::from),
+        agent_id: payload
+            .data
+            .get("agentId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     })
 }
 
@@ -148,7 +189,10 @@ impl ObservationStore {
             CREATE INDEX IF NOT EXISTS idx_obs_session ON observations(session_id);
             CREATE INDEX IF NOT EXISTS idx_obs_timestamp ON observations(timestamp);",
         )?;
-        Ok(Self { conn, max_per_session })
+        Ok(Self {
+            conn,
+            max_per_session,
+        })
     }
 
     pub fn save(&self, obs: &RawObservation) -> Result<()> {
@@ -159,11 +203,21 @@ impl ObservationStore {
                 image_data, agent_id
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
-                obs.id, obs.session_id, obs.timestamp.to_rfc3339(),
-                format!("{:?}", obs.hook_type), obs.tool_name, obs.tool_input,
-                obs.tool_output, obs.user_prompt, obs.assistant_response,
-                obs.raw, obs.modality,
-                obs.image_data.as_ref().and_then(|i| i.base64.as_ref().or(i.path.as_ref())).cloned(),
+                obs.id,
+                obs.session_id,
+                obs.timestamp.to_rfc3339(),
+                format!("{:?}", obs.hook_type),
+                obs.tool_name,
+                obs.tool_input,
+                obs.tool_output,
+                obs.user_prompt,
+                obs.assistant_response,
+                obs.raw,
+                obs.modality,
+                obs.image_data
+                    .as_ref()
+                    .and_then(|i| i.base64.as_ref().or(i.path.as_ref()))
+                    .cloned(),
                 obs.agent_id,
             ],
         )?;
@@ -183,7 +237,10 @@ impl ObservationStore {
                 id: row.get(0)?,
                 session_id: row.get(1)?,
                 timestamp: ts.parse().unwrap_or(Utc::now()),
-                hook_type: row.get::<_, String>(3)?.parse().unwrap_or(HookType::Notification),
+                hook_type: row
+                    .get::<_, String>(3)?
+                    .parse()
+                    .unwrap_or(HookType::Notification),
                 tool_name: row.get(4)?,
                 tool_input: row.get(5)?,
                 tool_output: row.get(6)?,
@@ -191,12 +248,22 @@ impl ObservationStore {
                 assistant_response: row.get(8)?,
                 raw: row.get(9)?,
                 modality: row.get(10)?,
-                image_data: row.get::<_, Option<String>>(11)?.map(|s| crate::types::ImageData {
-                    base64: if is_image_data(&s) { Some(s.clone()) } else { None },
-                    path: if is_image_path(&s) { Some(s.clone()) } else { None },
-                    mime_type: "image/png".to_string(),
-                    description: None,
-                }),
+                image_data: row
+                    .get::<_, Option<String>>(11)?
+                    .map(|s| crate::types::ImageData {
+                        base64: if is_image_data(&s) {
+                            Some(s.clone())
+                        } else {
+                            None
+                        },
+                        path: if is_image_path(&s) {
+                            Some(s.clone())
+                        } else {
+                            None
+                        },
+                        mime_type: "image/png".to_string(),
+                        description: None,
+                    }),
                 agent_id: row.get(12)?,
             })
         })?;
@@ -317,7 +384,10 @@ mod tests {
     #[test]
     fn test_process_observation_with_image() {
         let mut data = HashMap::new();
-        data.insert("image_data".to_string(), serde_json::json!("data:image/png;base64,abc"));
+        data.insert(
+            "image_data".to_string(),
+            serde_json::json!("data:image/png;base64,abc"),
+        );
         let payload = HookPayload {
             hook_type: HookType::PostToolUse,
             session_id: "s-1".to_string(),

@@ -28,7 +28,13 @@ impl SketchStore {
         Ok(Self { conn })
     }
 
-    pub fn create(&self, title: &str, description: &str, expires_in_ms: Option<i64>, project: Option<&str>) -> Result<Sketch> {
+    pub fn create(
+        &self,
+        title: &str,
+        description: &str,
+        expires_in_ms: Option<i64>,
+        project: Option<&str>,
+    ) -> Result<Sketch> {
         let now = Utc::now();
         let sketch = Sketch {
             id: format!("sk-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()),
@@ -69,7 +75,9 @@ impl SketchStore {
     }
 
     pub fn promote(&self, id: &str, project: Option<&str>) -> Result<Vec<String>> {
-        let mut sketch = self.get(id)?.ok_or_else(|| anyhow::anyhow!("Sketch not found"))?;
+        let mut sketch = self
+            .get(id)?
+            .ok_or_else(|| anyhow::anyhow!("Sketch not found"))?;
         if sketch.status != "active" {
             return Err(anyhow::anyhow!("Sketch is not active"));
         }
@@ -92,7 +100,9 @@ impl SketchStore {
     }
 
     pub fn discard(&self, id: &str) -> Result<usize> {
-        let mut sketch = self.get(id)?.ok_or_else(|| anyhow::anyhow!("Sketch not found"))?;
+        let mut sketch = self
+            .get(id)?
+            .ok_or_else(|| anyhow::anyhow!("Sketch not found"))?;
         if sketch.status != "active" {
             return Err(anyhow::anyhow!("Sketch is not active"));
         }
@@ -110,9 +120,13 @@ impl SketchStore {
         let mut collected = 0;
 
         for sketch in sketches {
-            if sketch.status != "active" { continue; }
+            if sketch.status != "active" {
+                continue;
+            }
             if let Some(expires) = sketch.expires_at {
-                if expires > now { continue; }
+                if expires > now {
+                    continue;
+                }
             } else {
                 continue;
             }
@@ -129,8 +143,11 @@ impl SketchStore {
 
     fn load_all(&self) -> Result<Vec<Sketch>> {
         let mut stmt = self.conn.prepare("SELECT * FROM sketches")?;
-        let rows: Vec<rusqlite::Result<Sketch>> = stmt.query_map([], |row| row_to_sketch(row))?.collect();
-        rows.into_iter().map(|r| r.map_err(|e| anyhow::anyhow!(e))).collect()
+        let rows: Vec<rusqlite::Result<Sketch>> =
+            stmt.query_map([], |row| row_to_sketch(row))?.collect();
+        rows.into_iter()
+            .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+            .collect()
     }
 
     fn insert(&self, sketch: &Sketch) -> Result<()> {
@@ -139,9 +156,14 @@ impl SketchStore {
                                    created_at, expires_at, promoted_at, discarded_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
-                sketch.id, sketch.title, sketch.description, sketch.status,
-                serde_json::to_string(&sketch.action_ids)?, sketch.project,
-                sketch.created_at.to_rfc3339(), sketch.expires_at.map(|d| d.to_rfc3339()),
+                sketch.id,
+                sketch.title,
+                sketch.description,
+                sketch.status,
+                serde_json::to_string(&sketch.action_ids)?,
+                sketch.project,
+                sketch.created_at.to_rfc3339(),
+                sketch.expires_at.map(|d| d.to_rfc3339()),
                 sketch.promoted_at.map(|d| d.to_rfc3339()),
                 sketch.discarded_at.map(|d| d.to_rfc3339())
             ],
@@ -155,9 +177,14 @@ impl SketchStore {
                                 project=?6, created_at=?7, expires_at=?8,
                                 promoted_at=?9, discarded_at=?10 WHERE id=?1",
             params![
-                sketch.id, sketch.title, sketch.description, sketch.status,
-                serde_json::to_string(&sketch.action_ids)?, sketch.project,
-                sketch.created_at.to_rfc3339(), sketch.expires_at.map(|d| d.to_rfc3339()),
+                sketch.id,
+                sketch.title,
+                sketch.description,
+                sketch.status,
+                serde_json::to_string(&sketch.action_ids)?,
+                sketch.project,
+                sketch.created_at.to_rfc3339(),
+                sketch.expires_at.map(|d| d.to_rfc3339()),
                 sketch.promoted_at.map(|d| d.to_rfc3339()),
                 sketch.discarded_at.map(|d| d.to_rfc3339())
             ],
@@ -175,10 +202,21 @@ fn row_to_sketch(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sketch> {
         status: row.get(3)?,
         action_ids: serde_json::from_str(&action_ids).unwrap_or_default(),
         project: row.get(5)?,
-        created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?).unwrap().with_timezone(&Utc),
-        expires_at: row.get::<_, Option<String>>(7)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-        promoted_at: row.get::<_, Option<String>>(8)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-        discarded_at: row.get::<_, Option<String>>(9)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
+        created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+            .unwrap()
+            .with_timezone(&Utc),
+        expires_at: row
+            .get::<_, Option<String>>(7)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        promoted_at: row
+            .get::<_, Option<String>>(8)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        discarded_at: row
+            .get::<_, Option<String>>(9)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
     })
 }
 
@@ -193,7 +231,9 @@ mod tests {
     #[test]
     fn test_create_sketch() {
         let store = test_store();
-        let sketch = store.create("Test sketch", "Description", Some(3600000), None).unwrap();
+        let sketch = store
+            .create("Test sketch", "Description", Some(3600000), None)
+            .unwrap();
         assert!(sketch.id.starts_with("sk-"));
         assert_eq!(sketch.status, "active");
         assert!(sketch.expires_at.is_some());

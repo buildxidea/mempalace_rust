@@ -11,19 +11,31 @@ pub fn create_relation(
     weight: f64,
 ) -> Result<String> {
     let predicate = format!("{}_{:.2}", relation_type, weight);
-    kg.add_triple(from_id, &predicate, to_id, None, None, Some(weight), None, None, None, None)
+    kg.add_triple(
+        from_id,
+        &predicate,
+        to_id,
+        None,
+        None,
+        Some(weight),
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
-pub fn get_relations(
-    kg: &KnowledgeGraph,
-    memory_id: &str,
-) -> Result<Vec<MemoryRelation>> {
+pub fn get_relations(kg: &KnowledgeGraph, memory_id: &str) -> Result<Vec<MemoryRelation>> {
     let outgoing = kg.query_entity(memory_id, None, None, "outgoing")?;
     let mut relations = Vec::new();
 
     for r in outgoing {
         let parts: Vec<&str> = r.predicate.rsplitn(2, '_').collect();
-        let relation_type = if parts.len() == 2 { parts[1] } else { &r.predicate };
+        let relation_type = if parts.len() == 2 {
+            parts[1]
+        } else {
+            &r.predicate
+        };
         let weight = if parts.len() == 2 {
             parts[0].parse::<f64>().unwrap_or(1.0)
         } else {
@@ -67,7 +79,11 @@ pub fn get_related(
             }
 
             let parts: Vec<&str> = r.predicate.rsplitn(2, '_').collect();
-            let relation_type = if parts.len() == 2 { parts[1] } else { &r.predicate };
+            let relation_type = if parts.len() == 2 {
+                parts[1]
+            } else {
+                &r.predicate
+            };
             let weight = if parts.len() == 2 {
                 parts[0].parse::<f64>().unwrap_or(1.0)
             } else {

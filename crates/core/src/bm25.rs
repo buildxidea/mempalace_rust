@@ -148,7 +148,11 @@ impl Bm25Scorer {
 
         let persisted = PersistedBm25 {
             params: self.params.clone(),
-            doc_freqs: self.doc_freqs.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            doc_freqs: self
+                .doc_freqs
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
             total_docs: self.total_docs,
             avg_doc_length: self.avg_doc_length,
         };

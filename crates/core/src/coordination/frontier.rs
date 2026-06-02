@@ -6,7 +6,11 @@ pub struct FrontierEntry {
     pub score: f64,
 }
 
-pub fn compute_frontier(actions: &[Action], agent_id: Option<&str>, active_leases: &[(String, String)]) -> Vec<FrontierEntry> {
+pub fn compute_frontier(
+    actions: &[Action],
+    agent_id: Option<&str>,
+    active_leases: &[(String, String)],
+) -> Vec<FrontierEntry> {
     let mut entries: Vec<FrontierEntry> = actions
         .iter()
         .filter(|a| should_include(a, agent_id, active_leases))
@@ -16,16 +20,26 @@ pub fn compute_frontier(actions: &[Action], agent_id: Option<&str>, active_lease
         })
         .collect();
 
-    entries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    entries.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     entries
 }
 
-fn should_include(action: &Action, agent_id: Option<&str>, active_leases: &[(String, String)]) -> bool {
+fn should_include(
+    action: &Action,
+    agent_id: Option<&str>,
+    active_leases: &[(String, String)],
+) -> bool {
     match action.status {
         ActionStatus::Completed | ActionStatus::Cancelled | ActionStatus::Blocked => false,
         ActionStatus::Pending | ActionStatus::InProgress | ActionStatus::Failed => {
             if let Some(aid) = agent_id {
-                !active_leases.iter().any(|(action_id, holder)| action_id == &action.id && holder != aid)
+                !active_leases
+                    .iter()
+                    .any(|(action_id, holder)| action_id == &action.id && holder != aid)
             } else {
                 true
             }

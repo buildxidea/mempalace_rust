@@ -1,6 +1,5 @@
 /// Graph extraction prompt templates.
 /// 1:1 port from agentmemory `src/prompts/graph-extraction.ts`.
-
 use crate::types::CompressedObservation;
 
 /// System prompt for knowledge graph entity and relationship extraction.
@@ -52,7 +51,14 @@ mod tests {
     use crate::types::ObservationType;
     use chrono::Utc;
 
-    fn make_compressed_obs(id: &str, obs_type: ObservationType, title: &str, narrative: &str, concepts: Vec<&str>, files: Vec<&str>) -> CompressedObservation {
+    fn make_compressed_obs(
+        id: &str,
+        obs_type: ObservationType,
+        title: &str,
+        narrative: &str,
+        concepts: Vec<&str>,
+        files: Vec<&str>,
+    ) -> CompressedObservation {
         CompressedObservation {
             id: id.to_string(),
             session_id: "sess-1".to_string(),
@@ -103,8 +109,22 @@ mod tests {
     #[test]
     fn test_build_graph_extraction_prompt_multiple() {
         let observations = vec![
-            make_compressed_obs("obs-1", ObservationType::FileRead, "Read config", "Read the config file.", vec!["config"], vec!["config.yaml"]),
-            make_compressed_obs("obs-2", ObservationType::CommandExec, "Ran tests", "Ran the test suite.", vec!["testing"], vec![]),
+            make_compressed_obs(
+                "obs-1",
+                ObservationType::FileRead,
+                "Read config",
+                "Read the config file.",
+                vec!["config"],
+                vec!["config.yaml"],
+            ),
+            make_compressed_obs(
+                "obs-2",
+                ObservationType::CommandExec,
+                "Ran tests",
+                "Ran the test suite.",
+                vec!["testing"],
+                vec![],
+            ),
         ];
 
         let prompt = build_graph_extraction_prompt(&observations);

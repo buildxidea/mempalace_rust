@@ -38,7 +38,10 @@ pub fn build_graph_extraction_prompt(observations: &[CompressedObservation]) -> 
             )
         })
         .collect();
-    format!("Extract entities and relationships from these observations:\n\n{}", items.join("\n\n"))
+    format!(
+        "Extract entities and relationships from these observations:\n\n{}",
+        items.join("\n\n")
+    )
 }
 
 fn parse_attrs(raw: &str) -> HashMap<String, String> {
@@ -78,7 +81,8 @@ fn parse_graph_xml(xml: &str) -> ExtractionResult {
     let mut edges = Vec::new();
 
     let entity_self_close = regex::Regex::new(r#"<entity\b([^>]*?)/>"#).unwrap();
-    let entity_with_body = regex::Regex::new(r#"<entity\b([^>]*[^/])>([\s\S]*?)</entity>"#).unwrap();
+    let entity_with_body =
+        regex::Regex::new(r#"<entity\b([^>]*[^/])>([\s\S]*?)</entity>"#).unwrap();
     let prop_re = regex::Regex::new(r#"<property\s+key="([^"]+)">([^<]*)</property>"#).unwrap();
     let rel_re = regex::Regex::new(r#"<relationship\b([^>]*?)/>"#).unwrap();
 
@@ -93,7 +97,11 @@ fn parse_graph_xml(xml: &str) -> ExtractionResult {
                     properties.insert(k.as_str().to_string(), v.as_str().to_string());
                 }
             }
-            nodes.push(ExtractedNode { node_type: t, name: n, properties });
+            nodes.push(ExtractedNode {
+                node_type: t,
+                name: n,
+                properties,
+            });
         }
     };
 
@@ -115,11 +123,17 @@ fn parse_graph_xml(xml: &str) -> ExtractionResult {
             let source = attrs.get("source").cloned();
             let target = attrs.get("target").cloned();
             if let (Some(t), Some(s), Some(tg)) = (edge_type, source, target) {
-                let weight = attrs.get("weight")
+                let weight = attrs
+                    .get("weight")
                     .and_then(|w| w.parse::<f64>().ok())
                     .unwrap_or(0.5)
                     .clamp(0.0, 1.0);
-                edges.push(ExtractedEdge { edge_type: t, source: s, target: tg, weight });
+                edges.push(ExtractedEdge {
+                    edge_type: t,
+                    source: s,
+                    target: tg,
+                    weight,
+                });
             }
         }
     }
@@ -174,7 +188,10 @@ pub async fn extract_graph(
     observations: &[CompressedObservation],
 ) -> Result<ExtractionStats> {
     if observations.is_empty() {
-        return Ok(ExtractionStats { nodes_added: 0, edges_added: 0 });
+        return Ok(ExtractionStats {
+            nodes_added: 0,
+            edges_added: 0,
+        });
     }
 
     let prompt = build_graph_extraction_prompt(observations);
@@ -187,14 +204,22 @@ pub async fn extract_graph(
 
     for node in &extracted.nodes {
         if let Some(nt) = graph_node_type_from_str(&node.node_type) {
-            let props: HashMap<String, serde_json::Value> = node.properties.iter()
+            let props: HashMap<String, serde_json::Value> = node
+                .properties
+                .iter()
                 .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                 .collect();
-            let eid = kg.add_entity(&node.name, &format!("{:?}", nt), Some(&serde_json::to_value(&props).unwrap_or(serde_json::json!({}))))?;
+            let eid = kg.add_entity(
+                &node.name,
+                &format!("{:?}", nt),
+                Some(&serde_json::to_value(&props).unwrap_or(serde_json::json!({}))),
+            )?;
             nodes_added += 1;
 
             for prop in &node.properties {
-                let _ = kg.add_triple(&node.name, prop.0, prop.1, None, None, None, None, None, None, None);
+                let _ = kg.add_triple(
+                    &node.name, prop.0, prop.1, None, None, None, None, None, None, None,
+                );
             }
         }
     }
@@ -217,7 +242,10 @@ pub async fn extract_graph(
         }
     }
 
-    Ok(ExtractionStats { nodes_added, edges_added })
+    Ok(ExtractionStats {
+        nodes_added,
+        edges_added,
+    })
 }
 
 pub async fn extract_graph_batch(
@@ -226,7 +254,10 @@ pub async fn extract_graph_batch(
     observations: &[CompressedObservation],
     batch_size: usize,
 ) -> Result<ExtractionStats> {
-    let mut total = ExtractionStats { nodes_added: 0, edges_added: 0 };
+    let mut total = ExtractionStats {
+        nodes_added: 0,
+        edges_added: 0,
+    };
 
     for chunk in observations.chunks(batch_size) {
         let stats = extract_graph(kg, llm, chunk).await?;
@@ -276,7 +307,10 @@ mod tests {
         assert_eq!(result.edges.len(), 1);
         assert_eq!(result.nodes[0].node_type, "file");
         assert_eq!(result.nodes[0].name, "src/main.rs");
-        assert_eq!(result.nodes[1].properties.get("language"), Some(&"rust".to_string()));
+        assert_eq!(
+            result.nodes[1].properties.get("language"),
+            Some(&"rust".to_string())
+        );
         assert_eq!(result.edges[0].source, "src/main.rs");
         assert_eq!(result.edges[0].target, "handle_request");
         assert!((result.edges[0].weight - 0.8).abs() < 0.001);
@@ -337,26 +371,24 @@ mod tests {
 
     #[test]
     fn test_build_graph_extraction_prompt() {
-        let obs = vec![
-            CompressedObservation {
-                id: "o-1".into(),
-                session_id: "s-1".into(),
-                timestamp: chrono::Utc::now(),
-                observation_type: crate::types::ObservationType::FileEdit,
-                title: "Edit main.rs".into(),
-                subtitle: None,
-                facts: vec!["Added auth".into()],
-                narrative: "Modified authentication logic".into(),
-                concepts: vec!["auth".into()],
-                files: vec!["src/main.rs".into()],
-                importance: 7,
-                confidence: 0.8,
-                image_ref: None,
-                image_description: None,
-                modality: "text".into(),
-                agent_id: None,
-            },
-        ];
+        let obs = vec![CompressedObservation {
+            id: "o-1".into(),
+            session_id: "s-1".into(),
+            timestamp: chrono::Utc::now(),
+            observation_type: crate::types::ObservationType::FileEdit,
+            title: "Edit main.rs".into(),
+            subtitle: None,
+            facts: vec!["Added auth".into()],
+            narrative: "Modified authentication logic".into(),
+            concepts: vec!["auth".into()],
+            files: vec!["src/main.rs".into()],
+            importance: 7,
+            confidence: 0.8,
+            image_ref: None,
+            image_description: None,
+            modality: "text".into(),
+            agent_id: None,
+        }];
         let prompt = build_graph_extraction_prompt(&obs);
         assert!(prompt.contains("Edit main.rs"));
         assert!(prompt.contains("src/main.rs"));
@@ -365,7 +397,21 @@ mod tests {
 
     #[test]
     fn test_graph_node_type_from_str_all_variants() {
-        let variants = ["file", "function", "concept", "error", "decision", "pattern", "library", "person", "project", "preference", "location", "organization", "event"];
+        let variants = [
+            "file",
+            "function",
+            "concept",
+            "error",
+            "decision",
+            "pattern",
+            "library",
+            "person",
+            "project",
+            "preference",
+            "location",
+            "organization",
+            "event",
+        ];
         for v in variants {
             assert!(graph_node_type_from_str(v).is_some(), "Failed for: {}", v);
         }
@@ -374,7 +420,24 @@ mod tests {
 
     #[test]
     fn test_graph_edge_type_from_str_all_variants() {
-        let variants = ["uses", "imports", "modifies", "causes", "fixes", "depends_on", "related_to", "prefers", "blocked_by", "caused_by", "optimizes_for", "rejected", "avoids", "located_in", "succeeded_by", "implements"];
+        let variants = [
+            "uses",
+            "imports",
+            "modifies",
+            "causes",
+            "fixes",
+            "depends_on",
+            "related_to",
+            "prefers",
+            "blocked_by",
+            "caused_by",
+            "optimizes_for",
+            "rejected",
+            "avoids",
+            "located_in",
+            "succeeded_by",
+            "implements",
+        ];
         for v in variants {
             assert!(graph_edge_type_from_str(v).is_some(), "Failed for: {}", v);
         }

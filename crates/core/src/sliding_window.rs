@@ -68,7 +68,8 @@ impl SlidingWindow {
         self.observations.retain(|o| o.timestamp >= cutoff);
 
         // 2. Evict by importance threshold
-        self.observations.retain(|o| o.importance >= config.importance_threshold);
+        self.observations
+            .retain(|o| o.importance >= config.importance_threshold);
 
         // 3. Evict by count (oldest first)
         while self.observations.len() > config.max_observations {
@@ -88,20 +89,25 @@ impl SlidingWindow {
     }
 
     fn recalculate_tokens(&mut self) {
-        self.total_tokens = self.observations.iter()
+        self.total_tokens = self
+            .observations
+            .iter()
             .map(|o| (o.title.len() + o.narrative.len()) / 3)
             .sum();
     }
 
     /// Get observations as context blocks.
     pub fn to_context(&self) -> Vec<crate::types::ContextBlock> {
-        self.observations.iter().map(|o| crate::types::ContextBlock {
-            content: format!("{}\n{}", o.title, o.narrative),
-            source: format!("sliding_window:{}", o.id),
-            relevance_score: o.confidence,
-            token_count: (o.title.len() + o.narrative.len()) / 3,
-            memory_id: Some(o.id.clone()),
-        }).collect()
+        self.observations
+            .iter()
+            .map(|o| crate::types::ContextBlock {
+                content: format!("{}\n{}", o.title, o.narrative),
+                source: format!("sliding_window:{}", o.id),
+                relevance_score: o.confidence,
+                token_count: (o.title.len() + o.narrative.len()) / 3,
+                memory_id: Some(o.id.clone()),
+            })
+            .collect()
     }
 }
 
@@ -143,7 +149,10 @@ mod tests {
     #[test]
     fn test_evict_by_age() {
         let mut window = SlidingWindow::new();
-        let config = SlidingWindowConfig { max_age_hours: 1, ..Default::default() };
+        let config = SlidingWindowConfig {
+            max_age_hours: 1,
+            ..Default::default()
+        };
         window.add(test_obs("o-1", 5, 0), &config);
         window.add(test_obs("o-2", 5, 2), &config); // Should be evicted
         assert_eq!(window.observations.len(), 1);
@@ -153,7 +162,10 @@ mod tests {
     #[test]
     fn test_evict_by_importance() {
         let mut window = SlidingWindow::new();
-        let config = SlidingWindowConfig { importance_threshold: 4, ..Default::default() };
+        let config = SlidingWindowConfig {
+            importance_threshold: 4,
+            ..Default::default()
+        };
         window.add(test_obs("o-1", 5, 0), &config);
         window.add(test_obs("o-2", 2, 0), &config); // Should be evicted
         assert_eq!(window.observations.len(), 1);
@@ -162,7 +174,10 @@ mod tests {
     #[test]
     fn test_evict_by_count() {
         let mut window = SlidingWindow::new();
-        let config = SlidingWindowConfig { max_observations: 3, ..Default::default() };
+        let config = SlidingWindowConfig {
+            max_observations: 3,
+            ..Default::default()
+        };
         for i in 0..5 {
             window.add(test_obs(&format!("o-{}", i), 5, 0), &config);
         }

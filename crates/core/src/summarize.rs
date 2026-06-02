@@ -65,27 +65,32 @@ pub fn parse_summary_xml(xml: &str) -> Result<SessionSummary> {
     let file_re = regex::Regex::new(r#"<file>([^<]+)</file>"#)?;
     let concept_re = regex::Regex::new(r#"<concept>([^<]+)</concept>"#)?;
 
-    let title = title_re.captures(xml)
+    let title = title_re
+        .captures(xml)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().trim().to_string())
         .unwrap_or_default();
 
-    let narrative = narrative_re.captures(xml)
+    let narrative = narrative_re
+        .captures(xml)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().trim().to_string())
         .unwrap_or_default();
 
-    let key_decisions: Vec<String> = decision_re.captures_iter(xml)
+    let key_decisions: Vec<String> = decision_re
+        .captures_iter(xml)
         .filter_map(|c| c.get(1))
         .map(|m| m.as_str().trim().to_string())
         .collect();
 
-    let files_modified: Vec<String> = file_re.captures_iter(xml)
+    let files_modified: Vec<String> = file_re
+        .captures_iter(xml)
         .filter_map(|c| c.get(1))
         .map(|m| m.as_str().trim().to_string())
         .collect();
 
-    let concepts: Vec<String> = concept_re.captures_iter(xml)
+    let concepts: Vec<String> = concept_re
+        .captures_iter(xml)
         .filter_map(|c| c.get(1))
         .map(|m| m.as_str().trim().to_string())
         .collect();
@@ -159,26 +164,24 @@ mod tests {
 
     #[test]
     fn test_build_summarize_prompt() {
-        let obs = vec![
-            CompressedObservation {
-                id: "o-1".into(),
-                session_id: "s-1".into(),
-                timestamp: chrono::Utc::now(),
-                observation_type: crate::types::ObservationType::FileEdit,
-                title: "Edit auth.rs".into(),
-                subtitle: None,
-                facts: vec!["Added JWT".into()],
-                narrative: "Implemented JWT auth".into(),
-                concepts: vec!["auth".into()],
-                files: vec!["src/auth.rs".into()],
-                importance: 7,
-                confidence: 0.8,
-                image_ref: None,
-                image_description: None,
-                modality: "text".into(),
-                agent_id: None,
-            },
-        ];
+        let obs = vec![CompressedObservation {
+            id: "o-1".into(),
+            session_id: "s-1".into(),
+            timestamp: chrono::Utc::now(),
+            observation_type: crate::types::ObservationType::FileEdit,
+            title: "Edit auth.rs".into(),
+            subtitle: None,
+            facts: vec!["Added JWT".into()],
+            narrative: "Implemented JWT auth".into(),
+            concepts: vec!["auth".into()],
+            files: vec!["src/auth.rs".into()],
+            importance: 7,
+            confidence: 0.8,
+            image_ref: None,
+            image_description: None,
+            modality: "text".into(),
+            agent_id: None,
+        }];
         let prompt = build_summarize_prompt(&obs);
         assert!(prompt.contains("Edit auth.rs"));
         assert!(prompt.contains("Implemented JWT auth"));

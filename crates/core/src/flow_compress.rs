@@ -97,7 +97,10 @@ pub fn compress_observations(
     let summary = if evicted_count > 0 {
         format!(
             "Compressed {} observations into {} (evicted {}, preserved {})",
-            original_count, compressed_count, evicted_count, preserved_ids.len()
+            original_count,
+            compressed_count,
+            evicted_count,
+            preserved_ids.len()
         )
     } else {
         format!(

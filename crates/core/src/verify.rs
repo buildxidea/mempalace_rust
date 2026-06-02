@@ -30,7 +30,9 @@ pub fn verify_memory(
     memories: &[crate::types::Memory],
     observations: &[crate::types::CompressedObservation],
 ) -> Result<VerificationResult> {
-    let memory = memories.iter().find(|m| m.id == memory_id)
+    let memory = memories
+        .iter()
+        .find(|m| m.id == memory_id)
         .ok_or_else(|| anyhow::anyhow!("Memory {} not found", memory_id))?;
 
     let mut chain = Vec::new();
@@ -124,7 +126,9 @@ pub fn verify_observation(
     observations: &[crate::types::CompressedObservation],
     session_ids: &[String],
 ) -> Result<VerificationResult> {
-    let obs = observations.iter().find(|o| o.id == obs_id)
+    let obs = observations
+        .iter()
+        .find(|o| o.id == obs_id)
         .ok_or_else(|| anyhow::anyhow!("Observation {} not found", obs_id))?;
 
     let session_exists = session_ids.contains(&obs.session_id);
@@ -156,25 +160,47 @@ mod tests {
 
     fn test_memory(id: &str, source_obs: Vec<&str>, related: Vec<&str>, strength: f64) -> Memory {
         Memory {
-            id: id.into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-            memory_type: MemoryType::Semantic, title: format!("Memory {}", id),
-            content: "test".into(), concepts: vec![], files: vec![], session_ids: vec![],
-            strength, version: 1, parent_id: None,
-            supersedes: vec![], related_ids: related.into_iter().map(String::from).collect(),
+            id: id.into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            memory_type: MemoryType::Semantic,
+            title: format!("Memory {}", id),
+            content: "test".into(),
+            concepts: vec![],
+            files: vec![],
+            session_ids: vec![],
+            strength,
+            version: 1,
+            parent_id: None,
+            supersedes: vec![],
+            related_ids: related.into_iter().map(String::from).collect(),
             source_observation_ids: source_obs.into_iter().map(String::from).collect(),
-            is_latest: true, forget_after: None, image_ref: None, agent_id: None,
+            is_latest: true,
+            forget_after: None,
+            image_ref: None,
+            agent_id: None,
             project: "test".into(),
         }
     }
 
     fn test_obs(id: &str, session_id: &str) -> CompressedObservation {
         CompressedObservation {
-            id: id.into(), session_id: session_id.into(),
-            timestamp: chrono::Utc::now(), observation_type: ObservationType::FileEdit,
-            title: format!("Obs {}", id), subtitle: None, facts: vec![],
-            narrative: "test".into(), concepts: vec![], files: vec![],
-            importance: 5, confidence: 0.8, image_ref: None, image_description: None,
-            modality: "text".into(), agent_id: None,
+            id: id.into(),
+            session_id: session_id.into(),
+            timestamp: chrono::Utc::now(),
+            observation_type: ObservationType::FileEdit,
+            title: format!("Obs {}", id),
+            subtitle: None,
+            facts: vec![],
+            narrative: "test".into(),
+            concepts: vec![],
+            files: vec![],
+            importance: 5,
+            confidence: 0.8,
+            image_ref: None,
+            image_description: None,
+            modality: "text".into(),
+            agent_id: None,
         }
     }
 

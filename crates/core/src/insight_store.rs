@@ -35,7 +35,12 @@ impl InsightStore {
         Ok(Self { conn })
     }
 
-    pub fn list(&self, project: Option<&str>, min_confidence: f64, limit: usize) -> Result<Vec<Insight>> {
+    pub fn list(
+        &self,
+        project: Option<&str>,
+        min_confidence: f64,
+        limit: usize,
+    ) -> Result<Vec<Insight>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, content, confidence, reinforcements,
                     source_observation_id, source_concept_cluster,
@@ -52,13 +57,23 @@ impl InsightStore {
             .collect();
 
         if let Some(proj) = project {
-            Ok(insights.into_iter().filter(|i| i.project.as_deref() == Some(proj)).take(limit).collect())
+            Ok(insights
+                .into_iter()
+                .filter(|i| i.project.as_deref() == Some(proj))
+                .take(limit)
+                .collect())
         } else {
             Ok(insights)
         }
     }
 
-    pub fn search(&self, query: &str, project: Option<&str>, min_confidence: f64, limit: usize) -> Result<Vec<(Insight, f64)>> {
+    pub fn search(
+        &self,
+        query: &str,
+        project: Option<&str>,
+        min_confidence: f64,
+        limit: usize,
+    ) -> Result<Vec<(Insight, f64)>> {
         let insights = self.list(project, min_confidence, 1000)?;
         let terms: Vec<&str> = query.split_whitespace().filter(|t| t.len() > 1).collect();
 
@@ -67,9 +82,14 @@ impl InsightStore {
             .filter_map(|i| {
                 let text = format!("{} {} {}", i.title, i.content, i.tags.join(" ")).to_lowercase();
                 let match_count = terms.iter().filter(|t| text.contains(*t)).count();
-                if match_count == 0 { return None; }
+                if match_count == 0 {
+                    return None;
+                }
                 let relevance = match_count as f64 / terms.len() as f64;
-                let days_since = i.last_reinforced_at.map(|t| (Utc::now() - t).num_days() as f64).unwrap_or(0.0);
+                let days_since = i
+                    .last_reinforced_at
+                    .map(|t| (Utc::now() - t).num_days() as f64)
+                    .unwrap_or(0.0);
                 let recency_boost = 1.0 / (1.0 + days_since * 0.01);
                 let score = i.confidence * relevance * recency_boost;
                 Some((i, score))
@@ -89,9 +109,14 @@ impl InsightStore {
         let total = insights.len();
 
         for insight in insights {
-            let baseline = insight.last_decayed_at.or(insight.last_reinforced_at).unwrap_or(insight.created_at);
+            let baseline = insight
+                .last_decayed_at
+                .or(insight.last_reinforced_at)
+                .unwrap_or(insight.created_at);
             let weeks = (now - baseline).num_weeks() as f64;
-            if weeks < 1.0 { continue; }
+            if weeks < 1.0 {
+                continue;
+            }
 
             let decay = insight.decay_rate * weeks;
             let new_confidence = (insight.confidence - decay).max(0.05);
@@ -124,16 +149,23 @@ impl InsightStore {
                                 last_reinforced_at=?14, last_decayed_at=?15,
                                 updated_at=?16, deleted=?17 WHERE id=?1",
             params![
-                insight.id, insight.title, insight.content, insight.confidence, insight.reinforcements,
-                insight.source_observation_id, insight.source_concept_cluster,
+                insight.id,
+                insight.title,
+                insight.content,
+                insight.confidence,
+                insight.reinforcements,
+                insight.source_observation_id,
+                insight.source_concept_cluster,
                 serde_json::to_string(&insight.source_memory_ids)?,
                 serde_json::to_string(&insight.source_lesson_ids)?,
                 serde_json::to_string(&insight.source_crystal_ids)?,
-                insight.project, serde_json::to_string(&insight.tags)?,
+                insight.project,
+                serde_json::to_string(&insight.tags)?,
                 insight.decay_rate,
                 insight.last_reinforced_at.map(|d| d.to_rfc3339()),
                 insight.last_decayed_at.map(|d| d.to_rfc3339()),
-                insight.updated_at.to_rfc3339(), insight.deleted as i32
+                insight.updated_at.to_rfc3339(),
+                insight.deleted as i32
             ],
         )?;
         Ok(())
@@ -159,10 +191,20 @@ fn row_to_insight(row: &rusqlite::Row<'_>) -> rusqlite::Result<Insight> {
         project: row.get(10)?,
         tags: serde_json::from_str(&tags).unwrap_or_default(),
         decay_rate: row.get(12)?,
-        last_reinforced_at: row.get::<_, Option<String>>(13)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-        last_decayed_at: row.get::<_, Option<String>>(14)?.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-        updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(15)?).unwrap().with_timezone(&Utc),
-        created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(16)?).unwrap().with_timezone(&Utc),
+        last_reinforced_at: row
+            .get::<_, Option<String>>(13)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        last_decayed_at: row
+            .get::<_, Option<String>>(14)?
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(15)?)
+            .unwrap()
+            .with_timezone(&Utc),
+        created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(16)?)
+            .unwrap()
+            .with_timezone(&Utc),
         deleted: row.get::<_, i32>(17)? != 0,
     })
 }
@@ -175,7 +217,15 @@ mod tests {
         InsightStore::new(Connection::open_in_memory().unwrap()).unwrap()
     }
 
-    fn insert_test_insight(store: &InsightStore, id: &str, title: &str, content: &str, confidence: f64, project: Option<&str>, tags: Vec<&str>) {
+    fn insert_test_insight(
+        store: &InsightStore,
+        id: &str,
+        title: &str,
+        content: &str,
+        confidence: f64,
+        project: Option<&str>,
+        tags: Vec<&str>,
+    ) {
         let now = Utc::now();
         store.conn.execute(
             "INSERT INTO insights (id, title, content, confidence, project, tags, updated_at, created_at)
@@ -187,7 +237,15 @@ mod tests {
     #[test]
     fn test_list_returns_insights() {
         let store = test_store();
-        insert_test_insight(&store, "i-1", "Auth insight", "JWT is best", 0.9, None, vec!["auth"]);
+        insert_test_insight(
+            &store,
+            "i-1",
+            "Auth insight",
+            "JWT is best",
+            0.9,
+            None,
+            vec!["auth"],
+        );
         let insights = store.list(None, 0.0, 10).unwrap();
         assert_eq!(insights.len(), 1);
     }
@@ -204,8 +262,24 @@ mod tests {
     #[test]
     fn test_search_finds_by_query() {
         let store = test_store();
-        insert_test_insight(&store, "i-1", "JWT auth", "Use JWT for auth", 0.8, None, vec!["auth"]);
-        insert_test_insight(&store, "i-2", "CSS fix", "Flexbox layout", 0.8, None, vec!["css"]);
+        insert_test_insight(
+            &store,
+            "i-1",
+            "JWT auth",
+            "Use JWT for auth",
+            0.8,
+            None,
+            vec!["auth"],
+        );
+        insert_test_insight(
+            &store,
+            "i-2",
+            "CSS fix",
+            "Flexbox layout",
+            0.8,
+            None,
+            vec!["css"],
+        );
         let results = store.search("JWT auth", None, 0.1, 10).unwrap();
         assert_eq!(results.len(), 1);
     }

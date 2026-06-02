@@ -827,10 +827,20 @@ pub fn hook_post_commit_response(
     harness: &str,
 ) -> anyhow::Result<serde_json::Value> {
     let sha = data.get("sha").and_then(|v| v.as_str());
-    let branch = data.get("branch").and_then(|v| v.as_str()).unwrap_or("(unknown)");
-    let author = data.get("author").and_then(|v| v.as_str()).unwrap_or("(unknown)");
+    let branch = data
+        .get("branch")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(unknown)");
+    let author = data
+        .get("author")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(unknown)");
     let message = data.get("message").and_then(|v| v.as_str());
-    let files = data.get("files").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+    let files = data
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
 
     fs::create_dir_all(state_dir()).ok();
 
@@ -841,11 +851,17 @@ pub fn hook_post_commit_response(
         ));
         if let Some(msg) = message {
             if msg.contains("fix") {
-                log_hook(&format!("  message contains 'fix': {}", &msg[..msg.len().min(80)]));
+                log_hook(&format!(
+                    "  message contains 'fix': {}",
+                    &msg[..msg.len().min(80)]
+                ));
             }
         }
     } else {
-        log_hook(&format!("POST-COMMIT missing sha, skipping harness={}", harness));
+        log_hook(&format!(
+            "POST-COMMIT missing sha, skipping harness={}",
+            harness
+        ));
     }
 
     Ok(serde_json::json!({"decision": "pass"}))

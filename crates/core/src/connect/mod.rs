@@ -114,15 +114,14 @@ pub fn resolve_adapter(name: &str) -> Option<Box<dyn ConnectAdapter>> {
 ///
 /// Returns an error only on unexpected IO failures (not when the agent
 /// is not detected or the adapter is a stub).
-pub fn connect(name: &str, opts: &ConnectOptions) -> std::result::Result<ConnectResult, anyhow::Error> {
-    let adapter = resolve_adapter(name)
-        .ok_or_else(|| anyhow::anyhow!("unknown agent: {name}"))?;
+pub fn connect(
+    name: &str,
+    opts: &ConnectOptions,
+) -> std::result::Result<ConnectResult, anyhow::Error> {
+    let adapter = resolve_adapter(name).ok_or_else(|| anyhow::anyhow!("unknown agent: {name}"))?;
 
     if !adapter.detect() {
-        tracing::info!(
-            "connect: {} not detected on this machine (skipping)",
-            name
-        );
+        tracing::info!("connect: {} not detected on this machine (skipping)", name);
         return Ok(ConnectResult {
             adapter: name.to_string(),
             config_path: adapter.config_path(),
@@ -144,13 +143,25 @@ pub fn run(adapter: Option<&str>, dry_run: bool) -> std::result::Result<(), anyh
             println!("Supported `mpr connect` adapters:");
             println!();
             for a in list_adapters() {
-                let detected = if a.detect() { "[detected]" } else { "[not detected]" };
-                println!("  {:<14} {} {}", a.name(), a.config_path().display(), detected);
+                let detected = if a.detect() {
+                    "[detected]"
+                } else {
+                    "[not detected]"
+                };
+                println!(
+                    "  {:<14} {} {}",
+                    a.name(),
+                    a.config_path().display(),
+                    detected
+                );
             }
             Ok(())
         }
         Some(name) => {
-            let opts = ConnectOptions { dry_run, force: false };
+            let opts = ConnectOptions {
+                dry_run,
+                force: false,
+            };
             let result = connect(name, &opts)?;
             if result.wrote {
                 println!(
@@ -159,7 +170,12 @@ pub fn run(adapter: Option<&str>, dry_run: bool) -> std::result::Result<(), anyh
                     result.config_path.display()
                 );
             } else if let Some(note) = &result.note {
-                println!("{}: {} (config: {})", result.adapter, note, result.config_path.display());
+                println!(
+                    "{}: {} (config: {})",
+                    result.adapter,
+                    note,
+                    result.config_path.display()
+                );
             } else {
                 println!("{}: no changes", result.adapter);
             }
@@ -206,8 +222,8 @@ mod tests {
 
     #[test]
     fn test_json_mcp_round_trip() {
-        use std::fs;
         use crate::connect::json_mcp::write_mcp_config;
+        use std::fs;
 
         let tmpdir = tempfile::TempDir::new().expect("temp dir");
         let path = tmpdir.path().join("mcp.json");
@@ -219,21 +235,26 @@ mod tests {
         let raw = fs::read_to_string(&path).unwrap();
         let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let servers = val.get("mcpServers").expect("mcpServers key must exist");
-        let entry = servers.get("mempalace").expect("mempalace entry must exist");
+        let entry = servers
+            .get("mempalace")
+            .expect("mempalace entry must exist");
         assert_eq!(entry.get("command").and_then(|v| v.as_str()), Some("mpr"));
     }
 
     #[test]
     fn test_atomic_write_no_partial_file() {
-        use std::fs;
         use crate::connect::json_mcp::write_mcp_config;
+        use std::fs;
 
         let tmpdir = tempfile::TempDir::new().expect("temp dir");
         let path = tmpdir.path().join("atomic.json");
         let result = write_mcp_config(&path, "mempalace", "mcpServers");
 
         // No .tmp files should remain after a successful write
-        let entries: Vec<_> = tmpdir.path().read_dir().unwrap()
+        let entries: Vec<_> = tmpdir
+            .path()
+            .read_dir()
+            .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();

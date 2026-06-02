@@ -32,8 +32,7 @@ impl Default for MinimaxConfig {
             api_key: std::env::var("MINIMAX_API_KEY").unwrap_or_default(),
             base_url: std::env::var("MINIMAX_BASE_URL")
                 .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string()),
-            model: std::env::var("MINIMAX_MODEL")
-                .unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
+            model: std::env::var("MINIMAX_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
             max_tokens: std::env::var("MINIMAX_MAX_TOKENS")
                 .ok()
                 .and_then(|s| s.parse().ok())

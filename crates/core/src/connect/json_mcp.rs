@@ -40,11 +40,7 @@ fn mempalace_mcp_block() -> serde_json::Value {
 /// * `path`         — target config file (e.g. `~/.cline/mcp.json`)
 /// * `server_name`  — key inside the wrapper object (e.g. `"mempalace"`)
 /// * `wrapper_key`  — top-level key (default `"mcpServers"`; Zed uses `"context_servers"`)
-pub fn write_mcp_config(
-    path: &Path,
-    server_name: &str,
-    wrapper_key: &str,
-) -> ConnectResult {
+pub fn write_mcp_config(path: &Path, server_name: &str, wrapper_key: &str) -> ConnectResult {
     let adapter = server_name.to_string();
     let config_path = path.to_path_buf();
 
@@ -69,7 +65,9 @@ pub fn write_mcp_config(
     // Read existing JSON or start empty
     let existing: serde_json::Value = if path.exists() {
         match fs::read_to_string(path) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default())),
+            Ok(raw) => {
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()))
+            }
             Err(e) => {
                 warn!("connect: could not read existing config {:?}: {}", path, e);
                 serde_json::Value::Object(Default::default())
@@ -81,7 +79,9 @@ pub fn write_mcp_config(
 
     // Mutate: add / replace server entry under wrapper_key
     let mut obj = existing.as_object().cloned().unwrap_or_default();
-    let servers = obj.entry(wrapper_key).or_insert_with(|| serde_json::Value::Object(Default::default()));
+    let servers = obj
+        .entry(wrapper_key)
+        .or_insert_with(|| serde_json::Value::Object(Default::default()));
     if let Some(obj_servers) = servers.as_object_mut() {
         obj_servers.insert(server_name.to_string(), mempalace_mcp_block());
     } else {

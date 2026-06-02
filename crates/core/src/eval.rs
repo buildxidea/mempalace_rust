@@ -243,7 +243,9 @@ mod tests {
         let obs = CompressionObservation {
             title: Some("Valid title here".into()),
             facts: Some(vec!["a".into(), "b".into(), "c".into()]),
-            narrative: Some("This is a narrative that is definitely over fifty characters long.".into()),
+            narrative: Some(
+                "This is a narrative that is definitely over fifty characters long.".into(),
+            ),
             concepts: Some(vec!["x".into()]),
             importance: Some(7),
         };
@@ -355,7 +357,10 @@ mod tests {
 
     #[test]
     fn section_tag_count_multiple() {
-        assert_eq!(section_tag_count("<file>a</file><symbol>b</symbol><diff>c</diff>"), 3);
+        assert_eq!(
+            section_tag_count("<file>a</file><symbol>b</symbol><diff>c</diff>"),
+            3
+        );
     }
 
     #[test]
@@ -372,6 +377,9 @@ mod tests {
     #[test]
     fn section_tag_count_mixed_content() {
         // Should count only properly formed tags
-        assert_eq!(section_tag_count("hello <file>world</file> and <symbol>foo</symbol>"), 2);
+        assert_eq!(
+            section_tag_count("hello <file>world</file> and <symbol>foo</symbol>"),
+            2
+        );
     }
 }

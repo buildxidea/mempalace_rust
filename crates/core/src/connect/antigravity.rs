@@ -22,9 +22,7 @@ impl ConnectAdapter for AntigravityAdapter {
         #[cfg(target_os = "macos")]
         {
             dirs::home_dir()
-                .map(|p| {
-                    p.join("Library/Application Support/Antigravity/User/mcp_config.json")
-                })
+                .map(|p| p.join("Library/Application Support/Antigravity/User/mcp_config.json"))
                 .unwrap_or_else(|| {
                     PathBuf::from("~/Library/Application Support/Antigravity/User/mcp_config.json")
                 })
@@ -41,7 +39,10 @@ impl ConnectAdapter for AntigravityAdapter {
         #[cfg(target_os = "macos")]
         {
             dirs::home_dir()
-                .map(|p| p.join("Library/Application Support/Antigravity/User").exists())
+                .map(|p| {
+                    p.join("Library/Application Support/Antigravity/User")
+                        .exists()
+                })
                 .unwrap_or(false)
         }
         #[cfg(not(target_os = "macos"))]

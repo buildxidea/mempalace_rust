@@ -43,9 +43,7 @@ impl ConnectAdapter for ContinueDevAdapter {
 
         // Branch 1: yaml exists → stub (no YAML dep in tree)
         if yaml_path.exists() {
-            tracing::info!(
-                "connect: continue config.yaml exists, stub (manual edit required)"
-            );
+            tracing::info!("connect: continue config.yaml exists, stub (manual edit required)");
             return Ok(ConnectResult {
                 adapter: self.name().to_string(),
                 config_path: yaml_path,

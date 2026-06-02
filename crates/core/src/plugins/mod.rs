@@ -122,9 +122,7 @@ pub fn enable(plugin_name: &str) -> Result<(), PluginError> {
         .find(|p| p.manifest.name == plugin_name)
         .ok_or_else(|| PluginError::NotFound(plugin_name.to_string()))?;
 
-    let mut state = plugin_state()
-        .write()
-        .expect("plugin state lock poisoned");
+    let mut state = plugin_state().write().expect("plugin state lock poisoned");
     state.insert(plugin_name.to_string(), true);
     let _ = plugin;
     Ok(())
@@ -137,18 +135,14 @@ pub fn disable(plugin_name: &str) -> Result<(), PluginError> {
         .find(|p| p.manifest.name == plugin_name)
         .ok_or_else(|| PluginError::NotFound(plugin_name.to_string()))?;
 
-    let mut state = plugin_state()
-        .write()
-        .expect("plugin state lock poisoned");
+    let mut state = plugin_state().write().expect("plugin state lock poisoned");
     state.insert(plugin_name.to_string(), false);
     Ok(())
 }
 
 /// List all discovered plugins as (name, version, enabled) tuples.
 pub fn list() -> Vec<(String, String, bool)> {
-    let state = plugin_state()
-        .read()
-        .expect("plugin state lock poisoned");
+    let state = plugin_state().read().expect("plugin state lock poisoned");
 
     discover()
         .into_iter()
@@ -194,7 +188,10 @@ mod tests {
 
         // Discover the plugin (initialises state to enabled=false)
         let discovered = discover();
-        assert!(!discovered.is_empty(), "plugin must be discovered from temp dir");
+        assert!(
+            !discovered.is_empty(),
+            "plugin must be discovered from temp dir"
+        );
 
         // Enable then disable
         enable("my_test_plugin").expect("enable must succeed");
@@ -202,7 +199,10 @@ mod tests {
 
         // Verify final state is false
         let state = plugin_state().read().expect("plugin state lock poisoned");
-        let enabled = state.get("my_test_plugin").copied().expect("key must exist");
+        let enabled = state
+            .get("my_test_plugin")
+            .copied()
+            .expect("key must exist");
         assert!(!enabled, "plugin should be disabled after disable()");
 
         // Restore cwd

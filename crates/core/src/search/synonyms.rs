@@ -38,10 +38,20 @@ pub const SYNONYM_GROUPS: &[&[&str]] = &[
     &["pkg", "package"],
     &["repo", "repository"],
     &["ci", "continuousintegration", "continuous-integration"],
-    &["cd", "continuousdeployment", "continuousdelivery", "continuous-deployment"],
+    &[
+        "cd",
+        "continuousdeployment",
+        "continuousdelivery",
+        "continuous-deployment",
+    ],
     &["ui", "userinterface"],
     &["ux", "userexperience"],
-    &["api", "applicationprogramminginterface", "endpoint", "endpoints"],
+    &[
+        "api",
+        "applicationprogramminginterface",
+        "endpoint",
+        "endpoints",
+    ],
     &["cli", "commandline", "command-line-interface"],
     &["gui", "graphicaluserinterface"],
     &["vm", "virtualmachine"],
@@ -58,8 +68,21 @@ pub const SYNONYM_GROUPS: &[&[&str]] = &[
     &["tls", "transportlayersecurity", "ssl"],
     &["ssh", "secureshell"],
     &["crud", "createreadupdatedelete"],
-    &["perf", "performance", "latency", "throughput", "slow", "bottleneck"],
-    &["optim", "optimization", "optimizing", "optimise", "query-optimization"],
+    &[
+        "perf",
+        "performance",
+        "latency",
+        "throughput",
+        "slow",
+        "bottleneck",
+    ],
+    &[
+        "optim",
+        "optimization",
+        "optimizing",
+        "optimise",
+        "query-optimization",
+    ],
     &["deps", "dependencies", "dependency"],
     &["impl", "implementation", "implementing"],
     &["test", "testing", "tests"],
@@ -141,10 +164,7 @@ mod tests {
             syns.contains(&"authentication"),
             "auth should have authentication as synonym"
         );
-        assert!(
-            syns.contains(&"authn"),
-            "auth should have authn as synonym"
-        );
+        assert!(syns.contains(&"authn"), "auth should have authn as synonym");
     }
 
     #[test]
@@ -173,15 +193,26 @@ mod tests {
         let expanded = expand_query(tokens);
         // auth, authn, authentication, authn (dup), authenticating (dup of auth)
         // Unique: auth, authn, authentication, authenticating
-        let unique_count = expanded.iter().collect::<std::collections::HashSet<_>>().len();
-        assert_eq!(unique_count, expanded.len(), "expand_query should not produce duplicates");
+        let unique_count = expanded
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert_eq!(
+            unique_count,
+            expanded.len(),
+            "expand_query should not produce duplicates"
+        );
     }
 
     #[test]
     fn test_expand_query_no_match() {
         let tokens = &["xyzzy"];
         let expanded = expand_query(tokens);
-        assert_eq!(expanded, vec!["xyzzy"], "unknown token should be returned as-is");
+        assert_eq!(
+            expanded,
+            vec!["xyzzy"],
+            "unknown token should be returned as-is"
+        );
     }
 
     #[test]

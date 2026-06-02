@@ -1912,8 +1912,11 @@ impl PalaceDb {
         // Graph search takes the first N tokens (originals + expanded)
         // — bumping from 5 (original) to 10 covers the most common
         // synonym groups (k8s, pg, ts, py, etc.) in a single pass.
-        let graph_tokens: Vec<&str> =
-            expanded_tokens.iter().take(10).map(String::as_str).collect();
+        let graph_tokens: Vec<&str> = expanded_tokens
+            .iter()
+            .take(10)
+            .map(String::as_str)
+            .collect();
 
         // Helper: check if a document entry passes wing/room filter
         let passes_filter = |entry: &DocumentEntry| {
@@ -2621,7 +2624,8 @@ impl EmbeddingDb {
         self.hnsw.insert(idx, &embedding, &self.storage, None)?;
         Ok(idx).inspect(|_| {
             #[cfg(feature = "telemetry")]
-            crate::telemetry::counter!("mempalace_insert_total", "status" => "success").increment(1);
+            crate::telemetry::counter!("mempalace_insert_total", "status" => "success")
+                .increment(1);
         })
     }
 

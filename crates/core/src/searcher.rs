@@ -290,7 +290,8 @@ pub async fn search_memories_with_rerank(
     .inspect(|_| {
         #[cfg(feature = "telemetry")]
         {
-            crate::telemetry::counter!("mempalace_search_total", "status" => "success").increment(1);
+            crate::telemetry::counter!("mempalace_search_total", "status" => "success")
+                .increment(1);
             crate::telemetry::histogram!("mempalace_search_latency_ms")
                 .record(_telemetry_start.elapsed().as_secs_f64() * 1000.0);
         }

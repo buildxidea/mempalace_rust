@@ -190,10 +190,7 @@ impl ClipImageEmbedder {
 
     /// Embed a batch of images in a single blocking call. The model
     /// parallelises internally with rayon over `batch_size` chunks.
-    pub async fn embed_image_paths(
-        &self,
-        paths: Vec<PathBuf>,
-    ) -> anyhow::Result<Vec<Vec<f32>>> {
+    pub async fn embed_image_paths(&self, paths: Vec<PathBuf>) -> anyhow::Result<Vec<Vec<f32>>> {
         if paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -202,7 +199,9 @@ impl ClipImageEmbedder {
         let dim = self.dim;
 
         let vectors = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Vec<f32>>> {
-            let out = model.embed(paths, None).context("clip: embed batch failed")?;
+            let out = model
+                .embed(paths, None)
+                .context("clip: embed batch failed")?;
             // If the runtime ever returns fewer vectors than inputs
             // (it shouldn't) we pad with zero-vectors of `dim` so the
             // caller's positional invariants hold.

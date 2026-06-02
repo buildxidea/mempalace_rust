@@ -2691,7 +2691,10 @@ fn cmd_remove(force: bool, palace_only: bool, palace_arg: Option<&str>) -> Resul
     let data_dir = resolve_palace_path(palace_arg)?;
 
     if !data_dir.exists() {
-        println!("No data found at {}. Nothing to remove.", data_dir.display());
+        println!(
+            "No data found at {}. Nothing to remove.",
+            data_dir.display()
+        );
         return Ok(());
     }
 
@@ -2706,14 +2709,12 @@ fn cmd_remove(force: bool, palace_only: bool, palace_arg: Option<&str>) -> Resul
     }
 
     if palace_only {
-        std::fs::remove_dir_all(&data_dir).with_context(|| {
-            format!("Failed to remove data directory: {}", data_dir.display())
-        })?;
+        std::fs::remove_dir_all(&data_dir)
+            .with_context(|| format!("Failed to remove data directory: {}", data_dir.display()))?;
         println!("Removed data: {}", data_dir.display());
     } else {
-        std::fs::remove_dir_all(&data_dir).with_context(|| {
-            format!("Failed to remove data directory: {}", data_dir.display())
-        })?;
+        std::fs::remove_dir_all(&data_dir)
+            .with_context(|| format!("Failed to remove data directory: {}", data_dir.display()))?;
         println!("Removed data: {}", data_dir.display());
         let cd = Config::config_dir()?;
         println!(
@@ -2745,16 +2746,30 @@ fn cmd_demo(custom_dir: Option<&Path>, force: bool, palace_arg: Option<&str>) ->
         resolve_palace_path(palace_arg)?
     };
 
-    std::fs::create_dir_all(&target).with_context(|| {
-        format!("Failed to create demo data directory: {}", target.display())
-    })?;
+    std::fs::create_dir_all(&target)
+        .with_context(|| format!("Failed to create demo data directory: {}", target.display()))?;
 
     let demo_files: &[(&str, &str)] = &[
-        ("001_mempalace_intro.md", "mempalace is a memory store for AI agents\n\ntags: mempalace, agents\n"),
-        ("002_obsidian_import.md", "use `mpr mine --obsidian` to import your vault\n\ntags: mpr, obsidian, import\n"),
-        ("003_search.md", "search supports BM25 + vector fusion with RRF\n\ntags: search, bm25, rrf\n"),
-        ("004_knowledge_graph.md", "the knowledge graph tracks entities and relations over time\n\ntags: kg, entities\n"),
-        ("005_embedding.md", "embedding providers: fastembed, model2vec, tract, OpenAI, Voyage\n\ntags: embedding\n"),
+        (
+            "001_mempalace_intro.md",
+            "mempalace is a memory store for AI agents\n\ntags: mempalace, agents\n",
+        ),
+        (
+            "002_obsidian_import.md",
+            "use `mpr mine --obsidian` to import your vault\n\ntags: mpr, obsidian, import\n",
+        ),
+        (
+            "003_search.md",
+            "search supports BM25 + vector fusion with RRF\n\ntags: search, bm25, rrf\n",
+        ),
+        (
+            "004_knowledge_graph.md",
+            "the knowledge graph tracks entities and relations over time\n\ntags: kg, entities\n",
+        ),
+        (
+            "005_embedding.md",
+            "embedding providers: fastembed, model2vec, tract, OpenAI, Voyage\n\ntags: embedding\n",
+        ),
     ];
 
     for (filename, content) in demo_files {
@@ -2763,7 +2778,11 @@ fn cmd_demo(custom_dir: Option<&Path>, force: bool, palace_arg: Option<&str>) ->
             .with_context(|| format!("Failed to write demo file: {}", path.display()))?;
     }
 
-    println!("Seeded {} demo files into {}", demo_files.len(), target.display());
+    println!(
+        "Seeded {} demo files into {}",
+        demo_files.len(),
+        target.display()
+    );
     println!("Try: mpr mine --dir {}", target.display());
     Ok(())
 }
@@ -2802,7 +2821,10 @@ fn cmd_stop(pid_file: Option<&str>, kill: bool) -> Result<()> {
     };
 
     if !pid_path.exists() {
-        println!("No PID file found at {}. Server may not be running.", pid_path.display());
+        println!(
+            "No PID file found at {}. Server may not be running.",
+            pid_path.display()
+        );
         return Ok(());
     }
 

@@ -25,8 +25,10 @@ pub use rrf::{
     fuse_results, normalize_weights, rrf_score, FusedResult, RrfConfig, SearchStream, StreamResult,
     DEFAULT_BM25_WEIGHT, DEFAULT_GRAPH_WEIGHT, DEFAULT_VECTOR_WEIGHT, RRF_K,
 };
-pub use synonyms::{expand_query as expand_query_synonyms, get_synonyms, SYNONYM_BM25_WEIGHT, SYNONYM_GROUPS};
 pub use smart_search::{
     build_expand_results, compact_limit, CompactSearchResult, ExpandedResult, SmartSearchParams,
     COMPACT_OVER_FETCH, MAX_COMPACT_RESULTS, MAX_EXPAND_IDS,
+};
+pub use synonyms::{
+    expand_query as expand_query_synonyms, get_synonyms, SYNONYM_BM25_WEIGHT, SYNONYM_GROUPS,
 };

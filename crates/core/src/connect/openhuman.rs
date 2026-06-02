@@ -29,16 +29,12 @@ impl ConnectAdapter for OpenHumanAdapter {
     }
 
     fn connect(&self, _opts: &ConnectOptions) -> std::result::Result<ConnectResult, anyhow::Error> {
-        tracing::warn!(
-            "connect: openhuman integration is not yet automated (stub)"
-        );
+        tracing::warn!("connect: openhuman integration is not yet automated (stub)");
         Ok(ConnectResult {
             adapter: self.name().to_string(),
             config_path: self.config_path(),
             wrote: false,
-            note: Some(
-                "no-integration-folder-yet: manual install required".to_string(),
-            ),
+            note: Some("no-integration-folder-yet: manual install required".to_string()),
         })
     }
 }

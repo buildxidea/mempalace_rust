@@ -13,21 +13,17 @@
 
 #[cfg(feature = "telemetry")]
 mod telemetry_integration {
-    use mempalace_core::telemetry::{Metrics, HistogramEntry, CounterEntry};
+    use mempalace_core::telemetry::{CounterEntry, HistogramEntry, Metrics};
 
     // ---------------------------------------------------------------------------
     // Helper: parse a Prometheus line like "mempalace_foo_total 42"
     // ---------------------------------------------------------------------------
     fn parse_counter(s: &str) -> Option<f64> {
-        s.split_whitespace()
-            .nth(1)
-            .and_then(|v| v.parse().ok())
+        s.split_whitespace().nth(1).and_then(|v| v.parse().ok())
     }
 
     fn parse_histogram_count(s: &str) -> Option<u64> {
-        s.split_whitespace()
-            .nth(1)
-            .and_then(|v| v.parse().ok())
+        s.split_whitespace().nth(1).and_then(|v| v.parse().ok())
     }
 
     // ---------------------------------------------------------------------------
@@ -40,11 +36,13 @@ mod telemetry_integration {
         let snapshot = metrics.handle().render();
         assert!(
             snapshot.contains(r#"mempalace_observations_searched_total{status="ok"} 1"#),
-            "expected searched counter with ok label, got:\n{}", snapshot
+            "expected searched counter with ok label, got:\n{}",
+            snapshot
         );
         assert!(
             snapshot.contains("mempalace_search_latency_ms_count 1"),
-            "expected search latency histogram count, got:\n{}", snapshot
+            "expected search latency histogram count, got:\n{}",
+            snapshot
         );
     }
 
@@ -58,11 +56,13 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_embedded_total{provider="fastembed"} 1"#),
-            "embed counter missing:\n{}", snap
+            "embed counter missing:\n{}",
+            snap
         );
         assert!(
             snap.contains("mempalace_embed_latency_ms_count 1"),
-            "embed latency histogram count missing:\n{}", snap
+            "embed latency histogram count missing:\n{}",
+            snap
         );
     }
 
@@ -76,11 +76,13 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_compressed_total{} 1"#),
-            "compressed counter missing:\n{}", snap
+            "compressed counter missing:\n{}",
+            snap
         );
         assert!(
             snap.contains("mempalace_compression_latency_ms_count 1"),
-            "compression latency histogram count missing:\n{}", snap
+            "compression latency histogram count missing:\n{}",
+            snap
         );
     }
 
@@ -93,12 +95,16 @@ mod telemetry_integration {
         metrics.record_llm("anthropic", "claude-sonnet-4-20250514", 210);
         let snap = metrics.handle().render();
         assert!(
-            snap.contains(r#"mempalace_llm_total{provider="anthropic",model="claude-sonnet-4-20250514"} 1"#),
-            "llm counter missing:\n{}", snap
+            snap.contains(
+                r#"mempalace_llm_total{provider="anthropic",model="claude-sonnet-4-20250514"} 1"#
+            ),
+            "llm counter missing:\n{}",
+            snap
         );
         assert!(
             snap.contains("mempalace_llm_latency_ms_count 1"),
-            "llm latency histogram count missing:\n{}", snap
+            "llm latency histogram count missing:\n{}",
+            snap
         );
     }
 
@@ -112,7 +118,8 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_inserted_total{status="ok"} 1"#),
-            "inserted counter missing:\n{}", snap
+            "inserted counter missing:\n{}",
+            snap
         );
     }
 
@@ -126,7 +133,8 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_consolidated_total{} 1"#),
-            "consolidated counter missing:\n{}", snap
+            "consolidated counter missing:\n{}",
+            snap
         );
     }
 
@@ -140,7 +148,8 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_evicted_total{} 1"#),
-            "evicted counter missing:\n{}", snap
+            "evicted counter missing:\n{}",
+            snap
         );
     }
 
@@ -154,7 +163,8 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_kgraph_added_total{} 1"#),
-            "kgraph_added counter missing:\n{}", snap
+            "kgraph_added counter missing:\n{}",
+            snap
         );
     }
 
@@ -168,7 +178,8 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_dedup_total{} 1"#),
-            "dedup counter missing:\n{}", snap
+            "dedup counter missing:\n{}",
+            snap
         );
     }
 
@@ -182,7 +193,8 @@ mod telemetry_integration {
         let snap = metrics.handle().render();
         assert!(
             snap.contains(r#"mempalace_observations_summarized_total{} 1"#),
-            "summarized counter missing:\n{}", snap
+            "summarized counter missing:\n{}",
+            snap
         );
     }
 
@@ -211,7 +223,9 @@ mod telemetry_integration {
         for name in counters {
             assert!(
                 snap.contains(name),
-                "missing pre-registered counter: {} in:\n{}", name, snap
+                "missing pre-registered counter: {} in:\n{}",
+                name,
+                snap
             );
         }
 
@@ -228,7 +242,9 @@ mod telemetry_integration {
         for name in histograms {
             assert!(
                 snap.contains(name),
-                "missing pre-registered histogram: {} in:\n{}", name, snap
+                "missing pre-registered histogram: {} in:\n{}",
+                name,
+                snap
             );
         }
     }

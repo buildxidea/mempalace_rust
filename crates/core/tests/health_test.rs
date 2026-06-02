@@ -3,6 +3,8 @@
 // These tests define the expected behaviour of the health monitoring system.
 // They are written FIRST (RED), then the implementation is added (GREEN).
 
+#![cfg(feature = "health")]
+
 use mempalace_core::health::{CheckResult, HealthCheck, HealthMonitor, HealthReport, HealthStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

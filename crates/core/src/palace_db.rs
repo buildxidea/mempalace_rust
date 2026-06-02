@@ -2657,7 +2657,14 @@ impl EmbeddingDb {
     }
 
     pub async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        #[cfg(feature = "telemetry")]
+        let _telemetry_start = std::time::Instant::now();
         let embedding = self.embedder.embed(text).await?;
+        #[cfg(feature = "telemetry")]
+        {
+            crate::telemetry::histogram!("mempalace_embed_latency_ms")
+                .record(_telemetry_start.elapsed().as_secs_f64() * 1000.0);
+        }
         Ok(embedding)
     }
 

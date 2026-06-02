@@ -1,6 +1,6 @@
 //! Synonym expansion for search queries.
 //!
-//! 46 hardcoded synonym groups used to expand queries at index/search time.
+//! 72 hardcoded synonym groups used to expand queries at index/search time.
 //! BM25 weight for synonym-matched terms: 0.7 (per agentmemory/src/state/search-index.ts:98).
 
 use std::collections::HashSet;

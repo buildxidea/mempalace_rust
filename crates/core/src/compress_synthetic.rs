@@ -11,7 +11,57 @@ use crate::types::{CompressedObservation, HookType, ObservationType};
 /// Infer the observation type from the hook type and tool name.
 /// 1:1 port of `inferType()` from agentmemory.
 pub fn infer_type(tool_name: Option<&str>, hook_type: &HookType) -> ObservationType {
-    // Hook-type-based overrides
+    // Tool-name-based classification takes precedence when the hook
+    // also has a generic override (e.g. `PostToolUseFailure` should
+    // still report the *type* of the tool that failed, not a blanket
+    // `Error`).
+    let tool_based = tool_name.and_then(|name| {
+        // Normalize: convert camelCase and kebab-case into word chunks
+        let mut normalized = String::new();
+        for (i, c) in name.chars().enumerate() {
+            if c.is_uppercase() && i > 0 {
+                normalized.push('_');
+            }
+            normalized.push(c.to_ascii_lowercase());
+        }
+        let normalized = normalized.replace(['-', ' '], "_");
+        let normalized = normalized.strip_prefix('_').unwrap_or(&normalized);
+
+        let has_word = |word: &str| -> bool {
+            normalized == word
+                || normalized.starts_with(&format!("{word}_"))
+                || normalized.ends_with(&format!("_{word}"))
+                || normalized.contains(&format!("_{word}_"))
+        };
+
+        if ["fetch", "http", "web"].iter().any(|w| has_word(w)) {
+            return Some(ObservationType::WebFetch);
+        }
+        if ["grep", "search", "glob", "find"].iter().any(|w| has_word(w)) {
+            return Some(ObservationType::Search);
+        }
+        if ["bash", "shell", "exec", "run"].iter().any(|w| has_word(w)) {
+            return Some(ObservationType::CommandRun);
+        }
+        if ["edit", "update", "patch", "replace"].iter().any(|w| has_word(w)) {
+            return Some(ObservationType::FileEdit);
+        }
+        if ["write", "create"].iter().any(|w| has_word(w)) {
+            return Some(ObservationType::FileWrite);
+        }
+        if ["read", "view"].iter().any(|w| has_word(w)) {
+            return Some(ObservationType::FileRead);
+        }
+        if ["task", "agent"].iter().any(|w| has_word(w)) {
+            return Some(ObservationType::Subagent);
+        }
+        None
+    });
+    if let Some(t) = tool_based {
+        return t;
+    }
+
+    // Hook-type-based overrides (only when no tool name matches)
     match hook_type {
         HookType::PostToolUseFailure => return ObservationType::Error,
         HookType::UserPromptSubmit => return ObservationType::Conversation,
@@ -19,58 +69,6 @@ pub fn infer_type(tool_name: Option<&str>, hook_type: &HookType) -> ObservationT
         HookType::Notification => return ObservationType::Notification,
         HookType::Stop => return ObservationType::SessionEnd,
         _ => {}
-    }
-
-    let Some(name) = tool_name else {
-        return ObservationType::Other;
-    };
-
-    // Normalize: convert camelCase and kebab-case into word chunks
-    let mut normalized = String::new();
-    for (i, c) in name.chars().enumerate() {
-        if c.is_uppercase() && i > 0 {
-            normalized.push('_');
-        }
-        normalized.push(c.to_ascii_lowercase());
-    }
-    let normalized = normalized.replace(['-', ' '], "_");
-
-    // Strip leading underscore if present
-    let normalized = normalized.strip_prefix('_').unwrap_or(&normalized);
-
-    let has_word = |word: &str| -> bool {
-        normalized == word
-            || normalized.starts_with(&format!("{word}_"))
-            || normalized.ends_with(&format!("_{word}"))
-            || normalized.contains(&format!("_{word}_"))
-    };
-
-    if ["fetch", "http", "web"].iter().any(|w| has_word(w)) {
-        return ObservationType::WebFetch;
-    }
-    if ["grep", "search", "glob", "find"]
-        .iter()
-        .any(|w| has_word(w))
-    {
-        return ObservationType::Search;
-    }
-    if ["bash", "shell", "exec", "run"].iter().any(|w| has_word(w)) {
-        return ObservationType::CommandRun;
-    }
-    if ["edit", "update", "patch", "replace"]
-        .iter()
-        .any(|w| has_word(w))
-    {
-        return ObservationType::FileEdit;
-    }
-    if ["write", "create"].iter().any(|w| has_word(w)) {
-        return ObservationType::FileWrite;
-    }
-    if ["read", "view"].iter().any(|w| has_word(w)) {
-        return ObservationType::FileRead;
-    }
-    if ["task", "agent"].iter().any(|w| has_word(w)) {
-        return ObservationType::Subagent;
     }
 
     ObservationType::Other
@@ -504,7 +502,7 @@ pub fn build_synthetic_compression(
 
     // Score importance using heuristics
     let importance_score = score_importance(tool_name, hook_type, tool_input, tool_output);
-    let importance = ((importance_score * 9.0) + 1.0).round().min(10.0) as u8;
+    let importance = (importance_score * 9.0).round().clamp(1.0, 10.0) as u8;
 
     CompressedObservation {
         id: String::new(),

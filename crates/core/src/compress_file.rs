@@ -73,7 +73,7 @@ pub fn compress_markdown(content: &str) -> String {
         // Collapse multiple blank lines
         if line.trim().is_empty() {
             consecutive_blank += 1;
-            if consecutive_blank <= 2 {
+            if consecutive_blank <= 1 {
                 result.push('\n');
             }
             continue;

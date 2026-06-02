@@ -232,15 +232,12 @@ pub fn export_observations(
 
 fn sanitize_tag(tag: &str) -> String {
     tag.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
+        .map(|c| match c {
+            ' ' => '-',
+            c if c.is_alphanumeric() || c == '-' || c == '_' => c,
+            _ => '_',
         })
         .collect::<String>()
-        .replace(' ', "-")
         .to_lowercase()
 }
 

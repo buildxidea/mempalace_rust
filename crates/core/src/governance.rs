@@ -43,7 +43,7 @@ pub fn filter_memories<'a>(
             }
 
             if let Some(min_strength) = filter.min_strength {
-                if m.strength > min_strength {
+                if m.strength < min_strength {
                     return false;
                 }
             }

@@ -26,6 +26,11 @@ pub fn scan_palace(
     println!("\n  Palace: {}", palace_path.display());
     println!("  Loading...");
 
+    if !palace_path.exists() {
+        println!("  Palace does not exist; nothing to scan.");
+        return Ok((HashSet::new(), HashSet::new()));
+    }
+
     let palace_db = PalaceDb::open(palace_path)?;
     let total = palace_db.count();
     println!("  Total drawers: {}", total);

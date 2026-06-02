@@ -81,7 +81,7 @@ pub fn heal_expired_leases(
     leases.retain(|lease| {
         if lease.expires_at < now {
             fixed.push(format!("Released expired lease: {}", lease.id));
-            !dry_run // Remove in non-dry-run mode
+            dry_run // Keep in dry-run mode, remove otherwise
         } else {
             true
         }

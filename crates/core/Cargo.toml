@@ -30,8 +30,10 @@ embed-gemini = []
 # Remote Cohere embedding provider. Uses the already-present
 # `reqwest` dep; gated so builds opt in to outbound embedding API calls.
 embed-cohere = []
-# embed-clip disabled due to ort version conflict with fastembed (requires ort 2.0.0-rc.5 but fastembed needs 2.0.0-rc.12)
-# To enable: add open_clip_inference and image deps when ort conflict is resolved
+# CLIP image embeddings via fastembed 4.x's `ImageEmbedding` (Xenova/clip-vit-base-patch32,
+# 512-d, L2-normalised). Re-uses fastembed's `ort` so there is no version conflict with
+# the text-embedder path. See `embed::clip_embedder::ClipImageEmbedder` for the API.
+embed-clip = ["embed-fastembed"]
 sync = []
 llm-openai = []
 llm-anthropic = []

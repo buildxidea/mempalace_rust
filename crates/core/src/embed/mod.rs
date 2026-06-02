@@ -48,6 +48,10 @@ pub mod null;
 #[doc(hidden)]
 pub mod fastembed;
 
+#[cfg(feature = "embed-clip")]
+#[doc(hidden)]
+pub mod clip_embedder;
+
 #[cfg(feature = "embed-model2vec")]
 #[doc(hidden)]
 pub mod model2vec;
@@ -96,6 +100,9 @@ pub use cohere_remote::CohereRemoteEmbedder;
 
 #[cfg(feature = "embed-fastembed")]
 pub use fastembed::FastEmbedEmbedder;
+
+#[cfg(feature = "embed-clip")]
+pub use clip_embedder::{ClipImageEmbedder, DEFAULT_CLIP_MODEL};
 
 #[cfg(feature = "embed-model2vec")]
 pub use model2vec::Model2VecEmbedder;

@@ -1893,8 +1893,27 @@ impl PalaceDb {
     ) -> anyhow::Result<Vec<QueryResult>> {
         use crate::search::diversify::diversify_by_session;
         use crate::search::rrf::{fuse_results, RrfConfig, SearchStream, StreamResult};
+        use crate::search::synonyms::expand_query as expand_query_synonyms;
 
         let over_fetch = (limit * 3).min(300);
+
+        // Synonym expansion: append synonym tokens to the query so BM25
+        // and graph search surface documents that match via canonical
+        // abbreviations (e.g. `k8s` matches `kubernetes` rows). The
+        // expanded query is used for lexical streams (BM25 + graph);
+        // the vector stream stays semantic and still uses the raw
+        // query_text so the embedder doesn't see noisy expansions.
+        // Per `agentmemory/src/state/search-index.ts:98` the BM25
+        // weight for synonym-matched docs is 0.7 (vs 1.0 for direct
+        // matches), wired through `RrfConfig::with_synonyms()` below.
+        let query_tokens: Vec<&str> = query_text.split_whitespace().collect();
+        let expanded_tokens = expand_query_synonyms(&query_tokens);
+        let expanded_query = expanded_tokens.join(" ");
+        // Graph search takes the first N tokens (originals + expanded)
+        // — bumping from 5 (original) to 10 covers the most common
+        // synonym groups (k8s, pg, ts, py, etc.) in a single pass.
+        let graph_tokens: Vec<&str> =
+            expanded_tokens.iter().take(10).map(String::as_str).collect();
 
         // Helper: check if a document entry passes wing/room filter
         let passes_filter = |entry: &DocumentEntry| {
@@ -1923,7 +1942,7 @@ impl PalaceDb {
 
         let bm25_results: Vec<StreamResult> = self
             .bm25
-            .search(query_text, over_fetch)
+            .search(&expanded_query, over_fetch)
             .into_iter()
             .enumerate()
             .filter_map(|(rank, result)| {
@@ -1989,7 +2008,7 @@ impl PalaceDb {
         if let Ok(kg) = crate::knowledge_graph::KnowledgeGraph::open(
             &self.palace_path.join("knowledge_graph.db"),
         ) {
-            let query_words: Vec<&str> = query_lower.split_whitespace().take(5).collect();
+            let query_words: Vec<&str> = graph_tokens.clone();
             for word in query_words {
                 if let Ok(triples) = kg.query_entity(word, None, None, "both") {
                     for (rank, triple) in triples.iter().enumerate() {
@@ -2011,7 +2030,7 @@ impl PalaceDb {
             }
         }
 
-        let config = RrfConfig::default();
+        let config = RrfConfig::with_synonyms();
         let fused = fuse_results(&bm25_results, &vector_results, &graph_results, &config);
 
         let diversified: Vec<_> = fused

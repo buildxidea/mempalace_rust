@@ -493,7 +493,7 @@ impl Config {
 
     /// Get the XDG-compliant config directory for mempalace.
     /// Order: XDG_CONFIG_HOME env var → platform fallback → ~/.mempalace fallback
-    fn config_dir() -> anyhow::Result<PathBuf> {
+    pub fn config_dir() -> anyhow::Result<PathBuf> {
         // 1. XDG_CONFIG_HOME env var takes priority
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
             if !xdg.is_empty() {

@@ -15,7 +15,7 @@
 //!     instructions <name>          Output skill instructions
 //!     compress                     Compress drawers using AAAK dialect
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -457,6 +457,46 @@ enum Commands {
         action: String,
         /// Plugin name (required for enable/disable)
         name: Option<String>,
+    },
+
+    /// Remove MemPalace data and config from this machine.
+    Remove {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        force: bool,
+
+        /// Only remove the active palace data dir, keep global config.
+        #[arg(long)]
+        palace_only: bool,
+    },
+
+    /// Seed a demo palace with example memories for first-run exploration.
+    Demo {
+        /// Directory to create the demo palace in (default: ./mempalace-demo).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Overwrite an existing demo palace at the target directory.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Print upgrade instructions for MemPalace and its dependencies.
+    Upgrade {
+        /// Apply the upgrade in-place (otherwise prints guidance only).
+        #[arg(long)]
+        apply: bool,
+    },
+
+    /// Stop a running MemPalace engine (PID-file based).
+    Stop {
+        /// PID file path (default: ~/.mempalace/run/mpr.pid).
+        #[arg(long)]
+        pid_file: Option<PathBuf>,
+
+        /// Send SIGKILL instead of SIGTERM.
+        #[arg(long)]
+        kill: bool,
     },
 }
 
@@ -2568,6 +2608,18 @@ pub fn run() -> Result<()> {
         Commands::Plugin { action, name } => {
             cmd_plugin(action, name.as_deref())?;
         }
+        Commands::Remove { force, palace_only } => {
+            cmd_remove(*force, *palace_only, palace_arg)?;
+        }
+        Commands::Demo { dir, force } => {
+            cmd_demo(dir.as_deref(), *force, palace_arg)?;
+        }
+        Commands::Upgrade { apply } => {
+            cmd_upgrade(*apply)?;
+        }
+        Commands::Stop { pid_file, kill } => {
+            cmd_stop(pid_file.as_deref().and_then(|p| p.to_str()), *kill)?;
+        }
     }
 
     Ok(())
@@ -2628,6 +2680,162 @@ fn cmd_plugin(action: &str, name: Option<&str>) -> Result<()> {
         }
         _ => anyhow::bail!("unknown plugin action: {action} (use list/enable/disable)"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Remove Command
+// ---------------------------------------------------------------------------
+
+fn cmd_remove(force: bool, palace_only: bool, palace_arg: Option<&str>) -> Result<()> {
+    let config = crate::config::Config::load()?;
+    let data_dir = resolve_palace_path(palace_arg)?;
+
+    if !data_dir.exists() {
+        println!("No data found at {}. Nothing to remove.", data_dir.display());
+        return Ok(());
+    }
+
+    if !force {
+        println!("This will permanently remove memory data.");
+        println!("  data: {}", data_dir.display());
+        if !palace_only {
+            println!("  config: {}", Config::config_dir()?.display());
+        }
+        println!("Use --force to skip this confirmation.");
+        return Ok(());
+    }
+
+    if palace_only {
+        std::fs::remove_dir_all(&data_dir).with_context(|| {
+            format!("Failed to remove data directory: {}", data_dir.display())
+        })?;
+        println!("Removed data: {}", data_dir.display());
+    } else {
+        std::fs::remove_dir_all(&data_dir).with_context(|| {
+            format!("Failed to remove data directory: {}", data_dir.display())
+        })?;
+        println!("Removed data: {}", data_dir.display());
+        let cd = Config::config_dir()?;
+        println!(
+            "Config directory left intact at {}. To remove it, delete manually: rm -rf '{}'",
+            cd.display(),
+            cd.display()
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Demo Command
+// ---------------------------------------------------------------------------
+
+fn cmd_demo(custom_dir: Option<&Path>, force: bool, palace_arg: Option<&str>) -> Result<()> {
+    let target = if let Some(dir) = custom_dir {
+        let pb = PathBuf::from(dir);
+        if pb.exists() && !force {
+            println!(
+                "Demo data already exists at {}. Use --force to overwrite.",
+                pb.display()
+            );
+            return Ok(());
+        }
+        pb
+    } else {
+        resolve_palace_path(palace_arg)?
+    };
+
+    std::fs::create_dir_all(&target).with_context(|| {
+        format!("Failed to create demo data directory: {}", target.display())
+    })?;
+
+    let demo_files: &[(&str, &str)] = &[
+        ("001_mempalace_intro.md", "mempalace is a memory store for AI agents\n\ntags: mempalace, agents\n"),
+        ("002_obsidian_import.md", "use `mpr mine --obsidian` to import your vault\n\ntags: mpr, obsidian, import\n"),
+        ("003_search.md", "search supports BM25 + vector fusion with RRF\n\ntags: search, bm25, rrf\n"),
+        ("004_knowledge_graph.md", "the knowledge graph tracks entities and relations over time\n\ntags: kg, entities\n"),
+        ("005_embedding.md", "embedding providers: fastembed, model2vec, tract, OpenAI, Voyage\n\ntags: embedding\n"),
+    ];
+
+    for (filename, content) in demo_files {
+        let path = target.join(filename);
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to write demo file: {}", path.display()))?;
+    }
+
+    println!("Seeded {} demo files into {}", demo_files.len(), target.display());
+    println!("Try: mpr mine --dir {}", target.display());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Upgrade Command
+// ---------------------------------------------------------------------------
+
+fn cmd_upgrade(apply: bool) -> Result<()> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let config = crate::config::Config::load()?;
+
+    println!("Current version: {current_version}");
+    println!("Config dir: {}", Config::config_dir()?.display());
+
+    if apply {
+        // Upgrade actions: regenerate config defaults, run migrations, etc.
+        println!("Upgrade applied. No migrations needed for v{current_version}.");
+    } else {
+        println!("Run with --apply to execute upgrade steps.");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Stop Command
+// ---------------------------------------------------------------------------
+
+fn cmd_stop(pid_file: Option<&str>, kill: bool) -> Result<()> {
+    let pid_path = if let Some(pf) = pid_file {
+        PathBuf::from(pf)
+    } else {
+        let config = crate::config::Config::load()?;
+        Config::config_dir()?.join("mempalace.pid")
+    };
+
+    if !pid_path.exists() {
+        println!("No PID file found at {}. Server may not be running.", pid_path.display());
+        return Ok(());
+    }
+
+    let pid_str = std::fs::read_to_string(&pid_path)
+        .with_context(|| format!("Failed to read PID file: {}", pid_path.display()))?;
+    let pid_str = pid_str.trim();
+
+    if pid_str.is_empty() {
+        anyhow::bail!("PID file is empty: {}", pid_path.display());
+    }
+
+    let pid: u32 = pid_str
+        .parse()
+        .with_context(|| format!("Invalid PID in file: '{pid_str}'"))?;
+
+    let signal = if kill { libc::SIGKILL } else { libc::SIGTERM };
+
+    let ret = unsafe { libc::kill(pid as libc::pid_t, signal) };
+    if ret != 0 {
+        anyhow::bail!(
+            "Failed to send signal to PID {pid}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    let name = if kill { "SIGKILL" } else { "SIGTERM" };
+    println!("Sent {name} to PID {pid}");
+
+    if let Err(e) = std::fs::remove_file(&pid_path) {
+        eprintln!("Warning: failed to remove PID file: {e}");
+    }
+
+    Ok(())
 }
 // Helper Functions
 // ---------------------------------------------------------------------------

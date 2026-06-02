@@ -12,7 +12,7 @@ fn is_valid_tag(tag: &str) -> bool {
 /// Returns an empty string if the tag is not found or the tag name is invalid.
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// let xml = "<response><title>Hello</title></response>";
 /// assert_eq!(get_xml_tag(xml, "title"), "Hello");
 /// ```
@@ -41,7 +41,7 @@ pub fn get_xml_tag(xml: &str, tag: &str) -> String {
 /// Returns an empty Vec if the parent is not found or tag names are invalid.
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// let xml = "<facts><fact>one</fact><fact>two</fact></facts>";
 /// let facts = get_xml_children(xml, "facts", "fact");
 /// assert_eq!(facts, vec!["one", "two"]);

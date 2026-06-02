@@ -2840,18 +2840,27 @@ fn cmd_stop(pid_file: Option<&str>, kill: bool) -> Result<()> {
         .parse()
         .with_context(|| format!("Invalid PID in file: '{pid_str}'"))?;
 
-    let signal = if kill { libc::SIGKILL } else { libc::SIGTERM };
+    #[cfg(unix)]
+    {
+        let signal = if kill { libc::SIGKILL } else { libc::SIGTERM };
 
-    let ret = unsafe { libc::kill(pid as libc::pid_t, signal) };
-    if ret != 0 {
-        anyhow::bail!(
-            "Failed to send signal to PID {pid}: {}",
-            std::io::Error::last_os_error()
-        );
+        let ret = unsafe { libc::kill(pid as libc::pid_t, signal) };
+        if ret != 0 {
+            anyhow::bail!(
+                "Failed to send signal to PID {pid}: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        let name = if kill { "SIGKILL" } else { "SIGTERM" };
+        println!("Sent {name} to PID {pid}");
     }
 
-    let name = if kill { "SIGKILL" } else { "SIGTERM" };
-    println!("Sent {name} to PID {pid}");
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        anyhow::bail!("`mpr stop` via PID file is Unix-only; on Windows, use Task Manager or `taskkill /PID {pid} /F`.");
+    }
 
     if let Err(e) = std::fs::remove_file(&pid_path) {
         eprintln!("Warning: failed to remove PID file: {e}");

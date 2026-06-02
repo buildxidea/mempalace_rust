@@ -37,13 +37,19 @@ pub fn infer_type(tool_name: Option<&str>, hook_type: &HookType) -> ObservationT
         if ["fetch", "http", "web"].iter().any(|w| has_word(w)) {
             return Some(ObservationType::WebFetch);
         }
-        if ["grep", "search", "glob", "find"].iter().any(|w| has_word(w)) {
+        if ["grep", "search", "glob", "find"]
+            .iter()
+            .any(|w| has_word(w))
+        {
             return Some(ObservationType::Search);
         }
         if ["bash", "shell", "exec", "run"].iter().any(|w| has_word(w)) {
             return Some(ObservationType::CommandRun);
         }
-        if ["edit", "update", "patch", "replace"].iter().any(|w| has_word(w)) {
+        if ["edit", "update", "patch", "replace"]
+            .iter()
+            .any(|w| has_word(w))
+        {
             return Some(ObservationType::FileEdit);
         }
         if ["write", "create"].iter().any(|w| has_word(w)) {

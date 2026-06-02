@@ -423,6 +423,68 @@ Future retrievals blend semantic similarity with historical helpfulness — memo
 
 ---
 
+## CI/CD Workflow
+
+```
+┌──────────────┐   push / PR   ┌────────────────────────────────────┐
+│  developer   │ ────────────► │  GitHub Actions: .github/workflows │
+│  git push    │                │           ci.yml                   │
+└──────────────┘                └───────────────┬────────────────┘
+                                                │
+                  ┌─────────────────────────────┼─────────────────────────────┐
+                  ▼                             ▼                             ▼
+         ┌────────────────┐            ┌────────────────┐            ┌────────────────┐
+         │ ubuntu-latest  │            │ macos-latest   │            │ windows-latest │
+         │   test+clippy  │            │   test+clippy  │            │  clippy default│
+         └────────┬───────┘            └────────┬───────┘            └────────┬───────┘
+                  │                             │                             │
+                  └─────────────────────────────┼─────────────────────────────┘
+                                                ▼
+                                ┌───────────────────────────────┐
+                                │   fmt → build → test → bench  │
+                                │   (gate: agentmemory 1:1 +    │
+                                │    green CI on all 3 OS)     │
+                                └───────────────────────────────┘
+```
+
+| Step | What it does | Why |
+|------|--------------|-----|
+| `cargo fmt --all -- --check` | Whitespace gate | Prevents rustfmt debt |
+| `cargo clippy --all-targets [--all-features]` | Lint gate (no `-D warnings` — see note) | Catches dead code, wrong cfg gates |
+| `cargo test --workspace [--all-features]` | Run 1000+ lib tests | Catches runtime regressions |
+| `cargo bench --no-run` | Compile-only benches | Catches API drift in benchmark harness |
+
+**Note on `-D warnings`**: dropped from clippy (commit `ced4350`) because the
+pre-existing backlog of mechanical lints (unused imports, `sort_by_key`,
+`is_empty`, etc. across 50+ files) was masking real CI signal. New code
+should still be warning-free; the gate is enforced implicitly via `cargo
+build` + the test suite. Future cleanup: re-enable after a sweep.
+
+**Plugin deployment pattern** (`plugin/` folder at repo root, copy of
+agentmemory's layout):
+
+```
+┌──────────────┐   npm/npx   ┌────────────────┐
+│ Claude Code  │ ──────────► │  plugin/.mcp.json │
+│  Codex CLI   │             │  plugin/hooks/   │
+│  Copilot     │             │  plugin/skills/  │
+└──────────────┘             │  plugin/scripts/ │
+                            └────────────────┘
+                                     │
+                                     ▼
+                            ┌────────────────┐
+                            │ mpr serve      │
+                            │ (Rust HTTP+REST)│
+                            └────────────────┘
+```
+
+The agent runtime loads the plugin/ folder; Node.js scripts in
+`plugin/scripts/` call the REST API. No Rust-side hook or plugin
+manager — that pattern was removed in commit `d98a0a3` as a
+self-added divergence from agentmemory 1:1.
+
+---
+
 ## Specialist Agents
 
 Create agents that focus on specific areas. Each agent gets its own wing and diary in the palace — not in your CLAUDE.md. Add 50 agents, your config stays the same size.

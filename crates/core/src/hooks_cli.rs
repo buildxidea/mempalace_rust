@@ -14,6 +14,10 @@
 //!     mpr hook subagent-start  — log subagent spawn
 //!     mpr hook subagent-stop   — log subagent completion
 //!     mpr hook task-completed  — update action graph
+//!     mpr hook post-commit     — log git post-commit metadata
+//!     mpr hook pre-tool-use    — pre-tool guard (opt-in via MEMPALACE_INJECT_CONTEXT)
+//!     mpr hook sdk-guard       — detect SDK child context
+//!     mpr hook project-resolve  — resolve project name
 
 #![doc(hidden)]
 
@@ -25,8 +29,8 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use crate::config::Config;
 use crate::mcp::context_inject::{inject_session_context, is_context_injection_enabled};
@@ -230,9 +234,12 @@ fn fire_and_forget(url: &str, body: &serde_json::Value) {
         let _ = Command::new("curl")
             .args(&[
                 "-s",
-                "-X", "POST",
-                "-H", "Content-Type: application/json",
-                "-d", &body_str,
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                &body_str,
                 &url_owned,
             ])
             .stdin(Stdio::null())
@@ -277,7 +284,10 @@ pub fn hook_session_start_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("SESSION START for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "SESSION START for session {} (harness={})",
+        session_id, harness
+    ));
     ensure_state_dir();
 
     // Build context via inject_session_context (from context_inject.rs)
@@ -327,9 +337,7 @@ fn try_inject_context(session_id: &str, palace_path: &PathBuf) -> String {
     let pp = palace_path.clone();
 
     let result = thread::scope(|s| {
-        let handle = s.spawn(|| {
-            inject_session_context(&sid, &pp, None)
-        });
+        let handle = s.spawn(|| inject_session_context(&sid, &pp, None));
         // Wait with timeout (5 seconds)
         let start = std::time::Instant::now();
         loop {
@@ -367,13 +375,19 @@ pub fn hook_session_end_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("SESSION END for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "SESSION END for session {} (harness={})",
+        session_id, harness
+    ));
 
     let api_base = get_api_base();
 
     // Build session_end payload
     let mut session_end_data = HashMap::new();
-    session_end_data.insert("transcript_path".to_string(), serde_json::json!(transcript_path));
+    session_end_data.insert(
+        "transcript_path".to_string(),
+        serde_json::json!(transcript_path),
+    );
     let session_end_payload = build_observe_payload(
         &session_id,
         HookType::SessionEnd,
@@ -390,9 +404,12 @@ pub fn hook_session_end_response(
     fire_and_forget(&format!("{}/session/end", api_base), &session_payload);
 
     // Fire-and-forget /summarize
-    fire_and_forget(&format!("{}/summarize", api_base), &serde_json::json!({
-        "session_id": session_id,
-    }));
+    fire_and_forget(
+        &format!("{}/summarize", api_base),
+        &serde_json::json!({
+            "session_id": session_id,
+        }),
+    );
 
     Ok(serde_json::json!({}))
 }
@@ -414,7 +431,10 @@ pub fn hook_post_tool_use_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("POST-TOOL-USE for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "POST-TOOL-USE for session {} (harness={})",
+        session_id, harness
+    ));
 
     // Extract tool data from Claude Code format
     let mut hook_data = HashMap::new();
@@ -435,13 +455,19 @@ pub fn hook_post_tool_use_response(
 
     // Fallback: extract directly from top-level fields
     if let Some(name) = data.get("toolName").and_then(|v| v.as_str()) {
-        hook_data.entry("toolName".to_string()).or_insert_with(|| serde_json::json!(name));
+        hook_data
+            .entry("toolName".to_string())
+            .or_insert_with(|| serde_json::json!(name));
     }
     if let Some(input) = data.get("toolInput").or_else(|| data.get("input")) {
-        hook_data.entry("toolInput".to_string()).or_insert_with(|| input.clone());
+        hook_data
+            .entry("toolInput".to_string())
+            .or_insert_with(|| input.clone());
     }
     if let Some(output) = data.get("toolOutput").or_else(|| data.get("output")) {
-        hook_data.entry("toolOutput".to_string()).or_insert_with(|| output.clone());
+        hook_data
+            .entry("toolOutput".to_string())
+            .or_insert_with(|| output.clone());
     }
 
     let observe_payload = build_observe_payload(
@@ -474,7 +500,10 @@ pub fn hook_post_tool_failure_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("POST-TOOL-FAILURE for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "POST-TOOL-FAILURE for session {} (harness={})",
+        session_id, harness
+    ));
 
     // Extract error data
     let mut hook_data = HashMap::new();
@@ -509,10 +538,13 @@ pub fn hook_post_tool_failure_response(
     fire_and_forget(&format!("{}/observe", api_base), &observe_payload);
 
     // Fire /heal to trigger heal check
-    fire_and_forget(&format!("{}/heal", api_base), &serde_json::json!({
-        "session_id": session_id,
-        "trigger": "post_tool_failure",
-    }));
+    fire_and_forget(
+        &format!("{}/heal", api_base),
+        &serde_json::json!({
+            "session_id": session_id,
+            "trigger": "post_tool_failure",
+        }),
+    );
 
     Ok(serde_json::json!({}))
 }
@@ -533,7 +565,10 @@ pub fn hook_prompt_submit_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("PROMPT-SUBMIT for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "PROMPT-SUBMIT for session {} (harness={})",
+        session_id, harness
+    ));
 
     // Extract user prompt
     let mut hook_data = HashMap::new();
@@ -545,7 +580,10 @@ pub fn hook_prompt_submit_response(
     }
 
     // Include assistant response if available (pair the prompt with response)
-    if let Some(response) = data.get("assistantResponse").or_else(|| data.get("response")) {
+    if let Some(response) = data
+        .get("assistantResponse")
+        .or_else(|| data.get("response"))
+    {
         hook_data.insert("assistantResponse".to_string(), response.clone());
     }
 
@@ -578,7 +616,10 @@ pub fn hook_notification_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("NOTIFICATION for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "NOTIFICATION for session {} (harness={})",
+        session_id, harness
+    ));
 
     // Extract notification data
     let mut hook_data = HashMap::new();
@@ -629,7 +670,10 @@ pub fn hook_subagent_start_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("SUBAGENT-START for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "SUBAGENT-START for session {} (harness={})",
+        session_id, harness
+    ));
 
     // Extract subagent data
     let mut hook_data = HashMap::new();
@@ -680,7 +724,10 @@ pub fn hook_subagent_stop_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("SUBAGENT-STOP for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "SUBAGENT-STOP for session {} (harness={})",
+        session_id, harness
+    ));
 
     // Extract subagent result data
     let mut hook_data = HashMap::new();
@@ -690,7 +737,11 @@ pub fn hook_subagent_stop_response(
     }
 
     // Include exit code/status if available
-    if let Some(status) = data.get("exitCode").or_else(|| data.get("exit_code")).or_else(|| data.get("status")) {
+    if let Some(status) = data
+        .get("exitCode")
+        .or_else(|| data.get("exit_code"))
+        .or_else(|| data.get("status"))
+    {
         hook_data.insert("exitCode".to_string(), status.clone());
     }
 
@@ -728,7 +779,10 @@ pub fn hook_task_completed_response(
         .unwrap_or_default()
         .to_string();
 
-    log_hook(&format!("TASK-COMPLETED for session {} (harness={})", session_id, harness));
+    log_hook(&format!(
+        "TASK-COMPLETED for session {} (harness={})",
+        session_id, harness
+    ));
 
     // Extract task data
     let mut hook_data = HashMap::new();
@@ -764,6 +818,174 @@ pub fn hook_task_completed_response(
 }
 
 // ---------------------------------------------------------------------------
+// post-commit hook
+// ---------------------------------------------------------------------------
+
+/// Post-commit hook: log git commit metadata (sha, branch, author, files).
+pub fn hook_post_commit_response(
+    data: &serde_json::Value,
+    harness: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let sha = data.get("sha").and_then(|v| v.as_str());
+    let branch = data.get("branch").and_then(|v| v.as_str()).unwrap_or("(unknown)");
+    let author = data.get("author").and_then(|v| v.as_str()).unwrap_or("(unknown)");
+    let message = data.get("message").and_then(|v| v.as_str());
+    let files = data.get("files").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+
+    fs::create_dir_all(state_dir()).ok();
+
+    if let Some(sha_val) = sha {
+        log_hook(&format!(
+            "POST-COMMIT {} on {} by {} ({} files) harness={}",
+            sha_val, branch, author, files, harness
+        ));
+        if let Some(msg) = message {
+            if msg.contains("fix") {
+                log_hook(&format!("  message contains 'fix': {}", &msg[..msg.len().min(80)]));
+            }
+        }
+    } else {
+        log_hook(&format!("POST-COMMIT missing sha, skipping harness={}", harness));
+    }
+
+    Ok(serde_json::json!({"decision": "pass"}))
+}
+
+// ---------------------------------------------------------------------------
+// pre-tool-use hook
+// ---------------------------------------------------------------------------
+
+/// Pre-tool-use hook: pre-tool guard, opt-in via MEMPALACE_INJECT_CONTEXT.
+pub fn hook_pre_tool_use_response(
+    data: &serde_json::Value,
+    harness: &str,
+) -> anyhow::Result<serde_json::Value> {
+    log_hook(&format!("pre-tool-use for harness={}", harness));
+
+    fs::create_dir_all(state_dir()).ok();
+
+    let inject = std::env::var("MEMPALACE_INJECT_CONTEXT")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    let tool_name = data.get("tool_name").and_then(|v| v.as_str());
+    let tool_input = data.get("tool_input").cloned();
+
+    let mut response = serde_json::json!({
+        "decision": "pass",
+        "inject_context": inject,
+    });
+
+    if inject {
+        if let Some(name) = tool_name {
+            response["tool_name"] = serde_json::json!(name);
+        }
+        if let Some(input) = tool_input {
+            response["tool_input"] = input;
+        }
+    }
+
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// sdk-guard hook
+// ---------------------------------------------------------------------------
+
+/// SDK guard hook: detect SDK child context via env or payload entrypoint.
+pub fn hook_sdk_guard_response(
+    data: &serde_json::Value,
+    harness: &str,
+) -> anyhow::Result<serde_json::Value> {
+    log_hook(&format!("sdk-guard for harness={}", harness));
+
+    fs::create_dir_all(state_dir()).ok();
+
+    let is_sdk_child = std::env::var("AGENTMEMORY_SDK_CHILD")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        || data
+            .get("entrypoint")
+            .and_then(|v| v.as_str())
+            .map(|v| v == "sdk-ts")
+            .unwrap_or(false)
+        || data
+            .get("payload")
+            .and_then(|v| v.get("entrypoint"))
+            .and_then(|v| v.as_str())
+            .map(|v| v == "sdk-ts")
+            .unwrap_or(false);
+
+    Ok(serde_json::json!({
+        "is_sdk_child": is_sdk_child,
+        "guard_active": true,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// project-resolve hook
+// ---------------------------------------------------------------------------
+
+/// Project-resolve hook: resolve project name from env, git toplevel, cwd, or default.
+pub fn hook_project_resolve_response(
+    data: &serde_json::Value,
+    harness: &str,
+) -> anyhow::Result<serde_json::Value> {
+    log_hook(&format!("project-resolve for harness={}", harness));
+
+    fs::create_dir_all(state_dir()).ok();
+
+    if let Some(env_val) = std::env::var("AGENTMEMORY_PROJECT_NAME").ok() {
+        if !env_val.is_empty() {
+            return Ok(serde_json::json!({
+                "project": env_val,
+                "source": "env",
+            }));
+        }
+    }
+
+    if let Some(git_toplevel) = data.get("git_toplevel").and_then(|v| v.as_str()) {
+        if !git_toplevel.is_empty() {
+            let basename = std::path::Path::new(git_toplevel)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            if !basename.is_empty() {
+                return Ok(serde_json::json!({
+                    "project": basename,
+                    "source": "git",
+                }));
+            }
+        }
+    }
+
+    if let Some(cwd) = data.get("cwd").and_then(|v| v.as_str()) {
+        if !cwd.is_empty() {
+            let basename = std::path::Path::new(cwd)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            if !basename.is_empty() {
+                return Ok(serde_json::json!({
+                    "project": basename,
+                    "source": "cwd",
+                }));
+            }
+        }
+    }
+
+    let default_project = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().and_then(|s| s.to_str()).map(String::from))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Ok(serde_json::json!({
+        "project": default_project,
+        "source": "default",
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
@@ -785,7 +1007,10 @@ fn build_observe_payload(
 
     // Add transcript_path to data if not empty
     if !transcript_path.is_empty() {
-        data.insert("transcript_path".to_string(), serde_json::json!(transcript_path));
+        data.insert(
+            "transcript_path".to_string(),
+            serde_json::json!(transcript_path),
+        );
     }
 
     let payload = HookPayload {
@@ -812,9 +1037,7 @@ fn log_hook(message: &str) {
         .create(true)
         .append(true)
         .open(log_path)
-        .and_then(|mut f| {
-            writeln!(f, "[{}] {}", timestamp, message)
-        });
+        .and_then(|mut f| writeln!(f, "[{}] {}", timestamp, message));
 }
 
 // ---------------------------------------------------------------------------
@@ -888,5 +1111,141 @@ mod tests {
         assert_eq!(payload["session_id"], "test-session");
         // HookType serializes as snake_case
         assert_eq!(payload["hook_type"], "post_tool_use");
+    }
+
+    // ---- post-commit hook tests ----
+
+    #[test]
+    fn test_post_commit_with_full_metadata() {
+        let data = serde_json::json!({
+            "sha": "abc123def",
+            "branch": "main",
+            "author": "Kai <kai@example.com>",
+            "message": "feat: add auth migration",
+            "files": ["/src/auth.rs", "/src/main.rs"]
+        });
+        let result = hook_post_commit_response(&data, "test").unwrap();
+        assert_eq!(result["decision"], "pass");
+    }
+
+    #[test]
+    fn test_post_commit_missing_sha() {
+        let data = serde_json::json!({
+            "branch": "main",
+            "author": "Kai",
+        });
+        let result = hook_post_commit_response(&data, "test").unwrap();
+        assert_eq!(result["decision"], "pass");
+    }
+
+    #[test]
+    fn test_post_commit_empty_data() {
+        let data = serde_json::json!({});
+        let result = hook_post_commit_response(&data, "test").unwrap();
+        assert_eq!(result["decision"], "pass");
+    }
+
+    // ---- pre-tool-use hook tests ----
+
+    #[test]
+    fn test_pre_tool_use_env_unset() {
+        let data = serde_json::json!({"tool_name": "Read", "tool_input": {"path": "/src/main.rs"}});
+        let result = hook_pre_tool_use_response(&data, "test").unwrap();
+        assert_eq!(result["decision"], "pass");
+        assert_eq!(result["inject_context"], false);
+    }
+
+    #[test]
+    fn test_pre_tool_use_env_true() {
+        std::env::set_var("MEMPALACE_INJECT_CONTEXT", "true");
+        let data = serde_json::json!({"tool_name": "Read", "tool_input": {"path": "/src/main.rs"}});
+        let result = hook_pre_tool_use_response(&data, "test").unwrap();
+        std::env::remove_var("MEMPALACE_INJECT_CONTEXT");
+        assert_eq!(result["decision"], "pass");
+        assert_eq!(result["inject_context"], true);
+        assert_eq!(result["tool_name"], "Read");
+    }
+
+    #[test]
+    fn test_pre_tool_use_env_false() {
+        let data = serde_json::json!({"tool_name": "Bash", "tool_input": {}});
+        let result = hook_pre_tool_use_response(&data, "test").unwrap();
+        assert_eq!(result["decision"], "pass");
+        assert_eq!(result["inject_context"], false);
+    }
+
+    // ---- sdk-guard hook tests ----
+
+    #[test]
+    fn test_sdk_guard_env_set() {
+        std::env::set_var("AGENTMEMORY_SDK_CHILD", "1");
+        let data = serde_json::json!({});
+        let result = hook_sdk_guard_response(&data, "test").unwrap();
+        std::env::remove_var("AGENTMEMORY_SDK_CHILD");
+        assert_eq!(result["is_sdk_child"], true);
+        assert_eq!(result["guard_active"], true);
+    }
+
+    #[test]
+    fn test_sdk_guard_entrypoint_sdk_ts() {
+        let data = serde_json::json!({"entrypoint": "sdk-ts"});
+        let result = hook_sdk_guard_response(&data, "test").unwrap();
+        assert_eq!(result["is_sdk_child"], true);
+    }
+
+    #[test]
+    fn test_sdk_guard_payload_entrypoint() {
+        let data = serde_json::json!({"payload": {"entrypoint": "sdk-ts"}});
+        let result = hook_sdk_guard_response(&data, "test").unwrap();
+        assert_eq!(result["is_sdk_child"], true);
+    }
+
+    #[test]
+    fn test_sdk_guard_no_match() {
+        let data = serde_json::json!({"entrypoint": "claude-code"});
+        let result = hook_sdk_guard_response(&data, "test").unwrap();
+        assert_eq!(result["is_sdk_child"], false);
+        assert_eq!(result["guard_active"], true);
+    }
+
+    // ---- project-resolve hook tests ----
+
+    #[test]
+    fn test_project_resolve_env() {
+        std::env::set_var("AGENTMEMORY_PROJECT_NAME", "my-project");
+        let data = serde_json::json!({});
+        let result = hook_project_resolve_response(&data, "test").unwrap();
+        std::env::remove_var("AGENTMEMORY_PROJECT_NAME");
+        assert_eq!(result["project"], "my-project");
+        assert_eq!(result["source"], "env");
+    }
+
+    #[test]
+    fn test_project_resolve_git_toplevel() {
+        let data = serde_json::json!({"git_toplevel": "/foo/bar"});
+        let result = hook_project_resolve_response(&data, "test").unwrap();
+        assert_eq!(result["project"], "bar");
+        assert_eq!(result["source"], "git");
+    }
+
+    #[test]
+    fn test_project_resolve_cwd_fallback() {
+        // Guard against env-var leakage from parallel tests (test_project_resolve_env).
+        std::env::remove_var("AGENTMEMORY_PROJECT_NAME");
+        let data = serde_json::json!({"cwd": "/baz/qux"});
+        let result = hook_project_resolve_response(&data, "test").unwrap();
+        assert_eq!(result["project"], "qux");
+        assert_eq!(result["source"], "cwd");
+    }
+
+    #[test]
+    fn test_project_resolve_all_empty() {
+        // Guard against env-var leakage from parallel tests.
+        std::env::remove_var("AGENTMEMORY_PROJECT_NAME");
+        let data = serde_json::json!({});
+        let result = hook_project_resolve_response(&data, "test").unwrap();
+        assert_eq!(result["source"], "default");
+        // project is current_dir basename
+        assert!(!result["project"].as_str().unwrap().is_empty());
     }
 }

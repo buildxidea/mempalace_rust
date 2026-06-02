@@ -1,0 +1,32 @@
+app = "mempalace"
+primary_region = "iad"
+
+[build]
+dockerfile = "deploy/fly/Dockerfile"
+
+[deploy]
+release_command = "echo 'Migration not required - SQLite is schema-less'"
+
+[[services]]
+internal_port = 3111
+
+[[services.http_checks]]
+interval = "30s"
+timeout = "10s"
+grace_period = "30s"
+method = "GET"
+path = "/mpr/livez"
+
+[[services.ports]]
+handlers = ["http"]
+force_https = true
+
+[vm]
+size = "shared-cpu-1x"
+memory = "512mb"
+auto_stop_machines = "stop"
+min_machines_running = 0
+
+[mounts]
+source = "mempalace_data"
+destination = "/data"

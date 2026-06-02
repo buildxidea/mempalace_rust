@@ -19,6 +19,7 @@ pub mod constants;
 pub mod dialect;
 pub mod doctor;
 pub mod evict;
+pub mod eval;
 pub mod knowledge_graph;
 pub mod layers;
 pub mod llm;
@@ -44,6 +45,7 @@ pub mod types;
 // only renders the surface above. See research/04 P2 #19.
 
 pub mod audit;
+pub mod auth;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod bm25;
@@ -187,8 +189,8 @@ pub mod health;
 
 #[cfg(feature = "health")]
 pub use health::{
-    get_health_monitor, init_health_monitor, HealthMonitor, HealthReport,
-    HealthStatus, CheckResult, HealthCheck,
+    get_health_monitor, init_health_monitor, CheckResult, HealthCheck, HealthMonitor, HealthReport,
+    HealthStatus,
 };
 
 // Telemetry — Prometheus metrics via the `metrics` façade (D1).
@@ -237,6 +239,12 @@ pub mod skill_extract;
 pub mod sliding_window;
 #[doc(hidden)]
 pub mod verify;
+
+// Plugin discovery — scans filesystem for manifest.json files.
+pub mod plugins;
+
+// Agent adapter system — `mpr connect <agent-name>` for wiring MCP config.
+pub mod connect;
 
 // =====================================================================
 // Background task runner (internal)

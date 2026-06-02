@@ -23,8 +23,8 @@ use std::{env, fs, io, sync::LazyLock};
 
 use crate::config::Config;
 use crate::consolidation;
-use crate::coordination::mesh::Mesh;
 use crate::convo_miner::{mine_conversations, ConvoMiningResult};
+use crate::coordination::mesh::Mesh;
 use crate::dialect;
 use crate::entity_registry::EntityRegistry;
 use crate::layers::MemoryStack;
@@ -437,12 +437,33 @@ enum Commands {
         #[arg(long, default_value = "10")]
         limit: usize,
     },
+
+    /// Wire MemPalace as an MCP server to a third-party agent
+    /// (claude-code, codex, cursor, kiro, warp, cline, continue_dev, zed,
+    /// openhuman, qwen, antigravity).
+    Connect {
+        /// Adapter name (omit to list supported adapters)
+        adapter: Option<String>,
+
+        /// Show what would be written without touching the filesystem
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Discover and list installed third-party plugins
+    /// (scans `~/.mempalace/plugins/*/manifest.json` and `./plugins/*/manifest.json`).
+    Plugin {
+        #[arg(long, value_parser = ["list", "enable", "disable"])]
+        action: String,
+        /// Plugin name (required for enable/disable)
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
 enum HookAction {
     Run {
-        #[arg(long, value_parser = ["session-start", "session-end", "stop", "precompact", "post-tool-use", "post-tool-failure", "prompt-submit", "notification", "subagent-start", "subagent-stop", "task-completed"])]
+        #[arg(long, value_parser = ["session-start", "session-end", "stop", "precompact", "post-tool-use", "post-tool-failure", "prompt-submit", "notification", "subagent-start", "subagent-stop", "task-completed", "post-commit", "pre-tool-use", "sdk-guard", "project-resolve"])]
         hook: String,
         #[arg(long, value_parser = ["claude-code", "codex"])]
         harness: String,
@@ -1435,6 +1456,10 @@ fn run_hook(hook_name: &str, harness: &str) -> Result<()> {
         "subagent-start" => crate::hooks_cli::hook_subagent_start_response(&data, harness)?,
         "subagent-stop" => crate::hooks_cli::hook_subagent_stop_response(&data, harness)?,
         "task-completed" => crate::hooks_cli::hook_task_completed_response(&data, harness)?,
+        "post-commit" => crate::hooks_cli::hook_post_commit_response(&data, harness)?,
+        "pre-tool-use" => crate::hooks_cli::hook_pre_tool_use_response(&data, harness)?,
+        "sdk-guard" => crate::hooks_cli::hook_sdk_guard_response(&data, harness)?,
+        "project-resolve" => crate::hooks_cli::hook_project_resolve_response(&data, harness)?,
         _ => anyhow::bail!("Unknown hook: {hook_name}"),
     };
     emit_json(response)
@@ -2136,7 +2161,10 @@ fn cmd_mesh(operation: &str, palace_arg: Option<&str>) -> Result<()> {
             } else {
                 println!("Mesh peers ({}):", peers.len());
                 for peer in peers {
-                    println!("  {}: {} ({}) - scopes: {:?}", peer.id, peer.name, peer.status, peer.shared_scopes);
+                    println!(
+                        "  {}: {} ({}) - scopes: {:?}",
+                        peer.id, peer.name, peer.status, peer.shared_scopes
+                    );
                 }
             }
         }
@@ -2203,7 +2231,12 @@ fn cmd_mesh(operation: &str, palace_arg: Option<&str>) -> Result<()> {
             } else {
                 println!("Audit log ({} entries):", log.len());
                 for entry in log.iter().rev().take(20) {
-                    println!("  [{}] {} - {}", entry.timestamp.format("%Y-%m-%d %H:%M:%S"), entry.operation, entry.function_id);
+                    println!(
+                        "  [{}] {} - {}",
+                        entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                        entry.operation,
+                        entry.function_id
+                    );
                     if !entry.target_ids.is_empty() {
                         println!("    Targets: {:?}", entry.target_ids);
                     }
@@ -2239,7 +2272,10 @@ fn cmd_sessions(palace_arg: Option<&str>, wing: Option<&str>, limit: usize) -> R
 
     println!("Sessions:");
     for (i, session) in sessions.iter().take(limit).enumerate() {
-        let ended = session.ended_at.map(|e| e.to_string()).unwrap_or_else(|| "active".to_string());
+        let ended = session
+            .ended_at
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "active".to_string());
         println!(
             "  [{:3}] {} | {} | {} | obs:{}",
             i + 1,
@@ -2441,7 +2477,10 @@ pub fn run() -> Result<()> {
                 anyhow::bail!("unknown export format '{format}': use 'basic-memory' or 'markdown'");
             }
         }
-        Commands::Consolidate { dry_run, max_memories } => {
+        Commands::Consolidate {
+            dry_run,
+            max_memories,
+        } => {
             cmd_consolidate(palace_arg, *dry_run, *max_memories)?;
         }
         Commands::Context { levels } => {
@@ -2451,31 +2490,70 @@ pub fn run() -> Result<()> {
             cmd_sessions(palace_arg, wing.as_deref(), *limit)?;
         }
         Commands::Actions { status, limit } => {
-            println!("Feature coming soon: actions (status={:?}, limit={})", status, limit);
+            println!(
+                "Feature coming soon: actions (status={:?}, limit={})",
+                status, limit
+            );
         }
-        Commands::Frontier { agent, include_completed } => {
-            println!("Feature coming soon: frontier (agent={:?}, include_completed={})", agent, include_completed);
+        Commands::Frontier {
+            agent,
+            include_completed,
+        } => {
+            println!(
+                "Feature coming soon: frontier (agent={:?}, include_completed={})",
+                agent, include_completed
+            );
         }
-        Commands::Signals { operation, to, payload } => {
-            println!("Feature coming soon: signals (operation={}, to={:?}, payload={:?})", operation, to, payload);
+        Commands::Signals {
+            operation,
+            to,
+            payload,
+        } => {
+            println!(
+                "Feature coming soon: signals (operation={}, to={:?}, payload={:?})",
+                operation, to, payload
+            );
         }
         Commands::Import { format, input } => {
-            println!("Feature coming soon: import (format={}, input={})", format, input.display());
+            println!(
+                "Feature coming soon: import (format={}, input={})",
+                format,
+                input.display()
+            );
         }
-        Commands::Snapshot { name, with_embeddings } => {
-            println!("Feature coming soon: snapshot (name={:?}, with_embeddings={})", name, with_embeddings);
+        Commands::Snapshot {
+            name,
+            with_embeddings,
+        } => {
+            println!(
+                "Feature coming soon: snapshot (name={:?}, with_embeddings={})",
+                name, with_embeddings
+            );
         }
         Commands::Profile { wing, refresh } => {
-            println!("Feature coming soon: profile (wing={:?}, refresh={})", wing, refresh);
+            println!(
+                "Feature coming soon: profile (wing={:?}, refresh={})",
+                wing, refresh
+            );
         }
         Commands::Diagnose { deep } => {
             println!("Feature coming soon: diagnose (deep={})", deep);
         }
-        Commands::Forget { older_than_days, memory_type, dry_run } => {
-            println!("Feature coming soon: forget (older_than_days={:?}, memory_type={:?}, dry_run={})", older_than_days, memory_type, dry_run);
+        Commands::Forget {
+            older_than_days,
+            memory_type,
+            dry_run,
+        } => {
+            println!(
+                "Feature coming soon: forget (older_than_days={:?}, memory_type={:?}, dry_run={})",
+                older_than_days, memory_type, dry_run
+            );
         }
         Commands::Evolve { wing, count } => {
-            println!("Feature coming soon: evolve (wing={:?}, count={})", wing, count);
+            println!(
+                "Feature coming soon: evolve (wing={:?}, count={})",
+                wing, count
+            );
         }
         Commands::Mesh { operation } => {
             let op = operation.as_deref().unwrap_or("status");
@@ -2483,6 +2561,12 @@ pub fn run() -> Result<()> {
         }
         Commands::Vision { query, limit } => {
             cmd_vision(query, *limit, palace_arg)?;
+        }
+        Commands::Connect { adapter, dry_run } => {
+            crate::connect::run(adapter.as_deref(), *dry_run)?;
+        }
+        Commands::Plugin { action, name } => {
+            cmd_plugin(action, name.as_deref())?;
         }
     }
 
@@ -2501,16 +2585,50 @@ fn cmd_vision(query: &str, limit: usize, palace_arg: Option<&str>) -> Result<()>
         None, // no wing filter
         None, // no room filter
         limit,
-        None, // no custom embedding model
+        None,  // no custom embedding model
         false, // no BM25
-        None, // no max_per_session
-        None, // no fusion mode
+        None,  // no max_per_session
+        None,  // no fusion mode
     ))?;
     searcher::print_search_response(&response);
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
+// Plugin Command
+// ---------------------------------------------------------------------------
+
+fn cmd_plugin(action: &str, name: Option<&str>) -> Result<()> {
+    use crate::plugins;
+    match action {
+        "list" => {
+            let entries = plugins::list();
+            if entries.is_empty() {
+                println!("No plugins discovered.");
+                println!("(Scan paths: ~/.mempalace/plugins/* and ./plugins/*)");
+            } else {
+                for (n, _path, enabled) in entries {
+                    let status = if enabled { "enabled" } else { "disabled" };
+                    println!("  {n:<24} {status}");
+                }
+            }
+            Ok(())
+        }
+        "enable" => {
+            let n = name.ok_or_else(|| anyhow::anyhow!("plugin name required for enable"))?;
+            plugins::enable(n)?;
+            println!("enabled plugin: {n}");
+            Ok(())
+        }
+        "disable" => {
+            let n = name.ok_or_else(|| anyhow::anyhow!("plugin name required for disable"))?;
+            plugins::disable(n)?;
+            println!("disabled plugin: {n}");
+            Ok(())
+        }
+        _ => anyhow::bail!("unknown plugin action: {action} (use list/enable/disable)"),
+    }
+}
 // Helper Functions
 // ---------------------------------------------------------------------------
 

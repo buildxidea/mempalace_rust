@@ -1,0 +1,26 @@
+services:
+  mempalace:
+    build:
+      context: .
+      dockerfile: deploy/coolify/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3111"
+    ports:
+      - "3111:3111"
+    volumes:
+      - mempalace-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3111/mpr/livez || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mempalace-data:

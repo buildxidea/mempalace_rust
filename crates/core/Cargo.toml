@@ -39,9 +39,8 @@ coordination = []
 vision = []
 rerank = []
 full = ["llm-openai", "llm-anthropic", "coordination", "vision", "rerank"]
-# OpenTelemetry-compatible metrics via Prometheus text format.
-# Gates the `metrics` + `metrics-exporter-prometheus` crates.
 telemetry = ["dep:metrics-exporter-prometheus", "dep:metrics"]
+health = ["dep:sysinfo"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -73,7 +72,8 @@ base64 = { workspace = true }
 dirs = { workspace = true }
 filetime = { workspace = true }
 bm25 = { version = "2.3", default-features = false, features = ["default_tokenizer"] }
-sysinfo = "0.32"
+sysinfo = { version = "0.32", optional = true }
+rand = { workspace = true }
 
 # Prometheus exporter for metrics (telemetry feature).
 metrics-exporter-prometheus = { version = "0.16", optional = true }

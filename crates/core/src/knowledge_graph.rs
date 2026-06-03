@@ -48,6 +48,15 @@ pub struct Triple {
     pub t_created: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub t_expired: Option<String>,
+    // mp-027 (#27): typed memory edges. `edge_kind` is the variant name
+    // (e.g. "has_tag") and `weight` is the per-edge traversal weight. Both
+    // default to `None` for triples that were not created via the typed-edge
+    // API and are read from the typed columns. Callers that want the typed
+    // view should use [`MemoryEdgeKind::from_kind_and_weight`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +100,11 @@ pub struct EntityQueryResult {
     pub t_created: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub t_expired: Option<String>,
+    // mp-027 (#27): typed memory edges. See [`Triple::edge_kind`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
 
 impl KnowledgeGraph {
@@ -132,6 +146,12 @@ impl KnowledgeGraph {
                 extracted_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 t_created TEXT NOT NULL DEFAULT (datetime('now')),
                 t_expired TEXT,
+                -- mp-027 (issue #27): typed memory edges (HasTag, RelatesTo,
+                -- Supersedes, ...) and their traversal weights. `edge_kind` is
+                -- the variant name (e.g. has_tag); `weight` is the per-edge
+                -- traversal weight, separate from `confidence`.
+                edge_kind TEXT,
+                weight REAL,
                 FOREIGN KEY (subject) REFERENCES entities(id),
                 FOREIGN KEY (object) REFERENCES entities(id)
             );
@@ -140,6 +160,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             CREATE INDEX IF NOT EXISTS idx_triples_object ON triples(object);
             CREATE INDEX IF NOT EXISTS idx_triples_predicate ON triples(predicate);
             CREATE INDEX IF NOT EXISTS idx_triples_valid ON triples(valid_from, valid_to);
+            -- idx_triples_edge_kind is created lazily in migrate_schema() so
+            -- palaces created before edge_kind was added don't fail.
 
             CREATE TABLE IF NOT EXISTS episodes (
                 id TEXT PRIMARY KEY,
@@ -155,11 +177,13 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
     }
 
     /// Backwards-compatible schema migration for older `triples` tables
-    /// (#1314 RFC 002 §5.5). Fresh palaces already have `source_drawer_id`
-    /// and `adapter_name` from the `CREATE TABLE` above, so this is a no-op.
-    /// Palaces created before those columns were added must be migrated in
-    /// place — SQLite has no `ADD COLUMN IF NOT EXISTS`, so we introspect
-    /// the schema and only issue the ALTER when the column is missing.
+    /// (#1314 RFC 002 §5.5, #27 mp-027). Fresh palaces already have
+    /// `source_drawer_id`, `adapter_name`, `t_created`, `t_expired`,
+    /// `edge_kind`, and `weight` from the `CREATE TABLE` above, so this is
+    /// a no-op. Palaces created before those columns were added must be
+    /// migrated in place — SQLite has no `ADD COLUMN IF NOT EXISTS`, so we
+    /// introspect the schema and only issue the ALTER when the column is
+    /// missing.
     fn migrate_schema(&self) -> anyhow::Result<()> {
         let mut stmt = self.conn.prepare("PRAGMA table_info(triples)")?;
         let names: Vec<String> = stmt
@@ -181,6 +205,25 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             self.conn
                 .execute("ALTER TABLE triples ADD COLUMN t_expired TEXT", [])?;
         }
+        // mp-027 (#27): typed memory edges with traversal weights. `edge_kind`
+        // is the variant name (e.g. "has_tag"); `weight` is the per-edge
+        // traversal weight, separate from `confidence`.
+        if !names.iter().any(|n| n == "edge_kind") {
+            self.conn
+                .execute("ALTER TABLE triples ADD COLUMN edge_kind TEXT", [])?;
+        }
+        if !names.iter().any(|n| n == "weight") {
+            self.conn
+                .execute("ALTER TABLE triples ADD COLUMN weight REAL", [])?;
+        }
+        // The typed-edge index is created after the columns are guaranteed
+        // to exist, so palaces that pre-date edge_kind don't fail at the
+        // CREATE INDEX statement. SQLite has no `CREATE INDEX IF NOT EXISTS`
+        // safety here because the column not existing is what fails.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_triples_edge_kind ON triples(edge_kind)",
+            [],
+        )?;
         // Backfill existing rows that lack t_created
         self.conn.execute(
             "UPDATE triples SET t_created = COALESCE(valid_from, extracted_at) WHERE t_created IS NULL",
@@ -188,6 +231,99 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
         )?;
         self.conn.execute(
             "UPDATE triples SET t_expired = NULL WHERE t_expired IS NULL",
+            [],
+        )?;
+        // Backfill edge_kind/weight from legacy encodings. There were two
+        // forms in the wild:
+        //   1. plain predicate == canonical kind name (e.g. "has_tag")
+        //   2. "<kind>_<weight>" pattern from `relations.rs::create_relation`
+        //      (e.g. "relates_to_0.80")
+        // Both forms are mapped to the typed columns; unknown predicates are
+        // left alone.
+        for kind in &[
+            "has_tag",
+            "in_cluster",
+            "supersedes",
+            "contradicts",
+            "derived_from",
+        ] {
+            self.conn.execute(
+                "UPDATE triples SET edge_kind = ?1 WHERE edge_kind IS NULL AND predicate = ?2",
+                rusqlite::params![kind, kind],
+            )?;
+        }
+        // Backfill the canonical weight for the fixed-weight kinds that
+        // already had a typed edge_kind (form 1).
+        self.conn.execute(
+            "UPDATE triples SET weight = 0.8 WHERE edge_kind = 'has_tag' AND weight IS NULL",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples SET weight = 0.6 WHERE edge_kind = 'in_cluster' AND weight IS NULL",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples SET weight = 0.9 WHERE edge_kind = 'supersedes' AND weight IS NULL",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples SET weight = 0.3 WHERE edge_kind = 'contradicts' AND weight IS NULL",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples SET weight = 0.7 WHERE edge_kind = 'derived_from' AND weight IS NULL",
+            [],
+        )?;
+        // Legacy "<kind>_<weight>" pattern (form 2). Only the six documented
+        // kinds participate; predicates with an unknown prefix are left
+        // untouched.
+        self.conn.execute(
+            "UPDATE triples
+             SET edge_kind = 'has_tag',
+                 weight = 0.8
+             WHERE edge_kind IS NULL
+               AND predicate LIKE 'has_tag\\_%' ESCAPE '\\'",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples
+             SET edge_kind = 'in_cluster',
+                 weight = 0.6
+             WHERE edge_kind IS NULL
+               AND predicate LIKE 'in_cluster\\_%' ESCAPE '\\'",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples
+             SET edge_kind = 'supersedes',
+                 weight = 0.9
+             WHERE edge_kind IS NULL
+               AND predicate LIKE 'supersedes\\_%' ESCAPE '\\'",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples
+             SET edge_kind = 'contradicts',
+                 weight = 0.3
+             WHERE edge_kind IS NULL
+               AND predicate LIKE 'contradicts\\_%' ESCAPE '\\'",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE triples
+             SET edge_kind = 'derived_from',
+                 weight = 0.7
+             WHERE edge_kind IS NULL
+               AND predicate LIKE 'derived_from\\_%' ESCAPE '\\'",
+            [],
+        )?;
+        // `relates_to_<weight>` carries its own weight; peel the suffix.
+        self.conn.execute(
+            "UPDATE triples
+             SET edge_kind = 'relates_to',
+                 weight = CAST(substr(predicate, length('relates_to_') + 1) AS REAL)
+             WHERE edge_kind IS NULL
+               AND predicate LIKE 'relates_to\\_%' ESCAPE '\\'",
             [],
         )?;
         Ok(())
@@ -297,8 +433,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
         let triple_id = format!("t_{}_{}_{}_{}", sub_id, pred, obj_id, &now[..8]);
 
         self.conn.execute(
-            "INSERT INTO triples (id, subject, predicate, object, valid_from, valid_to, confidence, source_closet, source_file, source_drawer_id, adapter_name, t_created, t_expired)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO triples (id, subject, predicate, object, valid_from, valid_to, confidence, source_closet, source_file, source_drawer_id, adapter_name, t_created, t_expired, edge_kind, weight)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 triple_id,
                 sub_id,
@@ -312,7 +448,9 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                 source_drawer_id,
                 adapter_name,
                 now,
-                Option::<String>::None
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<f64>::None
             ],
         )?;
 
@@ -498,6 +636,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             current: valid_to.is_none(),
             t_created: row.get("t_created")?,
             t_expired: row.get("t_expired")?,
+            edge_kind: row.get("edge_kind")?,
+            weight: row.get("weight")?,
         })
     }
 
@@ -522,6 +662,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             current: valid_to.is_none(),
             t_created: row.get("t_created")?,
             t_expired: row.get("t_expired")?,
+            edge_kind: row.get("edge_kind")?,
+            weight: row.get("weight")?,
         })
     }
 
@@ -596,6 +738,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             current: valid_to.is_none(),
             t_created: row.get("t_created")?,
             t_expired: row.get("t_expired")?,
+            edge_kind: row.get("edge_kind")?,
+            weight: row.get("weight")?,
         })
     }
 
@@ -622,6 +766,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                     current: row.get::<_, Option<String>>("valid_to")?.is_none(),
                     t_created: row.get("t_created")?,
                     t_expired: row.get("t_expired")?,
+                    edge_kind: row.get("edge_kind")?,
+                    weight: row.get("weight")?,
                 })
             })?;
             for row in rows {
@@ -646,6 +792,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                     current: row.get::<_, Option<String>>("valid_to")?.is_none(),
                     t_created: row.get("t_created")?,
                     t_expired: row.get("t_expired")?,
+                    edge_kind: row.get("edge_kind")?,
+                    weight: row.get("weight")?,
                 })
             })?;
             for row in rows {
@@ -692,6 +840,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                         current: row.get::<_, Option<String>>("valid_to")?.is_none(),
                         t_created: row.get("t_created")?,
                         t_expired: row.get("t_expired")?,
+                        edge_kind: row.get("edge_kind")?,
+                        weight: row.get("weight")?,
                     })
                 })?;
                 for row in rows {
@@ -726,6 +876,8 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
                         current: row.get::<_, Option<String>>("valid_to")?.is_none(),
                         t_created: row.get("t_created")?,
                         t_expired: row.get("t_expired")?,
+                        edge_kind: row.get("edge_kind")?,
+                        weight: row.get("weight")?,
                     })
                 })?;
                 for row in rows {
@@ -789,6 +941,131 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             expired_facts,
             relationship_types,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // mp-027 (issue #27): typed memory edges
+    //
+    // The KG already stores triples with arbitrary string predicates. The
+    // typed-edge API below writes into dedicated `edge_kind` and `weight`
+    // columns so callers can filter by edge kind (e.g. "find all HasTag
+    // edges for cascade retrieval") without parsing the predicate.
+    //
+    // `add_memory_edge` is the single entry point for inserting a typed
+    // edge. The `query_*_by_kind` helpers project the typed columns back
+    // into a [`Triple`] for downstream consumers. The traversal weight is
+    // recorded on the row so cascade retrievers can sort/filter by it
+    // without re-deriving it from the variant.
+    // -----------------------------------------------------------------------
+
+    /// Add a typed memory edge between two entities. The traversal weight is
+    /// taken from [`crate::types::MemoryEdgeKind::traversal_weight`] so
+    /// cascade retrieval sees the canonical jcode weight.
+    pub fn add_memory_edge(
+        &mut self,
+        from: &str,
+        to: &str,
+        kind: &crate::types::MemoryEdgeKind,
+    ) -> anyhow::Result<String> {
+        let kind_str = kind.as_str();
+        let weight = kind.traversal_weight() as f64;
+        let sub_id = Self::entity_id(from);
+        let obj_id = Self::entity_id(to);
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Ensure both endpoints exist in the entities table.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO entities (id, name) VALUES (?1, ?2)",
+            params![sub_id, from],
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO entities (id, name) VALUES (?1, ?2)",
+            params![obj_id, to],
+        )?;
+
+        let triple_id = format!("me_{}_{}_{}_{}", sub_id, kind_str, obj_id, &now[..8]);
+
+        self.conn.execute(
+            "INSERT INTO triples \
+             (id, subject, predicate, object, valid_from, valid_to, confidence, \
+              source_closet, source_file, source_drawer_id, adapter_name, \
+              t_created, t_expired, edge_kind, weight) \
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, NULL, NULL, NULL, \
+                     ?6, NULL, ?7, ?8)",
+            params![
+                triple_id, sub_id, kind_str, obj_id,
+                // confidence is independent of traversal weight; default to 1.0
+                // because the typed-edge API is the source of truth for
+                // weights.
+                1.0_f64, now, kind_str, weight,
+            ],
+        )?;
+
+        Ok(triple_id)
+    }
+
+    /// Query all triples that carry the given typed edge kind (current rows
+    /// only; superseded rows are excluded by `valid_to IS NULL`).
+    pub fn query_by_edge_kind(
+        &self,
+        kind: &crate::types::MemoryEdgeKind,
+    ) -> anyhow::Result<Vec<Triple>> {
+        let kind_str = kind.as_str();
+        let mut stmt = self.conn.prepare(
+            "SELECT t.*, s.name as sub_name, o.name as obj_name FROM triples t \
+             JOIN entities s ON t.subject = s.id \
+             JOIN entities o ON t.object = o.id \
+             WHERE t.edge_kind = ?1 AND t.valid_to IS NULL",
+        )?;
+        let rows = stmt.query_map(params![kind_str], |row| {
+            // We know the predicate; pass it as the stored kind name so
+            // round-trips preserve the typed view even when callers use the
+            // generic `predicate` field.
+            self.row_to_triple(row, kind_str)
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Outgoing edges of a given kind from `subject`. Mirrors
+    /// [`Self::query_outgoing`] but restricts to a single typed edge kind.
+    pub fn query_outgoing_by_kind(
+        &self,
+        subject: &str,
+        kind: &crate::types::MemoryEdgeKind,
+    ) -> anyhow::Result<Vec<Triple>> {
+        let eid = Self::entity_id(subject);
+        let kind_str = kind.as_str();
+        let mut stmt = self.conn.prepare(
+            "SELECT t.*, s.name as sub_name, o.name as obj_name FROM triples t \
+             JOIN entities s ON t.subject = s.id \
+             JOIN entities o ON t.object = o.id \
+             WHERE t.subject = ?1 AND t.edge_kind = ?2 AND t.valid_to IS NULL",
+        )?;
+        let rows = stmt.query_map(params![eid, kind_str], |row| {
+            self.row_to_triple(row, kind_str)
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Incoming edges of a given kind to `object`. Mirrors
+    /// [`Self::query_incoming`] but restricts to a single typed edge kind.
+    pub fn query_incoming_by_kind(
+        &self,
+        object: &str,
+        kind: &crate::types::MemoryEdgeKind,
+    ) -> anyhow::Result<Vec<Triple>> {
+        let eid = Self::entity_id(object);
+        let kind_str = kind.as_str();
+        let mut stmt = self.conn.prepare(
+            "SELECT t.*, s.name as sub_name, o.name as obj_name FROM triples t \
+             JOIN entities s ON t.subject = s.id \
+             JOIN entities o ON t.object = o.id \
+             WHERE t.object = ?1 AND t.edge_kind = ?2 AND t.valid_to IS NULL",
+        )?;
+        let rows = stmt.query_map(params![eid, kind_str], |row| {
+            self.row_to_triple(row, kind_str)
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Record a retrieval feedback outcome for a drawer.
@@ -1353,6 +1630,219 @@ mod tests {
             .unwrap();
         assert_eq!(drawer.as_deref(), Some("drawer_migrated"));
         assert_eq!(adapter.as_deref(), Some("legacy-adapter"));
+    }
+
+    // -----------------------------------------------------------------------
+    // mp-027 (issue #27): typed memory edges.
+    // -----------------------------------------------------------------------
+    use crate::types::MemoryEdgeKind;
+
+    #[test]
+    fn test_typed_edge_round_trip() {
+        let mut kg = KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap();
+        let id = kg
+            .add_memory_edge("alice", "rust", &MemoryEdgeKind::HasTag)
+            .unwrap();
+        assert!(!id.is_empty());
+
+        let rows = kg.query_by_edge_kind(&MemoryEdgeKind::HasTag).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.subject, "alice");
+        assert_eq!(row.object, "rust");
+        assert_eq!(row.edge_kind.as_deref(), Some("has_tag"));
+        // weight is stored as f32 then read back as f64, so compare with
+        // epsilon instead of exact equality.
+        let w = row.weight.expect("weight must be set for HasTag");
+        assert!((w - 0.8).abs() < 1e-6, "expected ~0.8, got {w}");
+        assert!(row.current);
+    }
+
+    #[test]
+    fn test_query_by_edge_kind_filters_correctly() {
+        let mut kg = KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap();
+        kg.add_memory_edge("alice", "rust", &MemoryEdgeKind::HasTag)
+            .unwrap();
+        kg.add_memory_edge("alice", "python", &MemoryEdgeKind::HasTag)
+            .unwrap();
+        kg.add_memory_edge("alice", "bob", &MemoryEdgeKind::RelatesTo { weight: 0.4 })
+            .unwrap();
+        kg.add_memory_edge("alice", "carol", &MemoryEdgeKind::Supersedes)
+            .unwrap();
+
+        let has_tag = kg.query_by_edge_kind(&MemoryEdgeKind::HasTag).unwrap();
+        assert_eq!(has_tag.len(), 2);
+        for row in &has_tag {
+            assert_eq!(row.edge_kind.as_deref(), Some("has_tag"));
+            let w = row.weight.expect("weight must be set");
+            assert!((w - 0.8).abs() < 1e-6, "expected ~0.8, got {w}");
+        }
+
+        let supersedes = kg.query_by_edge_kind(&MemoryEdgeKind::Supersedes).unwrap();
+        assert_eq!(supersedes.len(), 1);
+        let w = supersedes[0].weight.expect("weight must be set");
+        assert!((w - 0.9).abs() < 1e-6, "expected ~0.9, got {w}");
+
+        let relates = kg
+            .query_by_edge_kind(&MemoryEdgeKind::RelatesTo { weight: 0.4 })
+            .unwrap();
+        assert_eq!(relates.len(), 1);
+        // The user-supplied weight round-trips through the column.
+        let w = relates[0].weight.expect("weight must be set");
+        assert!((w - 0.4).abs() < 1e-6, "expected ~0.4, got {w}");
+
+        let contradicts = kg.query_by_edge_kind(&MemoryEdgeKind::Contradicts).unwrap();
+        assert!(contradicts.is_empty());
+    }
+
+    #[test]
+    fn test_query_outgoing_and_incoming_by_kind() {
+        let mut kg = KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap();
+        kg.add_memory_edge("alice", "rust", &MemoryEdgeKind::HasTag)
+            .unwrap();
+        kg.add_memory_edge("alice", "bob", &MemoryEdgeKind::RelatesTo { weight: 0.5 })
+            .unwrap();
+        // incoming HasTag (bob is tagged by carol)
+        kg.add_memory_edge("carol", "bob", &MemoryEdgeKind::HasTag)
+            .unwrap();
+
+        let outgoing = kg
+            .query_outgoing_by_kind("alice", &MemoryEdgeKind::HasTag)
+            .unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].object, "rust");
+
+        let incoming = kg
+            .query_incoming_by_kind("bob", &MemoryEdgeKind::HasTag)
+            .unwrap();
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].subject, "carol");
+
+        // Filtering by a kind with no rows returns an empty vec, not an error.
+        let none = kg
+            .query_outgoing_by_kind("alice", &MemoryEdgeKind::Contradicts)
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn test_relates_to_weight_is_separate_from_confidence() {
+        // The traversal weight lives in its own column and is independent
+        // from `confidence`. The typed-edge API defaults confidence to 1.0.
+        let mut kg = KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap();
+        kg.add_memory_edge("a", "b", &MemoryEdgeKind::RelatesTo { weight: 0.42 })
+            .unwrap();
+
+        let (confidence, weight): (f64, f64) = kg
+            .conn
+            .query_row(
+                "SELECT confidence, weight FROM triples WHERE edge_kind = 'relates_to'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!((weight - 0.42).abs() < 1e-6, "expected ~0.42, got {weight}");
+        assert!(
+            (confidence - 1.0).abs() < 1e-6,
+            "expected ~1.0, got {confidence}"
+        );
+    }
+
+    #[test]
+    fn test_schema_migration_adds_typed_edge_columns_idempotently() {
+        // Simulate a legacy palace with no edge_kind/weight columns.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let db_path = tmp.path().to_path_buf();
+        {
+            let legacy = rusqlite::Connection::open(&db_path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE entities (id TEXT PRIMARY KEY, name TEXT NOT NULL); \
+                     CREATE TABLE triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, \
+                         predicate TEXT NOT NULL, object TEXT NOT NULL, \
+                         valid_from TEXT, valid_to TEXT, confidence REAL DEFAULT 1.0, \
+                         source_closet TEXT, source_file TEXT, extracted_at TEXT);",
+                )
+                .unwrap();
+        }
+
+        // First open runs the migration.
+        let kg = KnowledgeGraph::open(&db_path).unwrap();
+        let names: Vec<String> = {
+            let mut stmt = kg.conn.prepare("PRAGMA table_info(triples)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert!(names.contains(&"edge_kind".to_string()));
+        assert!(names.contains(&"weight".to_string()));
+
+        // Second open must be a no-op (idempotent).
+        let kg2 = KnowledgeGraph::open(&db_path).unwrap();
+        let names2: Vec<String> = {
+            let mut stmt = kg2.conn.prepare("PRAGMA table_info(triples)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert_eq!(names, names2);
+    }
+
+    #[test]
+    fn test_schema_migration_backfills_legacy_predicate_encodings() {
+        // Simulate a palace that pre-dates typed edges and stored weights
+        // inside the predicate string (the relations.rs convention).
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let db_path = tmp.path().to_path_buf();
+        {
+            let legacy = rusqlite::Connection::open(&db_path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE entities (id TEXT PRIMARY KEY, name TEXT NOT NULL); \
+                     CREATE TABLE triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, \
+                         predicate TEXT NOT NULL, object TEXT NOT NULL, \
+                         valid_from TEXT, valid_to TEXT, confidence REAL DEFAULT 1.0, \
+                         source_closet TEXT, source_file TEXT, extracted_at TEXT);",
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO triples (id, subject, predicate, object) VALUES ('e1','alice','relates_to_0.80','bob')",
+                    [],
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO triples (id, subject, predicate, object) VALUES ('e2','bob','supersedes','carol')",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let kg = KnowledgeGraph::open(&db_path).unwrap();
+        let mut stmt = kg
+            .conn
+            .prepare("SELECT id, edge_kind, weight FROM triples ORDER BY id")
+            .unwrap();
+        let rows: Vec<(String, Option<String>, Option<f64>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+
+        // relates_to_0.80 → edge_kind=relates_to, weight=0.80
+        assert_eq!(rows[0].0, "e1");
+        assert_eq!(rows[0].1.as_deref(), Some("relates_to"));
+        let w0 = rows[0].2.expect("relates_to must have weight");
+        assert!((w0 - 0.80).abs() < 1e-6);
+
+        // supersedes → edge_kind=supersedes, weight=0.9 (canonical)
+        assert_eq!(rows[1].0, "e2");
+        assert_eq!(rows[1].1.as_deref(), Some("supersedes"));
+        let w1 = rows[1].2.expect("supersedes must have weight");
+        assert!((w1 - 0.9).abs() < 1e-6);
     }
 }
 

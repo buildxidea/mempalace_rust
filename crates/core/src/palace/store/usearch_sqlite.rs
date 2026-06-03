@@ -98,7 +98,10 @@ impl Inner {
             let kind_str: String = row.get(2)?;
             let tier_str: String = row.get(3)?;
             let metadata_str: String = row.get(6)?;
-            Ok(Some(Drawer {
+            // mp-migration 24/8: auto-migrate legacy drawers on
+            // every read so callers see the v1 (typed-field) shape
+            // even if the data was written by a pre-PR #7 Palace.
+            let mut drawer = Drawer {
                 id: Some(DrawerId(id_str)),
                 content: row.get(1)?,
                 kind: serde_json::from_str(&kind_str).unwrap_or_default(),
@@ -107,7 +110,16 @@ impl Inner {
                 room: row.get(5)?,
                 metadata: serde_json::from_str(&metadata_str).unwrap_or_default(),
                 derived_from: vec![],
-            }))
+                tags: Vec::new(),
+                trust: None,
+                access_count: 0,
+                last_accessed: None,
+                reinforcements: Vec::new(),
+                superseded_by: None,
+                active: true,
+            };
+            drawer.migrate_metadata();
+            Ok(Some(drawer))
         } else {
             Ok(None)
         }
@@ -132,7 +144,9 @@ impl Inner {
             let kind_str: String = row.get(2)?;
             let tier_str: String = row.get(3)?;
             let metadata_str: String = row.get(6)?;
-            drawers.push(Drawer {
+            // mp-migration 24/8: auto-migrate legacy drawers on
+            // every read (see comment in get_drawer_by_id above).
+            let mut drawer = Drawer {
                 id: Some(DrawerId(id_str)),
                 content: row.get(1)?,
                 kind: serde_json::from_str(&kind_str).unwrap_or_default(),
@@ -141,7 +155,16 @@ impl Inner {
                 room: row.get(5)?,
                 metadata: serde_json::from_str(&metadata_str).unwrap_or_default(),
                 derived_from: vec![],
-            });
+                tags: Vec::new(),
+                trust: None,
+                access_count: 0,
+                last_accessed: None,
+                reinforcements: Vec::new(),
+                superseded_by: None,
+                active: true,
+            };
+            drawer.migrate_metadata();
+            drawers.push(drawer);
         }
         Ok(drawers)
     }

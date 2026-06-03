@@ -775,6 +775,20 @@ pub trait MemoryProvider: Send + Sync + 'static {
     /// Statistics about the palace's knowledge graph.
     async fn graph_stats(&self) -> anyhow::Result<super::knowledge_graph::KgStats>;
 
+    /// Optional access to the wired [`KnowledgeGraph`] for typed-edge
+    /// writes (mp-027, issue #27). The default implementation returns
+    /// `None`, in which case the default `tag` / `link` / `supersede`
+    /// implementations fall back to the drawer-metadata path.
+    ///
+    /// Implementations that have a [`KnowledgeGraph`] (e.g. the
+    /// production [`Palace`]) override this and return `Some(_)`. The
+    /// default `tag` / `link` / `supersede` methods will then route
+    /// writes through the KG so cascade retrieval can use the typed
+    /// edge columns.
+    fn kg(&self) -> Option<&std::sync::Mutex<super::knowledge_graph::KnowledgeGraph>> {
+        None
+    }
+
     // -----------------------------------------------------------------------
     // Per-entry mutation methods (mp-migration 1/8)
     //
@@ -886,6 +900,11 @@ pub trait MemoryProvider: Send + Sync + 'static {
     /// `MemoryEntry::supersede`. Default implementation sets
     /// `metadata["superseded_by"]` and `metadata["active"] = false`
     /// on the old drawer.
+    ///
+    /// When a wired KG is available (mp-027, issue #27), this also
+    /// creates a `Supersedes` typed edge from `new_id` to `old_id`
+    /// with the canonical traversal weight of 0.9 so cascade
+    /// retrieval can follow the chain.
     async fn supersede(&self, old_id: &DrawerId, new_id: &DrawerId) -> anyhow::Result<()>
     where
         Self: Sized,
@@ -896,7 +915,16 @@ pub trait MemoryProvider: Send + Sync + 'static {
             d.metadata
                 .insert("active".to_string(), serde_json::json!(false));
         })
-        .await
+        .await?;
+        if let Some(kg_lock) = self.kg() {
+            let mut kg = kg_lock.lock().expect("kg mutex poisoned");
+            kg.add_memory_edge(
+                &new_id.0,
+                &old_id.0,
+                &crate::types::MemoryEdgeKind::Supersedes,
+            )?;
+        }
+        Ok(())
     }
 
     /// Set a single metadata key on a drawer. jcode's adapter uses
@@ -962,11 +990,21 @@ pub trait MemoryProvider: Send + Sync + 'static {
     //   tag → metadata["tags"] (Vec<String>)
     //         + metadata["tag:<name>"] = true (cheap lookup)
     //   link → metadata["links"] (Vec<{target, weight}>)
-    // Implementations that have a wired KG should override and use
-    // KnowledgeGraph::add_triple directly.
+    //
+    // mp-027 (issue #27): when a wired KG is present
+    // ([`MemoryProvider::kg`]), the default impls also create typed
+    // edges so cascade retrieval can use the canonical traversal
+    // weights:
+    //   tag → `HasTag` edge (weight 0.8)
+    //   link → `RelatesTo { weight }` edge
+    //   supersede → `Supersedes` edge (weight 0.9)
     // -----------------------------------------------------------------------
 
     /// Add a tag to a drawer. jcode's `MemoryManager::tag_memory`.
+    ///
+    /// When a wired KG is available (mp-027, issue #27), this also
+    /// creates a `HasTag` typed edge between the drawer and the tag,
+    /// with the canonical traversal weight of 0.8.
     async fn tag(&self, id: &DrawerId, tag: &str) -> anyhow::Result<()>
     where
         Self: Sized,
@@ -985,7 +1023,12 @@ pub trait MemoryProvider: Send + Sync + 'static {
             d.metadata
                 .insert(format!("tag:{}", tag), serde_json::json!(true));
         })
-        .await
+        .await?;
+        if let Some(kg_lock) = self.kg() {
+            let mut kg = kg_lock.lock().expect("kg mutex poisoned");
+            kg.add_memory_edge(&id.0, tag, &crate::types::MemoryEdgeKind::HasTag)?;
+        }
+        Ok(())
     }
 
     /// Remove a tag from a drawer. jcode's
@@ -1010,6 +1053,10 @@ pub trait MemoryProvider: Send + Sync + 'static {
 
     /// Link two drawers with a weighted edge. jcode's
     /// `MemoryManager::link_memories`.
+    ///
+    /// When a wired KG is available (mp-027, issue #27), this also
+    /// creates a `RelatesTo { weight }` typed edge so cascade
+    /// retrieval can sort/filter by traversal weight.
     async fn link(&self, from_id: &DrawerId, to_id: &DrawerId, weight: f32) -> anyhow::Result<()>
     where
         Self: Sized,
@@ -1028,7 +1075,16 @@ pub trait MemoryProvider: Send + Sync + 'static {
             d.metadata
                 .insert("links".to_string(), serde_json::json!(links));
         })
-        .await
+        .await?;
+        if let Some(kg_lock) = self.kg() {
+            let mut kg = kg_lock.lock().expect("kg mutex poisoned");
+            kg.add_memory_edge(
+                &from_id.0,
+                &to_id.0,
+                &crate::types::MemoryEdgeKind::RelatesTo { weight },
+            )?;
+        }
+        Ok(())
     }
 
     /// List all tags used in the palace, with usage counts.
@@ -1223,6 +1279,14 @@ pub struct Palace {
     /// points (search start/done, found relevant, tool action, etc).
     /// Used by the jcode adapter to drive its `MemoryEventSink`.
     pub activity_sink: Option<Arc<dyn Fn(ActivityEvent) + Send + Sync>>,
+    /// mp-027 (issue #27): optional wired [`KnowledgeGraph`] for typed
+    /// memory edges. When present, the default [`MemoryProvider::tag`]
+    /// / [`MemoryProvider::link`] / [`MemoryProvider::supersede`]
+    /// implementations also write `HasTag` / `RelatesTo` / `Supersedes`
+    /// typed edges into the KG. Wrapped in a [`std::sync::Mutex`] so
+    /// callers can take `&mut KnowledgeGraph` (the underlying rusqlite
+    /// connection requires exclusive access for writes).
+    pub kg: Option<Arc<std::sync::Mutex<super::knowledge_graph::KnowledgeGraph>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1466,6 +1530,13 @@ impl MemoryProvider for Palace {
 
     fn fingerprint(&self) -> &str {
         self.embedder.fingerprint()
+    }
+
+    /// mp-027 (issue #27): expose the wired [`KnowledgeGraph`] (if any) so
+    /// the default [`MemoryProvider::tag`] / [`MemoryProvider::link`] /
+    /// [`MemoryProvider::supersede`] impls can write typed edges.
+    fn kg(&self) -> Option<&std::sync::Mutex<super::knowledge_graph::KnowledgeGraph>> {
+        self.kg.as_deref()
     }
 
     fn embedder(&self) -> &dyn super::embed::Embedder {

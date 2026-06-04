@@ -1590,6 +1590,11 @@ pub struct Palace {
     /// callers can take `&mut KnowledgeGraph` (the underlying rusqlite
     /// connection requires exclusive access for writes).
     pub kg: Option<Arc<std::sync::Mutex<super::knowledge_graph::KnowledgeGraph>>>,
+    /// Issue #33: when `true`, the `search` pipeline runs the sidecar's
+    /// relevance check on every hit and filters out irrelevant results.
+    /// Only effective when the `llm-sidecar` feature is enabled AND an
+    /// LLM provider is configured. Default: `false`.
+    pub verify_search_results: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -2104,6 +2109,68 @@ impl MemoryProvider for Palace {
         }
 
         self.store.upsert(vec![drawer]).await?;
+
+        // Issue #33: contradiction detection on insert.
+        // Search for similar drawers and check if the new content
+        // contradicts any existing information.
+        #[cfg(feature = "llm-sidecar")]
+        {
+            if let Some(sc) = self.sidecar() {
+                let search_limit = 10usize;
+                let scope = SearchScope {
+                    limit: search_limit,
+                    ..SearchScope::default()
+                };
+                if let Ok(embedding) = self.embedder.embed(&content).await {
+                    if let Ok(similar) = self.store.search(&embedding, &scope, search_limit).await {
+                        for hit in similar {
+                            if hit.similarity < 0.50 {
+                                continue;
+                            }
+                            // Skip self — the new drawer was already upserted.
+                            let hit_id = Self::derive_drawer_id(&hit.text);
+                            if hit_id == id {
+                                continue;
+                            }
+                            match sc.check_contradiction(&content, &hit.text).await {
+                                Ok(true) => {
+                                    // Create Contradicts edge in KG.
+                                    if let Some(kg_lock) = &self.kg {
+                                        if let Ok(mut kg) = kg_lock.lock() {
+                                            if let Err(e) = kg.add_memory_edge(
+                                                &id.0,
+                                                &hit_id.0,
+                                                &crate::types::MemoryEdgeKind::Contradicts,
+                                            ) {
+                                                warn!(
+                                                    "add_drawer: Contradicts edge {} -> {} failed: {}",
+                                                    id, hit_id, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    // Supersede the old drawer.
+                                    if let Err(e) = self.supersede(&hit_id, &id).await {
+                                        warn!(
+                                            "add_drawer: supersede {} -> {} failed: {}",
+                                            hit_id, id, e
+                                        );
+                                    }
+                                }
+                                Ok(false) => { /* no contradiction */ }
+                                Err(e) => {
+                                    warn!(
+                                        "add_drawer: contradiction check failed for {} vs {}: {}",
+                                        id, hit_id, e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(id)
     }
 
@@ -2118,7 +2185,46 @@ impl MemoryProvider for Palace {
 
     async fn search(&self, query: &str, scope: &SearchScope) -> anyhow::Result<Vec<SearchHit>> {
         let vec = self.embedder.embed(query).await?;
-        self.search_with_embedding(&vec, scope).await
+        let hits = self.search_with_embedding(&vec, scope).await?;
+
+        // Issue #33: optional sidecar relevance verification.
+        // When enabled, batch-verify hits and filter out irrelevant ones.
+        if self.verify_search_results {
+            #[cfg(feature = "llm-sidecar")]
+            {
+                if let Some(sc) = self.sidecar() {
+                    self.emit_activity(
+                        ActivityState::SidecarChecking,
+                        Some(format!("verifying {} hits for relevance", hits.len())),
+                    );
+                    match sc.verify_hits(&hits, query, 5).await {
+                        Ok(verified) => {
+                            let filtered: Vec<SearchHit> = verified
+                                .into_iter()
+                                .filter(|vh| vh.relevant)
+                                .map(|vh| vh.hit)
+                                .collect();
+                            if !filtered.is_empty() {
+                                self.emit_activity(
+                                    ActivityState::FoundRelevant,
+                                    Some(format!("{} relevant after sidecar", filtered.len())),
+                                );
+                            }
+                            return Ok(filtered);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "search: sidecar verification failed ({}), returning unfiltered results",
+                                e
+                            );
+                            // Fall through to return unfiltered hits.
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(hits)
     }
 
     async fn search_with_embedding(

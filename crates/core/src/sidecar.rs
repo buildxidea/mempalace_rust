@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use tracing::warn;
 
 use crate::llm::LlmProvider;
-use crate::palace::DrawerKind;
+use crate::palace::{DrawerKind, SearchHit};
 
 /// Default max tokens for sidecar LLM calls.
 const DEFAULT_MAX_TOKENS: u32 = 1024;
@@ -39,6 +39,26 @@ pub struct ExtractedMemory {
     pub content: String,
     /// Trust level: "high" (user stated), "medium" (observed), "low" (inferred).
     pub trust: String,
+}
+
+// ---------------------------------------------------------------------------
+// VerifiedHit (issue #33)
+// ---------------------------------------------------------------------------
+
+/// A search hit annotated with sidecar relevance verification.
+///
+/// Wraps a [`SearchHit`] with the relevance verdict and an optional
+/// human-readable explanation from the LLM. Downstream consumers
+/// (e.g. jcode's adapter) can surface the `reason` to the user to
+/// explain why a result was kept or dropped.
+#[derive(Debug, Clone)]
+pub struct VerifiedHit {
+    /// The original search hit.
+    pub hit: SearchHit,
+    /// Whether the sidecar judged this hit relevant to the query.
+    pub relevant: bool,
+    /// Optional explanation from the LLM (the `REASON:` line).
+    pub reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +145,43 @@ Be conservative - only say "yes" if the memory would actually be useful for the 
             .to_string();
 
         Ok((is_relevant, reason))
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch relevance verification (issue #33)
+    // -----------------------------------------------------------------------
+
+    /// Verify a batch of search hits for relevance to `query`.
+    ///
+    /// Processes hits sequentially in chunks of `batch_size` (default 5).
+    /// Returns a [`VerifiedHit`] for every input hit — callers filter on
+    /// `relevant == true` to get the final result set.
+    ///
+    /// Sequential processing is used because the sidecar's LLM provider
+    /// is behind `&self` (not `Arc`), which prevents spawning concurrent
+    /// tasks. The batch_size parameter is retained for future use with
+    /// an `Arc`-wrapped provider.
+    pub async fn verify_hits(
+        &self,
+        hits: &[SearchHit],
+        query: &str,
+        batch_size: usize,
+    ) -> Result<Vec<VerifiedHit>> {
+        let batch_size = batch_size.max(1);
+        let mut verified = Vec::with_capacity(hits.len());
+
+        for chunk in hits.chunks(batch_size) {
+            for hit in chunk {
+                let (relevant, reason) = self.check_relevance(&hit.text, query).await?;
+                verified.push(VerifiedHit {
+                    hit: hit.clone(),
+                    relevant,
+                    reason: Some(reason),
+                });
+            }
+        }
+
+        Ok(verified)
     }
 
     // -----------------------------------------------------------------------
@@ -402,5 +459,74 @@ mod tests {
             .await
             .expect("check_contradiction should not error with noop");
         assert!(!contradicts, "noop provider should return no contradiction");
+    }
+
+    // -----------------------------------------------------------------------
+    // VerifiedHit + verify_hits (issue #33)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_verified_hit_fields() {
+        let hit = SearchHit {
+            text: "hello".into(),
+            wing: None,
+            room: None,
+            source_file: String::new(),
+            similarity: 0.9,
+            bm25_score: None,
+            combined_score: None,
+        };
+        let vh = VerifiedHit {
+            hit: hit.clone(),
+            relevant: true,
+            reason: Some("matches query".into()),
+        };
+        assert!(vh.relevant);
+        assert_eq!(vh.hit.text, "hello");
+        assert_eq!(vh.reason.as_deref(), Some("matches query"));
+    }
+
+    #[tokio::test]
+    async fn test_verify_hits_noop_all_irrelevant() {
+        let sc = noop_sidecar();
+        let hits = vec![
+            SearchHit {
+                text: "alpha".into(),
+                wing: None,
+                room: None,
+                source_file: String::new(),
+                similarity: 0.9,
+                bm25_score: None,
+                combined_score: None,
+            },
+            SearchHit {
+                text: "beta".into(),
+                wing: None,
+                room: None,
+                source_file: String::new(),
+                similarity: 0.8,
+                bm25_score: None,
+                combined_score: None,
+            },
+        ];
+        let verified = sc
+            .verify_hits(&hits, "some query", 5)
+            .await
+            .expect("verify_hits should not error with noop");
+        assert_eq!(verified.len(), 2);
+        // NoopProvider returns empty text -> no "RELEVANT: yes" -> all irrelevant.
+        assert!(!verified[0].relevant);
+        assert!(!verified[1].relevant);
+    }
+
+    #[tokio::test]
+    async fn test_verify_hits_empty_input() {
+        let sc = noop_sidecar();
+        let empty: Vec<SearchHit> = vec![];
+        let verified = sc
+            .verify_hits(&empty, "query", 5)
+            .await
+            .expect("verify_hits with empty input");
+        assert!(verified.is_empty());
     }
 }

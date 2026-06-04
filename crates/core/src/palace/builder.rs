@@ -96,6 +96,11 @@ pub struct PalaceBuilder {
     /// / [`super::MemoryProvider::supersede`] implementations also
     /// write `HasTag` / `RelatesTo` / `Supersedes` typed edges.
     kg: Option<Arc<std::sync::Mutex<crate::knowledge_graph::KnowledgeGraph>>>,
+    /// Issue #33: enable sidecar relevance verification on search.
+    /// When `true`, the `search` pipeline runs the sidecar's
+    /// `check_relevance` on every hit and filters out irrelevant results.
+    /// Default: `false`.
+    verify_search_results: bool,
 }
 
 impl std::fmt::Debug for PalaceBuilder {
@@ -119,6 +124,7 @@ impl PalaceBuilder {
             session_store: None,
             activity_sink: None,
             kg: None,
+            verify_search_results: false,
         }
     }
 
@@ -203,6 +209,23 @@ impl PalaceBuilder {
         self
     }
 
+    /// Enable sidecar relevance verification on search results (issue #33).
+    ///
+    /// When `true`, the [`super::MemoryProvider::search`] pipeline runs
+    /// the sidecar's `check_relevance` on every hit and filters out
+    /// irrelevant results before returning. Requires the `llm-sidecar`
+    /// feature and an LLM provider to be configured.
+    ///
+    /// Also enables contradiction detection on [`super::MemoryProvider::add_drawer`]:
+    /// new drawers are checked against similar existing drawers, and
+    /// contradictions create `Contradicts` KG edges + trigger supersede.
+    ///
+    /// Default: `false` (no verification, raw search results).
+    pub fn verify_search_results(mut self, enabled: bool) -> Self {
+        self.verify_search_results = enabled;
+        self
+    }
+
     /// Open the palace. Validates all required fields and initializes
     /// storage. Returns an error if config or embedder is missing, or
     /// if the embedder fails to load.
@@ -278,6 +301,7 @@ impl PalaceBuilder {
             sessions: self.session_store,
             activity_sink: self.activity_sink,
             kg: self.kg,
+            verify_search_results: self.verify_search_results,
         })
     }
 }

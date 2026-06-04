@@ -245,6 +245,13 @@ pub mod connect;
 #[doc(hidden)]
 pub mod background;
 
+/// Post-retrieval maintenance engine (issue #35). Runs 7 maintenance
+/// tasks after every search+verify cycle: link discovery, confidence
+/// boost/decay, gap detection, cluster refinement, tag inference, and
+/// pruning.
+#[doc(hidden)]
+pub mod maintenance;
+
 // =====================================================================
 // New-architecture surface (mp-010 onwards) — Embedder trait
 // =====================================================================

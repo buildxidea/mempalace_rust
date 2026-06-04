@@ -1694,7 +1694,7 @@ impl Palace {
     /// Fire an activity event if a sink is registered. mp-migration
     /// 5/8. Called from the `impl MemoryProvider for Palace` methods
     /// to publish state transitions; no-op when no sink is set.
-    fn emit_activity(&self, state: ActivityState, detail: Option<String>) {
+    pub(crate) fn emit_activity(&self, state: ActivityState, detail: Option<String>) {
         if let Some(sink) = &self.activity_sink {
             sink(ActivityEvent {
                 state,
@@ -1702,6 +1702,33 @@ impl Palace {
                 timestamp: chrono::Utc::now(),
             });
         }
+    }
+
+    /// Issue #35: spawn the post-retrieval maintenance engine as a
+    /// non-blocking tokio task. The engine runs all 7 maintenance
+    /// tasks (link discovery, confidence boost/decay, gap detection,
+    /// cluster refinement, tag inference, pruning) in the background
+    /// so the search response is not delayed.
+    fn spawn_maintenance(
+        &self,
+        verified_ids: Vec<DrawerId>,
+        rejected_ids: Vec<DrawerId>,
+        context_snippet: String,
+    ) {
+        let palace = self.clone();
+        let session_id = format!("search-{}", Utc::now().timestamp_millis());
+        tokio::spawn(async move {
+            let engine = crate::maintenance::MaintenanceEngine::new(palace);
+            let ctx = crate::maintenance::RetrievalContext {
+                verified_ids,
+                rejected_ids,
+                context_snippet,
+                session_id,
+            };
+            if let Err(e) = engine.run(ctx).await {
+                warn!("maintenance engine failed: {}", e);
+            }
+        });
     }
 
     fn derive_drawer_id(content: &str) -> DrawerId {
@@ -2189,6 +2216,10 @@ impl MemoryProvider for Palace {
 
         // Issue #33: optional sidecar relevance verification.
         // When enabled, batch-verify hits and filter out irrelevant ones.
+        let mut verified_ids: Vec<DrawerId> = Vec::new();
+        #[allow(unused_mut)]
+        let mut rejected_ids: Vec<DrawerId> = Vec::new();
+
         if self.verify_search_results {
             #[cfg(feature = "llm-sidecar")]
             {
@@ -2199,6 +2230,14 @@ impl MemoryProvider for Palace {
                     );
                     match sc.verify_hits(&hits, query, 5).await {
                         Ok(verified) => {
+                            for vh in &verified {
+                                let id = Self::derive_drawer_id(&vh.hit.text);
+                                if vh.relevant {
+                                    verified_ids.push(id);
+                                } else {
+                                    rejected_ids.push(id);
+                                }
+                            }
                             let filtered: Vec<SearchHit> = verified
                                 .into_iter()
                                 .filter(|vh| vh.relevant)
@@ -2210,6 +2249,8 @@ impl MemoryProvider for Palace {
                                     Some(format!("{} relevant after sidecar", filtered.len())),
                                 );
                             }
+                            // Issue #35: spawn maintenance in background (non-blocking).
+                            self.spawn_maintenance(verified_ids, rejected_ids, query.to_string());
                             return Ok(filtered);
                         }
                         Err(e) => {
@@ -2222,6 +2263,15 @@ impl MemoryProvider for Palace {
                     }
                 }
             }
+        }
+
+        // Issue #35: when sidecar verification is disabled, spawn
+        // maintenance with all hits as "verified" (no sidecar split).
+        if verified_ids.is_empty() && rejected_ids.is_empty() && !hits.is_empty() {
+            for hit in &hits {
+                verified_ids.push(Self::derive_drawer_id(&hit.text));
+            }
+            self.spawn_maintenance(verified_ids, rejected_ids, query.to_string());
         }
 
         Ok(hits)

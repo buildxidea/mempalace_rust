@@ -202,6 +202,8 @@ pub mod cascade;
 #[doc(hidden)]
 pub mod claude_bridge;
 #[doc(hidden)]
+pub mod clusters;
+#[doc(hidden)]
 pub mod compress_file;
 #[doc(hidden)]
 pub mod enrich;

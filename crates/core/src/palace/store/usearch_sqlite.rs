@@ -163,6 +163,8 @@ impl Inner {
                 active: true,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
+                confidence: 1.0,
+                consolidation_strength: 1,
             };
             drawer.migrate_metadata();
             Ok(Some(drawer))
@@ -210,6 +212,8 @@ impl Inner {
                 active: true,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
+                confidence: 1.0,
+                consolidation_strength: 1,
             };
             drawer.migrate_metadata();
             drawers.push(drawer);

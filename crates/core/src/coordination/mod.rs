@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod checkpoints;
+pub mod event_log;
 pub mod file_reservations;
 pub mod frontier;
 pub mod leases;

@@ -4,6 +4,7 @@ pub mod event_log;
 pub mod file_reservations;
 pub mod frontier;
 pub mod leases;
+pub mod live_delivery;
 pub mod mesh;
 pub mod routines;
 pub mod saturation;

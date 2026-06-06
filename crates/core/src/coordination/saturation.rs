@@ -30,8 +30,8 @@ pub struct SaturationConfig {
 impl Default for SaturationConfig {
     fn default() -> Self {
         Self {
-            saturation_window_ms: 3_600_000,       // 1 hour
-            stale_thread_after_ms: 1_800_000,      // 30 min
+            saturation_window_ms: 3_600_000,  // 1 hour
+            stale_thread_after_ms: 1_800_000, // 30 min
             min_new_actions_per_window: 1,
             repeated_blocker_threshold: 2,
             duplicate_work_threshold: 2,
@@ -162,7 +162,12 @@ impl SaturationDetector {
         let saturated = !signals.is_empty();
         let reasons: Vec<String> = signals
             .iter()
-            .map(|s| format!("{:?}: {} occurrences (threshold: {})", s.signal, s.count, s.threshold))
+            .map(|s| {
+                format!(
+                    "{:?}: {} occurrences (threshold: {})",
+                    s.signal, s.count, s.threshold
+                )
+            })
             .collect();
 
         let recommendations = signals
@@ -236,9 +241,16 @@ impl SaturationDetector {
 
         for event in events {
             let content_lower = event.content.to_lowercase();
-            if duplicate_keywords.iter().any(|kw| content_lower.contains(kw)) {
+            if duplicate_keywords
+                .iter()
+                .any(|kw| content_lower.contains(kw))
+            {
                 duplicate_count += 1;
-                details.push(format!("{}: {}", event.agent_id, truncate(&event.content, 80)));
+                details.push(format!(
+                    "{}: {}",
+                    event.agent_id,
+                    truncate(&event.content, 80)
+                ));
             }
         }
 
@@ -318,10 +330,7 @@ impl SaturationDetector {
                 signal: SaturationSignal::HighChatterLowThroughput,
                 count: chatter,
                 threshold: self.config.coordination_chatter_threshold,
-                details: vec![format!(
-                    "Chatter: {}, Throughput: {}",
-                    chatter, throughput
-                )],
+                details: vec![format!("Chatter: {}, Throughput: {}", chatter, throughput)],
             })
         } else {
             None
@@ -337,9 +346,7 @@ impl SaturationDetector {
 
         for event in events {
             if let Some(thread_id) = &event.thread_id {
-                let entry = thread_activity
-                    .entry(thread_id.clone())
-                    .or_insert(0);
+                let entry = thread_activity.entry(thread_id.clone()).or_insert(0);
                 if event.timestamp_ms > *entry {
                     *entry = event.timestamp_ms;
                 }
@@ -356,7 +363,12 @@ impl SaturationDetector {
         if !stale_threads.is_empty() {
             let details: Vec<String> = stale_threads
                 .iter()
-                .map(|id| format!("Thread {} inactive for >{}ms", id, self.config.stale_thread_after_ms))
+                .map(|id| {
+                    format!(
+                        "Thread {} inactive for >{}ms",
+                        id, self.config.stale_thread_after_ms
+                    )
+                })
                 .collect();
 
             Some(SignalEvidence {

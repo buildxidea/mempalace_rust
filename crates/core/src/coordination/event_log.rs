@@ -232,11 +232,11 @@ impl CoordinationEventLog {
     /// Get a snapshot of the event log state.
     pub fn snapshot(&self) -> Result<CoordinationSnapshot> {
         let latest_sequence = self.latest_sequence()?;
-        let event_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM coordination_events",
-            [],
-            |row| row.get(0),
-        )?;
+        let event_count: usize =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM coordination_events", [], |row| {
+                    row.get(0)
+                })?;
 
         Ok(CoordinationSnapshot {
             latest_sequence,

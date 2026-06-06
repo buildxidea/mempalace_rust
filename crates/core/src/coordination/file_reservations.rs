@@ -170,7 +170,10 @@ impl FileReservationStore {
             params![now, reservation_id],
         )?;
         if updated == 0 {
-            return Err(anyhow!("Reservation {} not found or already released", reservation_id));
+            return Err(anyhow!(
+                "Reservation {} not found or already released",
+                reservation_id
+            ));
         }
         Ok(())
     }
@@ -311,15 +314,15 @@ impl FileReservationStore {
             std::collections::HashMap::new();
 
         for res in active {
-            let entry = map
-                .entry(res.path_pattern.clone())
-                .or_insert_with(|| ReservationHeatmapEntry {
-                    path_pattern: res.path_pattern.clone(),
-                    active_count: 0,
-                    exclusive_count: 0,
-                    shared_count: 0,
-                    agents: Vec::new(),
-                });
+            let entry =
+                map.entry(res.path_pattern.clone())
+                    .or_insert_with(|| ReservationHeatmapEntry {
+                        path_pattern: res.path_pattern.clone(),
+                        active_count: 0,
+                        exclusive_count: 0,
+                        shared_count: 0,
+                        agents: Vec::new(),
+                    });
 
             entry.active_count += 1;
             match res.mode {
@@ -428,7 +431,13 @@ mod tests {
         let (store, _dir) = open_store();
 
         let res = store
-            .acquire("src/main.rs", "agent-1", ReservationMode::Exclusive, Some("editing"), 10)
+            .acquire(
+                "src/main.rs",
+                "agent-1",
+                ReservationMode::Exclusive,
+                Some("editing"),
+                10,
+            )
             .unwrap();
 
         assert_eq!(res.path_pattern, "src/main.rs");
@@ -449,7 +458,13 @@ mod tests {
         let (store, _dir) = open_store();
 
         store
-            .acquire("src/main.rs", "agent-1", ReservationMode::Exclusive, None, 10)
+            .acquire(
+                "src/main.rs",
+                "agent-1",
+                ReservationMode::Exclusive,
+                None,
+                10,
+            )
             .unwrap();
 
         let conflict = store
@@ -482,12 +497,24 @@ mod tests {
         let (store, _dir) = open_store();
 
         store
-            .acquire("src/main.rs", "agent-1", ReservationMode::Exclusive, None, 10)
+            .acquire(
+                "src/main.rs",
+                "agent-1",
+                ReservationMode::Exclusive,
+                None,
+                10,
+            )
             .unwrap();
 
         // Same agent can re-acquire
         let res = store
-            .acquire("src/main.rs", "agent-1", ReservationMode::Exclusive, None, 10)
+            .acquire(
+                "src/main.rs",
+                "agent-1",
+                ReservationMode::Exclusive,
+                None,
+                10,
+            )
             .unwrap();
 
         assert_eq!(res.agent_id, "agent-1");
@@ -543,7 +570,13 @@ mod tests {
 
         // Create a reservation with 0 TTL (already expired)
         store
-            .acquire("src/main.rs", "agent-1", ReservationMode::Exclusive, None, 0)
+            .acquire(
+                "src/main.rs",
+                "agent-1",
+                ReservationMode::Exclusive,
+                None,
+                0,
+            )
             .unwrap();
 
         // Wait a bit for it to expire

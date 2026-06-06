@@ -237,12 +237,7 @@ mod tests {
     #[test]
     fn test_register_blocks_172_31x() {
         let mut mesh = Mesh::new(None);
-        let result = mesh.register(
-            "http://172.31.255.255:8080/mempalace",
-            "peer-1",
-            None,
-            None,
-        );
+        let result = mesh.register("http://172.31.255.255:8080/mempalace", "peer-1", None, None);
         assert!(result.is_err());
     }
 

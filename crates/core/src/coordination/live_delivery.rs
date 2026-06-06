@@ -152,7 +152,7 @@ impl LiveDelivery {
             for delivery in deliveries.iter_mut() {
                 if delivery.signal_id == signal_id
                     && (delivery.status == DeliveryStatus::Injected
-                        || delivery.status == DeliveryStatus::Failed(_))
+                        || matches!(delivery.status, DeliveryStatus::Failed(_)))
                 {
                     delivery.status = DeliveryStatus::Queued;
                 }
@@ -178,7 +178,11 @@ impl LiveDelivery {
         let pending = self.pending.read().unwrap();
         pending
             .get(agent_id)
-            .map(|d| d.iter().filter(|d| d.status == DeliveryStatus::Queued).count())
+            .map(|d| {
+                d.iter()
+                    .filter(|d| d.status == DeliveryStatus::Queued)
+                    .count()
+            })
             .unwrap_or(0)
     }
 

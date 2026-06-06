@@ -223,9 +223,7 @@ impl ActionStore {
             let dep = self.get_action(dep_id)?;
             if let Some(dep) = dep {
                 if dep.status != ActionStatus::Completed && dep.status != ActionStatus::Cancelled {
-                    return Ok(ClaimResult::Blocked {
-                        by: dep_id.clone(),
-                    });
+                    return Ok(ClaimResult::Blocked { by: dep_id.clone() });
                 }
             }
         }
@@ -240,9 +238,7 @@ impl ActionStore {
         if updated == 0 {
             // Status changed between check and update (race condition)
             let current = self.get_action(action_id)?;
-            let current_status = current
-                .map(|a| a.status)
-                .unwrap_or(ActionStatus::Pending);
+            let current_status = current.map(|a| a.status).unwrap_or(ActionStatus::Pending);
             return Ok(ClaimResult::RaceCondition { current_status });
         }
 

@@ -1102,7 +1102,6 @@ mod tests {
         (miner, tmp)
     }
 
-
     fn test_chunk_text_basic() {
         let (miner, _tmp) = make_miner(vec![]);
 

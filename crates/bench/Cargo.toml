@@ -16,7 +16,6 @@ reqwest = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 regex = { workspace = true }
-edgebert = "0.4"
 
 # `mempalace-bench` keeps its existing main.rs (synthetic embedding harness
 # from the original port) while `longmemeval-bench` (mp-003) lives under

@@ -1213,7 +1213,7 @@ This is a Rust port of [MemPalace](https://github.com/milla-jovovich/mempalace) 
 MIT — see [LICENSE](LICENSE).
 
 <!-- Link Definitions -->
-[version-shield]: https://img.shields.io/badge/version-0.1.0-orange?style=flat-square&labelColor=0a0e14
+[version-shield]: https://img.shields.io/badge/version-0.2.0-orange?style=flat-square&labelColor=0a0e14
 [release-link]: https://github.com/quangdang46/mempalace_rust/releases
 [rust-shield]: https://img.shields.io/badge/rust-1.75+-dea584?style=flat-square&labelColor=0a0e14&logo=rust&logoColor=dea584
 [rust-link]: https://www.rust-lang.org/

@@ -46,9 +46,9 @@ impl MiningProgressReporter {
             // Initialize `last_print` in the past so the very first file
             // we see after the threshold elapses always emits — and the
             // first batch of 100 files does too on fast machines.
-            last_print: std::sync::Mutex::new(now
-                .checked_sub(Duration::from_secs(60))
-                .unwrap_or(now)),
+            last_print: std::sync::Mutex::new(
+                now.checked_sub(Duration::from_secs(60)).unwrap_or(now),
+            ),
             files_scanned: AtomicUsize::new(0),
             drawers_filed: AtomicUsize::new(0),
             chunks_created: AtomicUsize::new(0),

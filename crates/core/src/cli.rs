@@ -1297,9 +1297,7 @@ fn cmd_serve_http(palace_override: Option<&str>, read_only: bool) -> Result<()> 
         config.palace_path = PathBuf::from(p);
     }
 
-    let app_state = std::sync::Arc::new(
-        crate::mcp_server::AppState::new(config, read_only)?,
-    );
+    let app_state = std::sync::Arc::new(crate::mcp_server::AppState::new(config, read_only)?);
     let port = crate::rest_api::get_http_port();
 
     #[cfg(feature = "health")]
@@ -1307,17 +1305,14 @@ fn cmd_serve_http(palace_override: Option<&str>, read_only: bool) -> Result<()> 
         let embedder = crate::embed::embedder_from_env()?;
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
-            crate::rest_api::run_http_server(app_state, read_only, port, embedder)
-                .await
+            crate::rest_api::run_http_server(app_state, read_only, port, embedder).await
         })?;
     }
 
     #[cfg(not(feature = "health"))]
     {
         let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            crate::rest_api::run_http_server(app_state, read_only, port).await
-        })?;
+        rt.block_on(async { crate::rest_api::run_http_server(app_state, read_only, port).await })?;
     }
 
     Ok(())

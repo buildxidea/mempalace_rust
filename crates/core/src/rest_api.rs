@@ -96,14 +96,19 @@ fn map_to_json_object(map: HashMap<String, serde_json::Value>) -> JsonObject {
 
 fn text_content_to_json(result: CallToolResult) -> serde_json::Value {
     use rmcp::model::{Content, RawContent};
-    result.content.first().map(|c| {
-        // Content = Annotated<RawContent>, which Derefs to RawContent
-        let raw: &RawContent = &c.raw;
-        match raw {
-            RawContent::Text(ref raw) => serde_json::from_str::<serde_json::Value>(&raw.text).unwrap_or_else(|_| json!({ "text": &raw.text })),
-            _ => json!({ "ok": true }),
-        }
-    }).unwrap_or_else(|| json!({ "ok": true }))
+    result
+        .content
+        .first()
+        .map(|c| {
+            // Content = Annotated<RawContent>, which Derefs to RawContent
+            let raw: &RawContent = &c.raw;
+            match raw {
+                RawContent::Text(ref raw) => serde_json::from_str::<serde_json::Value>(&raw.text)
+                    .unwrap_or_else(|_| json!({ "text": &raw.text })),
+                _ => json!({ "ok": true }),
+            }
+        })
+        .unwrap_or_else(|| json!({ "ok": true }))
 }
 
 // ---------------------------------------------------------------------------
@@ -139,10 +144,12 @@ fn tool_result_to_response(result: Result<CallToolResult, ApiError>) -> axum::re
                         let raw: &RawContent = &content.raw;
                         match raw {
                             RawContent::Text(ref raw) => {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw.text) {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw.text)
+                                {
                                     (StatusCode::OK, Json(v)).into_response()
                                 } else {
-                                    (StatusCode::OK, Json(json!({ "result": &raw.text }))).into_response()
+                                    (StatusCode::OK, Json(json!({ "result": &raw.text })))
+                                        .into_response()
                                 }
                             }
                             _ => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
@@ -157,7 +164,8 @@ fn tool_result_to_response(result: Result<CallToolResult, ApiError>) -> axum::re
             Json(json!({
                 "error": e.message,
             })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -179,13 +187,19 @@ async fn healthz_handler(State(state): State<SharedState>) -> impl IntoResponse 
     let monitor = crate::health::get_health_monitor();
     let report = monitor.run_all().await;
     let status_code = monitor.to_http_status(&report);
-    (StatusCode::from_u16(status_code).expect("valid HTTP status code"), Json(report))
+    (
+        StatusCode::from_u16(status_code).expect("valid HTTP status code"),
+        Json(report),
+    )
 }
 
 /// Fallback healthz when `health` feature is off.
 #[cfg(not(feature = "health"))]
 async fn healthz_handler() -> impl IntoResponse {
-    (StatusCode::OK, Json(serde_json::json!({"status": "healthy", "note": "health feature not enabled"})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "healthy", "note": "health feature not enabled"})),
+    )
 }
 
 /// Lightweight liveness probe — confirms the process is alive.
@@ -242,7 +256,10 @@ async fn save_memory_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -270,7 +287,10 @@ async fn search_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -284,7 +304,10 @@ async fn smart_search_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -302,7 +325,10 @@ async fn observe_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -320,7 +346,10 @@ async fn enrich_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -338,7 +367,10 @@ async fn consolidate_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -356,7 +388,10 @@ async fn kg_query_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -370,7 +405,10 @@ async fn kg_add_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -384,7 +422,10 @@ async fn kg_invalidate_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -407,7 +448,10 @@ async fn kg_timeline_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -421,7 +465,10 @@ async fn kg_traverse_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -444,7 +491,10 @@ async fn graph_search_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -458,7 +508,10 @@ async fn graph_expand_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -476,7 +529,10 @@ async fn diary_read_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -490,7 +546,10 @@ async fn diary_write_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -508,7 +567,10 @@ async fn slots_list_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -532,7 +594,10 @@ async fn slot_create_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -547,7 +612,10 @@ async fn slot_append_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let mut args = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -563,7 +631,10 @@ async fn slot_replace_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let mut args = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -592,7 +663,10 @@ async fn actions_list_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -606,7 +680,10 @@ async fn action_create_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -621,7 +698,10 @@ async fn action_update_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let mut args = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -649,7 +729,10 @@ async fn sentinel_create_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -706,7 +789,10 @@ async fn checkpoint_create_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -724,7 +810,10 @@ async fn sessions_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -742,7 +831,10 @@ async fn commits_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -770,7 +862,10 @@ async fn team_share_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -784,7 +879,10 @@ async fn team_feed_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -802,7 +900,10 @@ async fn reflect_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -820,7 +921,10 @@ async fn migrate_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -875,7 +979,10 @@ async fn context_build_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -889,7 +996,10 @@ async fn timeline_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -903,7 +1013,10 @@ async fn patterns_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -917,7 +1030,10 @@ async fn audit_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -931,7 +1047,10 @@ async fn relations_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -945,7 +1064,10 @@ async fn profile_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -959,7 +1081,10 @@ async fn skill_extract_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -973,7 +1098,10 @@ async fn retention_score_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -987,7 +1115,10 @@ async fn access_stats_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1001,7 +1132,10 @@ async fn vision_search_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1015,7 +1149,10 @@ async fn sketch_create_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1030,7 +1167,10 @@ async fn sketch_promote_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let mut args = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1045,7 +1185,10 @@ async fn crystallize_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1059,7 +1202,10 @@ async fn diagnose_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1073,7 +1219,10 @@ async fn facet_tag_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1087,7 +1236,10 @@ async fn facet_query_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1101,7 +1253,10 @@ async fn lesson_save_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1115,7 +1270,10 @@ async fn lesson_recall_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1129,7 +1287,10 @@ async fn insight_list_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1152,7 +1313,10 @@ async fn file_index_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1166,7 +1330,10 @@ async fn file_history_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1180,7 +1347,10 @@ async fn snapshot_create_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1194,7 +1364,10 @@ async fn heal_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1208,7 +1381,10 @@ async fn verify_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1222,7 +1398,10 @@ async fn mesh_sync_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1240,7 +1419,10 @@ async fn session_start_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1254,7 +1436,10 @@ async fn session_end_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1268,7 +1453,10 @@ async fn summarize_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1282,7 +1470,10 @@ async fn forget_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1296,7 +1487,10 @@ async fn remember_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1331,7 +1525,10 @@ async fn semantic_list_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1345,7 +1542,10 @@ async fn semantic_list_post_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1359,7 +1559,10 @@ async fn procedural_list_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1373,7 +1576,10 @@ async fn procedural_list_post_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1387,7 +1593,10 @@ async fn auto_forget_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1401,7 +1610,10 @@ async fn auto_crystallize_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1415,7 +1627,10 @@ async fn flow_compress_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1429,7 +1644,10 @@ async fn replay_sessions_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1443,7 +1661,10 @@ async fn replay_load_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1466,7 +1687,10 @@ async fn snapshot_restore_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1480,7 +1704,10 @@ async fn governance_bulk_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1494,7 +1721,10 @@ async fn sentinel_cancel_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1508,7 +1738,10 @@ async fn sentinel_check_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1522,7 +1755,10 @@ async fn insight_search_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1536,7 +1772,10 @@ async fn lesson_search_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1559,7 +1798,10 @@ async fn lesson_strengthen_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1573,7 +1815,10 @@ async fn action_edge_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1587,11 +1832,17 @@ async fn lease_acquire_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let mut args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
-    args.insert("operation".to_string(), serde_json::Value::String("acquire".to_string()));
+    args.insert(
+        "operation".to_string(),
+        serde_json::Value::String("acquire".to_string()),
+    );
     let result = invoke_tool(&state_guard, "mempalace_lease", args).await;
     Ok(tool_result_to_response(result))
 }
@@ -1602,11 +1853,17 @@ async fn lease_release_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let mut args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
-    args.insert("operation".to_string(), serde_json::Value::String("release".to_string()));
+    args.insert(
+        "operation".to_string(),
+        serde_json::Value::String("release".to_string()),
+    );
     let result = invoke_tool(&state_guard, "mempalace_lease", args).await;
     Ok(tool_result_to_response(result))
 }
@@ -1617,11 +1874,17 @@ async fn lease_renew_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let mut args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
-    args.insert("operation".to_string(), serde_json::Value::String("renew".to_string()));
+    args.insert(
+        "operation".to_string(),
+        serde_json::Value::String("renew".to_string()),
+    );
     let result = invoke_tool(&state_guard, "mempalace_lease", args).await;
     Ok(tool_result_to_response(result))
 }
@@ -1632,7 +1895,10 @@ async fn routine_create_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1679,7 +1945,10 @@ async fn mesh_register_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1711,7 +1980,10 @@ async fn mesh_receive_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1725,7 +1997,10 @@ async fn action_list_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1749,7 +2024,10 @@ async fn cascade_update_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1763,7 +2041,10 @@ async fn generate_rules_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1777,7 +2058,10 @@ async fn evolve_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1804,7 +2088,10 @@ async fn sketch_add_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1846,7 +2133,10 @@ async fn facet_get_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1869,7 +2159,10 @@ async fn facet_untag_handler(
 ) -> Result<axum::response::Response, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1883,7 +2176,10 @@ async fn branch_detect_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1897,7 +2193,10 @@ async fn branch_sessions_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(json!({ "params": params }))
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1920,7 +2219,10 @@ async fn vision_embed_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
     let args: JsonObject = serde_json::to_value(body)
-        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: e.to_string(),
+        })?
         .as_object()
         .unwrap()
         .clone();
@@ -1932,9 +2234,7 @@ async fn vision_embed_handler(
 // SSE Transport (P13) - simplified placeholder
 // ---------------------------------------------------------------------------
 
-async fn sse_handler(
-    State(_state): State<SharedState>,
-) -> axum::response::Response {
+async fn sse_handler(State(_state): State<SharedState>) -> axum::response::Response {
     // SSE endpoint - returns a simple response for now
     // Real SSE would stream events using broadcast channel
     let body = "event: connected\ndata: {\"status\":\"ok\"}\n\n";
@@ -1951,12 +2251,15 @@ async fn mcp_handler(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
-    
+
     let tool_name = body.get("tool").and_then(|t| t.as_str()).unwrap_or("");
-    let args = body.get("args").and_then(|a| a.as_object().cloned()).unwrap_or_default();
-    
+    let args = body
+        .get("args")
+        .and_then(|a| a.as_object().cloned())
+        .unwrap_or_default();
+
     let result = invoke_tool(&state_guard, tool_name, args).await?;
-    
+
     Ok(Json(text_content_to_json(result)))
 }
 
@@ -2021,7 +2324,10 @@ fn build_router(state: SharedState) -> Router {
         // Checkpoints
         .route("/checkpoints", get(checkpoints_list_handler))
         .route("/checkpoints", post(checkpoint_create_handler))
-        .route("/checkpoints/{id}/resolve", post(checkpoint_resolve_handler))
+        .route(
+            "/checkpoints/{id}/resolve",
+            post(checkpoint_resolve_handler),
+        )
         // Sessions
         .route("/sessions", get(sessions_handler))
         // Commits

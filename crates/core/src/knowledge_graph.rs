@@ -78,6 +78,34 @@ pub struct KgStats {
     pub relationship_types: Vec<String>,
 }
 
+/// A point-in-time snapshot of the knowledge graph. Contains aggregate counts
+/// and top-degree entities for fast synchronous lookups without scanning the
+/// full node set every time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct GraphSnapshot {
+    pub snapshot_id: String,
+    pub total_nodes: usize,
+    pub total_edges: usize,
+    pub top_degrees: std::collections::HashMap<String, usize>,
+    pub created_at: String,
+    pub reset_at: Option<String>,
+}
+
+/// Enriched query result envelope returned by snapshot-aware KG queries.
+/// Wraps the fact list with metadata about the data source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct GraphQueryResult {
+    pub facts: Vec<EntityQueryResult>,
+    pub count: usize,
+    pub total_nodes: Option<usize>,
+    pub total_edges: Option<usize>,
+    pub from_snapshot: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ClusterEntry {
@@ -1286,6 +1314,114 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    // -----------------------------------------------------------------------
+    // Graph Snapshot System (v0.3.0, Q4)
+    // -----------------------------------------------------------------------
+
+    /// Compute the degree (number of incident triples) of a single entity.
+    pub fn get_entity_degree(&self, name: &str) -> anyhow::Result<usize> {
+        let eid = Self::entity_id(name);
+        let degree: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM triples WHERE subject = ?1 OR object = ?1",
+                rusqlite::params![eid],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(degree)
+    }
+
+    /// Build and persist a new graph snapshot from the current KG state.
+    pub fn create_snapshot(&self) -> anyhow::Result<GraphSnapshot> {
+        let total_nodes: usize =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?;
+        let total_edges: usize =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM triples", [], |row| row.get(0))?;
+        let mut top_degrees = std::collections::HashMap::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT e.name, COUNT(*) as degree FROM entities e \
+             JOIN triples t ON t.subject = e.id OR t.object = e.id \
+             GROUP BY e.id ORDER BY degree DESC LIMIT 500"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+        for row in rows {
+            let (name, degree) = row?;
+            top_degrees.insert(name, degree);
+        }
+        let snapshot_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let top_json = serde_json::to_string(&top_degrees)?;
+        self.conn.execute("DELETE FROM graph_snapshots", [])?;
+        self.conn.execute(
+            "INSERT INTO graph_snapshots (snapshot_id, total_nodes, total_edges, top_degrees, created_at, reset_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            rusqlite::params![snapshot_id, total_nodes, total_edges, top_json, now],
+        )?;
+        Ok(GraphSnapshot { snapshot_id, total_nodes, total_edges, top_degrees, created_at: now, reset_at: None })
+    }
+
+    /// Read the current graph snapshot, if any.
+    pub fn get_snapshot(&self) -> anyhow::Result<Option<GraphSnapshot>> {
+        let result = self.conn.query_row(
+            "SELECT snapshot_id, total_nodes, total_edges, top_degrees, created_at, reset_at \
+             FROM graph_snapshots LIMIT 1",
+            [],
+            |row| {
+                let top_json: String = row.get(3)?;
+                let top_degrees: std::collections::HashMap<String, usize> =
+                    serde_json::from_str(&top_json).unwrap_or_default();
+                Ok(GraphSnapshot {
+                    snapshot_id: row.get(0)?,
+                    total_nodes: row.get(1)?,
+                    total_edges: row.get(2)?,
+                    top_degrees,
+                    created_at: row.get(4)?,
+                    reset_at: row.get(5)?,
+                })
+            },
+        );
+        match result {
+            Ok(s) => Ok(Some(s)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Reset the knowledge graph: enumeration-free empty snapshot with resetAt.
+    pub fn reset_snapshot(&self) -> anyhow::Result<GraphSnapshot> {
+        let snapshot_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute("DELETE FROM graph_snapshots", [])?;
+        self.conn.execute(
+            "INSERT INTO graph_snapshots (snapshot_id, total_nodes, total_edges, top_degrees, created_at, reset_at) \
+             VALUES (?1, 0, 0, '{}', ?2, ?3)",
+            rusqlite::params![snapshot_id, now, now],
+        )?;
+        Ok(GraphSnapshot { snapshot_id, total_nodes: 0, total_edges: 0, top_degrees: std::collections::HashMap::new(), created_at: now.clone(), reset_at: Some(now) })
+    }
+
+    /// Pre-flight check: returns node count and whether a prior snapshot exists.
+    pub fn snapshot_preflight(&self) -> anyhow::Result<SnapshotPreflight> {
+        let total_nodes: usize =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?;
+        let existing = self.get_snapshot()?;
+        Ok(SnapshotPreflight { total_nodes, has_snapshot: existing.is_some() })
+    }
+}
+
+/// Result of a snapshot pre-flight check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SnapshotPreflight {
+    pub total_nodes: usize,
+    pub has_snapshot: bool,
 }
 
 #[cfg(test)]

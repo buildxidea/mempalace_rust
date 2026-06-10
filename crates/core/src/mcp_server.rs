@@ -257,6 +257,8 @@ const MUTATION_TOOLS: &[&str] = &[
     "mempalace_team_share",
     "mempalace_consolidate",
     "mempalace_snapshot_create",
+    "mempalace_kg_snapshot_rebuild",
+    "mempalace_kg_reset",
     // Smart features - slots (mutation)
     "mempalace_slot_create",
     "mempalace_slot_append",
@@ -355,6 +357,8 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "mempalace_kg_invalidate" => tool_kg_invalidate(&state, args),
                 "mempalace_kg_timeline" => tool_kg_timeline(&state, args),
                 "mempalace_kg_stats" => tool_kg_stats(&state, args),
+                "mempalace_kg_snapshot_rebuild" => tool_kg_snapshot_rebuild(&state, args),
+                "mempalace_kg_reset" => tool_kg_reset(&state, args),
                 "mempalace_traverse" => tool_traverse(&state, args),
                 "mempalace_find_tunnels" => tool_find_tunnels(&state, args),
                 "mempalace_graph_stats" => tool_graph_stats(&state, args),
@@ -470,6 +474,8 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 }
                 "memory_kg_timeline" | "memory_graph_timeline" => tool_kg_timeline(&state, args),
                 "memory_kg_stats" | "memory_graph_stats" => tool_kg_stats(&state, args),
+                "memory_kg_snapshot_rebuild" | "memory_graph_snapshot_rebuild" => tool_kg_snapshot_rebuild(&state, args),
+                "memory_kg_reset" | "memory_graph_reset" => tool_kg_reset(&state, args),
                 "memory_traverse" => tool_traverse(&state, args),
                 "memory_find_tunnels" => tool_find_tunnels(&state, args),
                 "memory_diary_read" => tool_diary_read(&state, args),
@@ -596,7 +602,7 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "mempalace_kg_query",
             "KG Query",
             "Query the knowledge graph for an entity's relationships. Returns typed facts with temporal validity. E.g. 'Max' → child_of Alice, loves chess, does swimming. Filter by date with as_of to see what was true at a point in time.",
-            serde_json::json!({ "type": "object", "properties": { "entity": { "type": "string", "description": "Entity to query (e.g. 'Max', 'MyProject', 'Alice')" }, "as_of": { "type": "string", "description": "Date filter — only facts valid at this date (YYYY-MM-DD, optional)" }, "direction": { "type": "string", "description": "outgoing (entity→?), incoming (?→entity), or both (default: both)" } }, "required": ["entity"] }),
+            serde_json::json!({ "type": "object", "properties": { "entity": { "type": "string", "description": "Entity to query (e.g. 'Max', 'MyProject', 'Alice')" }, "as_of": { "type": "string", "description": "Date filter — only facts valid at this date (YYYY-MM-DD, optional)" }, "direction": { "type": "string", "description": "outgoing (entity→?), incoming (?→entity), or both (default: both)" }, "limit": { "type": "integer", "description": "Max results (default 500, ranked by degree)" }, "offset": { "type": "integer", "description": "Offset for pagination (default 0)" } }, "required": ["entity"] }),
         ),
         tool(
             "mempalace_kg_add",
@@ -620,6 +626,18 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "mempalace_kg_stats",
             "KG Stats",
             "Knowledge graph overview: entities, triples, current vs expired facts, relationship types.",
+            serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_kg_snapshot_rebuild",
+            "KG Snapshot Rebuild",
+            "Build or rebuild the graph snapshot. Captures top-degree entities and aggregate counts. Refuses when totalNodes > 25,000 and no prior snapshot exists unless force=true.",
+            serde_json::json!({ "type": "object", "properties": { "force": { "type": "boolean", "description": "Bypass the 25k-node pre-flight guard (default: false)" } }, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_kg_reset",
+            "KG Reset",
+            "Reset the knowledge graph snapshot. Writes an empty snapshot with resetAt so future queries treat pre-reset facts as not-found. Does NOT delete any data.",
             serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
         tool(
@@ -1518,6 +1536,88 @@ fn collection_missing(state: &AppState) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// AGENT_SCOPE isolation helpers
+// ---------------------------------------------------------------------------
+
+/// Read `MEMPALACE_AGENT_ID` env var, falling back to `config.agent_id`.
+/// The env var takes priority over the config file value.
+fn resolve_agent_id(config: &crate::Config) -> Option<String> {
+    std::env::var("MEMPALACE_AGENT_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| config.agent_id.clone())
+        .filter(|s| !s.is_empty())
+}
+
+/// Returns `true` when AGENT_SCOPE is `"isolated"`.
+/// Reads `MEMPALACE_AGENT_SCOPE` env var, falling back to `config.agent_scope`.
+/// The default is `"shared"` (not isolated).
+fn is_agent_isolated(config: &crate::Config) -> bool {
+    let scope = std::env::var("MEMPALACE_AGENT_SCOPE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| config.agent_scope.clone())
+        .unwrap_or_else(|| "shared".to_string());
+    scope.eq_ignore_ascii_case("isolated")
+}
+
+/// Resolve the effective `agent_id` for filtering purposes when scope is isolated.
+///
+/// Returns `Ok(None)` when:
+/// - scope is `"shared"` (not isolated) – pass-through, no filtering
+/// - agent_id is `"*"` (wildcard) – bypass all filtering
+///
+/// Returns `Ok(Some(id))` when isolating against a concrete agent_id.
+///
+/// # Errors
+/// Returns an error when scope is `"isolated"` but no agent_id resolves from
+/// either `MEMPALACE_AGENT_ID` env var or `config.agent_id`. This is a
+/// **fail-closed** design: isolated mode without an identity produces an error
+/// rather than leaking unfiltered results.
+fn resolved_agent_id(state: &AppState) -> Result<Option<String>, ErrorData> {
+    if !is_agent_isolated(&state.config) {
+        return Ok(None);
+    }
+    let agent_id = resolve_agent_id(&state.config);
+    match agent_id {
+        Some(id) if id == "*" => Ok(None), // wildcard: no filtering
+        Some(id) => Ok(Some(id)),
+        None => Err(ErrorData::invalid_request(
+            "AGENT_SCOPE=isolated but no MEMPALACE_AGENT_ID or config.agent_id set. \
+             Set MEMPALACE_AGENT_ID to a unique agent identifier to enable isolated mode, \
+             or set AGENT_SCOPE=shared to disable isolation.",
+            None,
+        )),
+    }
+}
+
+/// Post-filter `query_sync` / `hybrid_search` results so only entries whose
+/// `agent_id` metadata field matches the resolved agent_id survive.
+///
+/// When scope is `"shared"` or agent_id is `"*"` (wildcard), all results pass
+/// through unchanged.
+fn filter_by_agent_id(
+    results: Vec<crate::palace_db::QueryResult>,
+    state: &AppState,
+) -> Result<Vec<crate::palace_db::QueryResult>, ErrorData> {
+    let agent_id = resolved_agent_id(state)?;
+    let Some(ref id) = agent_id else {
+        return Ok(results);
+    };
+    Ok(results
+        .into_iter()
+        .filter(|r| {
+            r.metadatas.iter().any(|m| {
+                m.get("agent_id")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v == id)
+                    .unwrap_or(false)
+            })
+        })
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
 // Tool handlers
 // ---------------------------------------------------------------------------
 
@@ -1883,6 +1983,10 @@ fn tool_kg_query(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
         as_of: Option<String>,
         tt_as_of: Option<String>,
         direction: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
     }
     let input: Input = parse_args(args)?;
     // Validate ISO-8601 date at MCP boundary (#1164): malformed dates would
@@ -1893,7 +1997,9 @@ fn tool_kg_query(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
         .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
     let kg = crate::knowledge_graph::KnowledgeGraph::open(&kg_path(state))
         .map_err(|e| internal_error_safe(&e))?;
-    let facts = kg
+
+    // Fetch the full fact set first for total counts, then apply pagination.
+    let all_facts = kg
         .query_entity(
             &input.entity,
             as_of.as_deref(),
@@ -1901,8 +2007,39 @@ fn tool_kg_query(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
             input.direction.as_deref().unwrap_or("both"),
         )
         .map_err(|e| internal_error_safe(&e))?;
+
+    let offset = input.offset.unwrap_or(0);
+    let limit = input.limit.unwrap_or(500);
+    let count = all_facts.len();
+    let truncated = count > limit + offset;
+    let facts: Vec<_> = all_facts
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect();
+
+    // Check whether the KG has a snapshot and attach metadata.
+    let (total_nodes, total_edges, from_snapshot) = {
+        match kg.get_snapshot() {
+            Ok(Some(snap)) => (Some(snap.total_nodes), Some(snap.total_edges), true),
+            _ => (None, None, false),
+        }
+    };
+
     ok_json(
-        serde_json::json!({ "entity": input.entity, "as_of": as_of, "facts": facts, "count": facts.len() }),
+        serde_json::json!({
+            "entity": input.entity,
+            "as_of": as_of,
+            "nodes": facts,
+            "edges": facts,
+            "totalNodes": total_nodes.unwrap_or(0),
+            "totalEdges": total_edges.unwrap_or(0),
+            "total": count,
+            "truncated": truncated,
+            "offset": offset,
+            "limit": limit,
+            "fromSnapshot": from_snapshot,
+        }),
     )
 }
 
@@ -2014,6 +2151,58 @@ fn tool_kg_stats(state: &AppState, _args: JsonObject) -> Result<CallToolResult, 
         "current_facts": stats.current_facts,
         "expired_facts": stats.expired_facts,
         "relationship_types": stats.relationship_types,
+    }))
+}
+
+fn tool_kg_snapshot_rebuild(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    struct Input {
+        #[serde(default)]
+        force: Option<bool>,
+    }
+    let input: Input = parse_args(args)?;
+    let kg = crate::knowledge_graph::KnowledgeGraph::open(&kg_path(state))
+        .map_err(|e| internal_error_safe(&e))?;
+
+    let preflight = kg
+        .snapshot_preflight()
+        .map_err(|e| internal_error_safe(&e))?;
+
+    // Refuse when totalNodes > 25,000 AND no prior snapshot AND force != true.
+    let ceiling: usize = 25_000;
+    if preflight.total_nodes > ceiling && !preflight.has_snapshot && !input.force.unwrap_or(false) {
+        return ok_json(serde_json::json!({
+            "success": false,
+            "tooLarge": true,
+            "totalNodes": preflight.total_nodes,
+            "ceiling": ceiling,
+        }));
+    }
+
+    let snapshot = kg
+        .create_snapshot()
+        .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({
+        "success": true,
+        "snapshotId": snapshot.snapshot_id,
+        "totalNodes": snapshot.total_nodes,
+        "totalEdges": snapshot.total_edges,
+    }))
+}
+
+fn tool_kg_reset(state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    let kg = crate::knowledge_graph::KnowledgeGraph::open(&kg_path(state))
+        .map_err(|e| internal_error_safe(&e))?;
+
+    let snapshot = kg
+        .reset_snapshot()
+        .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({
+        "success": true,
+        "snapshotId": snapshot.snapshot_id,
+        "resetAt": snapshot.reset_at,
     }))
 }
 
@@ -5245,6 +5434,27 @@ fn tool_sessions(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
         Some("session"),
         input.limit.unwrap_or(50),
     );
+
+    // Load summaries from the SessionStore (sessions SQLite db) so the viewer
+    // can show the summary alongside each session. The SessionStore path lives
+    // next to the palace.json collection.
+    let session_store_path = state.palace_path.join("sessions");
+    let summaries: std::collections::HashMap<String, Option<String>> = {
+        let store = crate::session::SessionStore::open(&session_store_path);
+        match store {
+            Ok(store) => {
+                let mut map = std::collections::HashMap::new();
+                if let Ok(sessions) = store.list_sessions(None) {
+                    for s in sessions {
+                        map.insert(s.id, s.summary);
+                    }
+                }
+                map
+            }
+            Err(_) => std::collections::HashMap::new(),
+        }
+    };
+
     let sessions: Vec<_> = all_drawers
         .iter()
         .flat_map(|qr| {
@@ -5257,11 +5467,16 @@ fn tool_sessions(state: &AppState, args: JsonObject) -> Result<CallToolResult, E
                         .get("created_at")
                         .and_then(|v| v.as_str())
                         .unwrap_or("N/A");
-                    serde_json::json!({
+                    let summary = summaries.get(id.as_str()).and_then(|s| s.as_deref());
+                    let mut obj = serde_json::json!({
                         "session_id": id,
                         "content": doc.chars().take(200).collect::<String>(),
                         "created_at": created_at,
-                    })
+                    });
+                    if let Some(s) = summary {
+                        obj["summary"] = serde_json::Value::String(s.to_string());
+                    }
+                    obj
                 })
         })
         .collect();
@@ -5408,6 +5623,10 @@ fn tool_recall(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
             input.limit.unwrap_or(10),
         )
         .map_err(|e| internal_error_safe(&e))?;
+
+    // AGENT_SCOPE isolation: post-filter so only the current agent's
+    // documents are visible when scope is "isolated".
+    let results = filter_by_agent_id(results, state)?;
 
     let format = input.format.as_deref().unwrap_or("full");
     let formatted_results: serde_json::Value = match format {
@@ -5743,6 +5962,10 @@ fn tool_smart_search(state: &AppState, args: JsonObject) -> Result<CallToolResul
         .hybrid_search(&input.query, input.limit.unwrap_or(10), None, None)
         .map_err(|e| internal_error_safe(&e))?;
 
+    // AGENT_SCOPE isolation: post-filter so only the current agent's
+    // documents are visible when scope is "isolated".
+    let results = filter_by_agent_id(results, state)?;
+
     // If expand_ids provided, fetch those specifically
     let expanded: Vec<serde_json::Value> = if let Some(ids_str) = input.expand_ids {
         let ids: Vec<String> = ids_str.split(',').map(|s| s.trim().to_string()).collect();
@@ -5801,6 +6024,10 @@ fn tool_hybrid_search(state: &AppState, args: JsonObject) -> Result<CallToolResu
             input.room.as_deref(),
         )
         .map_err(|e| internal_error_safe(&e))?;
+
+    // AGENT_SCOPE isolation: post-filter so only the current agent's
+    // documents are visible when scope is "isolated".
+    let results = filter_by_agent_id(results, state)?;
 
     ok_json(serde_json::json!({
         "query": sanitized.clean_query,
@@ -6549,7 +6776,7 @@ mod tests {
             .to_string();
         let in_parsed: Value = serde_json::from_str(&in_text).unwrap();
         assert_eq!(
-            in_parsed.get("count").and_then(|v| v.as_u64()),
+            in_parsed.get("total").and_then(|v| v.as_u64()),
             Some(1),
             "fact must be visible inside its closed validity window"
         );
@@ -6569,7 +6796,7 @@ mod tests {
             .to_string();
         let out_parsed: Value = serde_json::from_str(&out_text).unwrap();
         assert_eq!(
-            out_parsed.get("count").and_then(|v| v.as_u64()),
+            out_parsed.get("total").and_then(|v| v.as_u64()),
             Some(0),
             "fact must NOT be visible past its valid_to"
         );
@@ -7125,6 +7352,8 @@ mod tests {
             "mempalace_kg_invalidate",
             "mempalace_kg_timeline",
             "mempalace_kg_stats",
+            "mempalace_kg_snapshot_rebuild",
+            "mempalace_kg_reset",
             "mempalace_traverse",
             "mempalace_find_tunnels",
             "mempalace_graph_stats",

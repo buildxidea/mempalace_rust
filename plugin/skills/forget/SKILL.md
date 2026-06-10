@@ -1,6 +1,6 @@
 ---
 name: forget
-description: Delete specific observations or sessions from mempalace. Use when user says "forget this", "delete memory", or wants to remove specific data for privacy.
+description: Delete specific observations or sessions from mempalace
 argument-hint: "[what to forget - session ID, file path, or search term]"
 user-invocable: true
 ---
@@ -9,18 +9,48 @@ The user wants to remove data from mempalace: $ARGUMENTS
 
 **IMPORTANT**: This is a destructive operation. Always confirm with the user before deleting.
 
-Steps:
+## Quick start
 
-1. First search for matching observations with the `memory_smart_search` MCP tool (provided by the mempalace server this plugin wires up via `.mcp.json`). Use the user's input as the `query` with `limit: 20`.
-2. Show the user what was found — session IDs, observation IDs, titles — and ask for explicit confirmation before deleting.
-3. Once confirmed, call `memory_governance_delete` with:
-   - `memoryIds: [<id>, ...]` — an array (or comma-separated string) of the memory IDs returned by the search in step 1
-   - `reason: "<short reason>"` — optional, defaults to `"plugin skill request"`
+Search with `memory_smart_search`, show matches, confirm with user, then call `memory_governance_delete`.
 
-   If the user wants to drop an entire session's observations, collect every memory ID in that session from the search results and pass them all via `memoryIds`. The standalone MCP doesn't accept a bare `sessionId` argument — it deletes by memory ID only.
-4. Confirm the deletion count back to the user.
+## Why
 
-**Never delete without explicit user confirmation.** If the MCP tools aren't available, the stdio MCP shim didn't start — tell the user to:
-1. Run `/plugin list` in Claude Code and confirm `mempalace` shows as enabled.
-2. Restart Claude Code (the plugin's `.mcp.json` is only read on startup).
-3. Check `/mcp` to see whether the `mempalace` MCP server is connected.
+Remove stale, incorrect, or private data from the palace.
+
+## Workflow
+
+1. Call `memory_smart_search` with the user's input as `query`, `limit: 20`.
+2. Show the user what was found (IDs, titles) and ask for explicit confirmation.
+3. On confirmation, call `memory_governance_delete` with `memoryIds: [<id>, ...]`.
+4. To drop a whole session, collect all memory IDs from the search results.
+5. Confirm the deletion count back to the user.
+
+## Anti-patterns
+
+**WRONG** -- deleting without confirmation:
+
+```text
+// Never auto-confirm. Always wait for explicit user approval.
+```
+
+**RIGHT** -- confirming first:
+
+```text
+// "Found 3 observations. Delete all 3? [y/N]"
+```
+
+**WRONG** -- using bare `sessionId`:
+
+```text
+// The MCP tool does not accept sessionId. Collect all memory IDs instead.
+```
+
+## MCP tool unavailable
+
+If MCP tools are unavailable:
+
+1. Run `/plugin list` in Claude Code, confirm `mempalace` is enabled.
+2. Restart Claude Code (`.mcp.json` is only read on startup).
+3. Check `/mcp` to see if the `mempalace` MCP server is connected.
+
+> See `_shared/TROUBLESHOOTING.md` and `EXAMPLES.md` for more.

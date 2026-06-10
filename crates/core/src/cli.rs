@@ -275,6 +275,16 @@ enum Commands {
         /// Port configurable via MEMPALACE_HTTP_PORT env var (default: 3111).
         #[arg(long)]
         http: bool,
+
+        /// Instance number N: assigns REST port 3111+N*100, stream port 3112+N*100,
+        /// engine port 49134+N*100. Mutually exclusive with --port.
+        #[arg(long, conflicts_with = "port")]
+        instance: Option<u16>,
+
+        /// HTTP port override for the REST API (default: 3111, env: MEMPALACE_HTTP_PORT).
+        /// Mutually exclusive with --instance.
+        #[arg(long, conflicts_with = "instance")]
+        port: Option<u16>,
     },
 
     /// Re-ingest a file or directory of mined drawers into the palace (idempotent).
@@ -2255,10 +2265,41 @@ pub fn run() -> Result<()> {
             cmd_mine_device(wing.as_deref(), *dry_run, palace_arg)?
         }
         Commands::Mcp => cmd_mcp(palace_arg),
-        Commands::Serve { read_only, http } => {
+        Commands::Serve {
+            read_only,
+            http,
+            instance,
+            port,
+        } => {
             if *http {
                 cmd_serve_http(palace_arg, *read_only)?;
             } else {
+                // Validate mutual exclusivity of --instance and --port.
+                if instance.is_some() && port.is_some() {
+                    anyhow::bail!("--instance and --port are mutually exclusive");
+                }
+
+                // Compute the REST port: env MEMPALACE_HTTP_PORT > --port > --instance > default 3111.
+                let rest_port: u16 = if let Some(env_port) =
+                    std::env::var("MEMPALACE_HTTP_PORT").ok().and_then(|p| p.parse().ok())
+                {
+                    env_port
+                } else if let Some(p) = port {
+                    *p
+                } else if let Some(n) = instance {
+                    3111u16.saturating_add(n.saturating_mul(100))
+                } else {
+                    3111
+                };
+
+                let stream_port = get_stream_port(rest_port);
+                let engine_port = get_engine_port(rest_port);
+
+                eprintln!(
+                    "  Starting MCP server (stdio). REST: {}, Stream: {}, Engine: {}",
+                    rest_port, stream_port, engine_port
+                );
+
                 crate::mcp_server::run_server(palace_arg, *read_only)?;
             }
         }
@@ -2676,6 +2717,26 @@ fn estimate_mining_scope(dir: &PathBuf) -> Result<MiningScopeEstimate> {
         file_count,
         size_mb,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Port computation helpers
+// ---------------------------------------------------------------------------
+
+/// Get the stream port (REST port + 1). Override via `MEMPALACE_STREAM_PORT` env var.
+fn get_stream_port(rest_port: u16) -> u16 {
+    std::env::var("MEMPALACE_STREAM_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| rest_port.saturating_add(1))
+}
+
+/// Get the engine port (REST port + 46023). Override via `MEMPALACE_ENGINE_PORT` env var.
+fn get_engine_port(rest_port: u16) -> u16 {
+    std::env::var("MEMPALACE_ENGINE_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| rest_port.saturating_add(46023))
 }
 
 #[cfg(test)]

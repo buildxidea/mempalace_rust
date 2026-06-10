@@ -1,21 +1,60 @@
 ---
 name: recall
-description: Search mempalace for past observations, sessions, and learnings about a topic. Use when the user says "recall", "remember", "what did we do", or needs context from past sessions.
+description: Search mempalace for past observations, sessions, and learnings about a topic
 argument-hint: "[search query]"
 user-invocable: true
 ---
 
 The user wants to recall past context about: $ARGUMENTS
 
-Use the `memory_smart_search` MCP tool (provided by the mempalace server that this plugin wires up automatically via `.mcp.json`) with the user's query as the `query` argument and `limit: 10`. The tool runs hybrid BM25 + vector + graph-expanded search over captured observations and returns ranked results.
+## Quick start
 
-Present the returned results to the user in a readable format:
-- Group by session
-- For each observation show its type, title, and narrative
-- Highlight the most important observations (importance >= 7)
-- If no results come back, suggest 2-3 alternative search terms the user could try
+Call `memory_smart_search` with the user's query (limit 10).
 
-**Do NOT make up or hallucinate observations.** Only present what the MCP tool actually returned. If `memory_smart_search` isn't available, the stdio MCP shim didn't start — tell the user to:
-1. Run `/plugin list` in Claude Code and confirm `mempalace` shows as enabled.
-2. Restart Claude Code (the plugin's `.mcp.json` is only read on startup).
-3. Check `/mcp` to see whether the `mempalace` MCP server is connected.
+## Why
+
+Retrieve context from past sessions so the agent can answer accurately without hallucinating.
+
+## Workflow
+
+1. Call `memory_smart_search` with `query` from `$ARGUMENTS` and `limit: 10`.
+2. Group results by session ID.
+3. For each observation, show type, title, and narrative.
+4. Highlight observations with `importance >= 7`.
+5. If empty, suggest 2-3 alternative search terms.
+
+## Anti-patterns
+
+**WRONG** -- making up observations to fill gaps:
+
+```text
+// No results from tool, but agent fabricates "I recall we discussed X"
+```
+
+**RIGHT** -- honest empty state with suggestions:
+
+```text
+// No results found. Try: "deployment config", "build system", "cli flags"
+```
+
+**WRONG** -- ignoring the limit parameter:
+
+```text
+// Calling memory_smart_search without limit, getting hundreds of results
+```
+
+**RIGHT** -- using explicit limit:
+
+```json
+memory_smart_search({"query": "config file parsing", "limit": 10})
+```
+
+## MCP tool unavailable
+
+If `memory_smart_search` is not available:
+
+1. Run `/plugin list` in Claude Code, confirm `mempalace` is enabled.
+2. Restart Claude Code (`.mcp.json` is only read on startup).
+3. Check `/mcp` to see if the `mempalace` MCP server is connected.
+
+> See `_shared/TROUBLESHOOTING.md` and `EXAMPLES.md` for more.

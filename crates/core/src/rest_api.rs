@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
@@ -21,6 +21,7 @@ use tracing::info;
 use crate::export::disk_size_manager::DiskSizeManager;
 use crate::mcp_server::AppState;
 use crate::palace_db::MemorySlot;
+use crate::search::followup::FollowupTracker;
 use rmcp::model::{CallToolResult, Content, JsonObject, RawContent};
 use serde_json::json;
 
@@ -33,6 +34,7 @@ pub struct HttpServerState {
     pub app_state: Arc<AppState>,
     pub read_only: bool,
     pub disk_size_manager: Arc<Mutex<DiskSizeManager>>,
+    pub followup_tracker: Arc<Mutex<FollowupTracker>>,
     #[cfg(feature = "health")]
     pub embedder: std::sync::Arc<dyn crate::embed::Embedder>,
 }
@@ -300,10 +302,11 @@ async fn search_handler(
 
 async fn smart_search_handler(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let state_guard = state.lock().await;
-    let args: JsonObject = serde_json::to_value(body)
+    let args: JsonObject = serde_json::to_value(body.clone())
         .map_err(|e| ApiError {
             status: StatusCode::BAD_REQUEST,
             message: e.to_string(),
@@ -312,7 +315,59 @@ async fn smart_search_handler(
         .unwrap()
         .clone();
     let result = invoke_tool(&state_guard, "mempalace_smart_search", args).await?;
-    Ok(Json(text_content_to_json(result)))
+    let json_response = text_content_to_json(result.clone());
+
+    // Check for viewer-source exclusion
+    let is_viewer = headers
+        .get("X-Mempalace-Source")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("viewer"))
+        .unwrap_or(false);
+
+    if !is_viewer {
+        // Extract agent_id and project from the request body
+        let agent_id = body
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let project = body
+            .get("project")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
+
+        // Extract result IDs from the tool response
+        let result_ids: Vec<String> = json_response
+            .get("semantic_results")
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.get("id").and_then(|id| id.as_str().map(String::from)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut tracker = state_guard.followup_tracker.lock().await;
+        if let Some(ev) = tracker.record_search(agent_id, project, &json_response.get("query").and_then(|q| q.as_str()).unwrap_or(""), &result_ids) {
+            info!(
+                "followup detected: agent={}, project={}, query_a={}, query_b={}",
+                agent_id, project, ev.query_a, ev.query_b
+            );
+        }
+    }
+
+    Ok(Json(json_response))
+}
+
+async fn diagnostics_followup_handler(
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let state_guard = state.lock().await;
+    let tracker = state_guard.followup_tracker.lock().await;
+    let metrics = tracker.metrics();
+    Ok(Json(serde_json::to_value(metrics).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: e.to_string(),
+    })?))
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +538,29 @@ async fn graph_stats_handler(
     let args = json!({}).as_object().unwrap().clone();
     let result = invoke_tool(&state_guard, "mempalace_graph_stats", args).await?;
     Ok(Json(text_content_to_json(result)))
+}
+
+async fn graph_snapshot_rebuild_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<axum::response::Response, ApiError> {
+    let state_guard = state.lock().await;
+    let args: JsonObject = serde_json::to_value(body)
+        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: e.to_string() })?
+        .as_object()
+        .unwrap()
+        .clone();
+    let result = invoke_tool(&state_guard, "mempalace_kg_snapshot_rebuild", args).await;
+    Ok(tool_result_to_response(result))
+}
+
+async fn graph_reset_handler(
+    State(state): State<SharedState>,
+) -> Result<axum::response::Response, ApiError> {
+    let state_guard = state.lock().await;
+    let args = json!({}).as_object().unwrap().clone();
+    let result = invoke_tool(&state_guard, "mempalace_kg_reset", args).await;
+    Ok(tool_result_to_response(result))
 }
 
 async fn graph_search_handler(
@@ -2302,6 +2380,8 @@ fn build_router(state: SharedState) -> Router {
         .route("/graph/stats", get(graph_stats_handler))
         .route("/graph/search", post(graph_search_handler))
         .route("/graph/expand", post(graph_expand_handler))
+        .route("/graph/snapshot-rebuild", post(graph_snapshot_rebuild_handler))
+        .route("/graph/reset", post(graph_reset_handler))
         // Diary
         .route("/diary/read", get(diary_read_handler))
         .route("/diary/write", post(diary_write_handler))
@@ -2434,6 +2514,8 @@ fn build_router(state: SharedState) -> Router {
         // SSE Transport (P13)
         .route("/sse", get(sse_handler))
         .route("/mcp", post(mcp_handler))
+        // Diagnostics
+        .route("/diagnostics/followup", get(diagnostics_followup_handler))
         .layer(cors)
         .with_state(state)
 }
@@ -2453,10 +2535,12 @@ pub async fn run_http_server(
     );
 
     let disk_size_manager = DiskSizeManager::new(10 * 1024 * 1024 * 1024);
+    let followup_tracker = Arc::new(Mutex::new(FollowupTracker::new()));
     let state = Arc::new(Mutex::new(HttpServerState {
         app_state,
         read_only,
         disk_size_manager: Arc::new(Mutex::new(disk_size_manager)),
+        followup_tracker,
         embedder,
     }));
 
@@ -2478,10 +2562,12 @@ pub async fn run_http_server(
     port: u16,
 ) -> anyhow::Result<()> {
     let disk_size_manager = DiskSizeManager::new(10 * 1024 * 1024 * 1024);
+    let followup_tracker = Arc::new(Mutex::new(FollowupTracker::new()));
     let state = Arc::new(Mutex::new(HttpServerState {
         app_state,
         read_only,
         disk_size_manager: Arc::new(Mutex::new(disk_size_manager)),
+        followup_tracker,
     }));
 
     let addr = format!("0.0.0.0:{}", port);
@@ -2494,10 +2580,53 @@ pub async fn run_http_server(
     Ok(())
 }
 
-/// Get the port from environment variable or default to 3111.
-pub fn get_http_port() -> u16 {
-    std::env::var("MEMPALACE_HTTP_PORT")
+/// Compute the REST API port.
+///
+/// Precedence:
+///   1. MEMPALACE_HTTP_PORT env var
+///   2. `port_override` (from `--port`)
+///   3. `instance_override` (from `--instance`): 3111 + N*100
+///   4. Default: 3111
+///
+/// # Errors
+/// Returns an error if both `port_override` and `instance_override` are `Some`.
+pub fn get_http_port(
+    port_override: Option<u16>,
+    instance_override: Option<u16>,
+) -> Result<u16, String> {
+    if port_override.is_some() && instance_override.is_some() {
+        return Err("--port and --instance are mutually exclusive".to_string());
+    }
+    if let Ok(p) = std::env::var("MEMPALACE_HTTP_PORT") {
+        if let Ok(n) = p.parse::<u16>() {
+            return Ok(n);
+        }
+    }
+    if let Some(p) = port_override {
+        return Ok(p);
+    }
+    if let Some(n) = instance_override {
+        return Ok(3111u16.saturating_add(n.saturating_mul(100)));
+    }
+    Ok(3111)
+}
+
+/// Get the stream port (HTTP + 1). Override via `MEMPALACE_STREAM_PORT` env var.
+/// When `rest_port` is provided it is used as the fallback base; otherwise
+/// the env var is tried, then 3112.
+pub fn get_stream_port(rest_port: Option<u16>) -> u16 {
+    std::env::var("MEMPALACE_STREAM_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(3111)
+        .unwrap_or_else(|| rest_port.unwrap_or(3111).saturating_add(1))
+}
+
+/// Get the engine port (REST + 46023). Override via `MEMPALACE_ENGINE_PORT` env var.
+/// When `rest_port` is provided it is used as the fallback base; otherwise
+/// the env var is tried, then 49134.
+pub fn get_engine_port(rest_port: Option<u16>) -> u16 {
+    std::env::var("MEMPALACE_ENGINE_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| rest_port.unwrap_or(3111).saturating_add(46023))
 }

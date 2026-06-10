@@ -1,19 +1,52 @@
 ---
 name: commit-context
-description: Trace a file, function, or line back to the agent session that produced its current commit. Use when the user asks "why is this code here", "what was the agent doing when this changed", or wants context on a specific location in the codebase.
+description: Trace a file, function, or line back to the agent session that produced its current commit
 argument-hint: "[file, function, or line]"
 user-invocable: true
 ---
 
 The user wants commit context for: $ARGUMENTS
 
-Run `git blame` (or `git log -L`) on the target file, function, or line in $ARGUMENTS to extract the most recent commit SHA that touched it. Use `git blame -L <start>,<end> <file>` when a line range is given, `git log -L :<function>:<file>` when a function name is given, and `git log -n 1 -- <file>` when only a path is given.
+## Quick start
 
-With the SHA in hand, look up the linked agent session via the `memory_commit_lookup` MCP tool with `sha: "<full-sha>"`. If the MCP tool is unavailable, fall back to HTTP: `GET $MEMPALACE_URL/mempalace/session/by-commit?sha=<sha>` with `Authorization: Bearer $MEMPALACE_SECRET` when the secret is set.
+Run `git blame`/`git log`, get the SHA, call `memory_commit_lookup`.
 
-Present the result as:
-- The commit SHA, short SHA, branch, author, message
-- The linked session(s): id, project, started/ended timestamps, observation count, summary if any
-- A short list of the most important observations from that session (importance >= 7) when available via `memory_recall`
+## Why
 
-Do not fabricate intent. If the commit has no linked session, say so plainly and surface only what `git show` reveals. If `memory_commit_lookup` returns an empty `commit: null` body, that means the commit predates session linking — do not invent a session.
+Understand why a line of code exists by linking it to the agent session that created it.
+
+## Workflow
+
+1. Run git command based on input:
+   - Line range: `git blame -L <start>,<end> <file>`
+   - Function name: `git log -L :<function>:<file>`
+   - File path only: `git log -n 1 -- <file>`
+2. Extract the most recent commit SHA.
+3. Call `memory_commit_lookup` with `sha: "<full-sha>"`.
+4. Present: commit SHA/branch/author/message, linked session, and key observations.
+
+## Anti-patterns
+
+**WRONG** -- inventing a session for unlinked commits:
+
+```text
+// "memory_commit_lookup returned null so I made up a session"
+```
+
+**RIGHT** -- stating the fact:
+
+```text
+// No linked session found. This commit predates session linking.
+```
+
+**WRONG** -- using short SHA:
+
+```text
+// memory_commit_lookup expects a full SHA, not the 7-char abbreviation
+```
+
+## REST fallback
+
+If MCP is unavailable: `GET $MEMPALACE_URL/commits/{sha}` with `Authorization: Bearer $MEMPALACE_SECRET`.
+
+> See `_shared/TROUBLESHOOTING.md` and `EXAMPLES.md` for more.

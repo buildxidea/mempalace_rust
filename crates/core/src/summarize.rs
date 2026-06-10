@@ -58,7 +58,34 @@ pub struct SessionSummary {
     pub concepts: Vec<String>,
 }
 
-pub fn parse_summary_xml(xml: &str) -> Result<SessionSummary> {
+/// Strip markdown code fences and conversational preamble from an LLM XML response.
+///
+/// Some providers (DeepSeek, Qwen, occasionally Anthropic) wrap structured XML
+/// in ```xml ... ``` fences with optional conversational pre/postamble.
+/// This strips them so the regex XML parser can match.
+fn strip_xml_wrappers(raw: &str) -> &str {
+    let s = raw.trim();
+    // Remove opening ```xml ... ``` or ``` ... ``` fences and anything before them
+    if let Some(start) = s.find("```") {
+        // Find where the actual XML starts (after the fence line)
+        let after_fence = &s[start + 3..];
+        let content_start = after_fence.find('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let body = &after_fence[content_start..];
+        // Find the closing ``` if any
+        if let Some(end) = body.rfind("```") {
+            return body[..end].trim();
+        }
+        return body.trim();
+    }
+    // Also handle the case where there's a bare ``` without language tag
+    // (the str.find above already covers it)
+    s
+}
+
+pub fn parse_summary_xml(raw_xml: &str) -> Result<SessionSummary> {
+    let xml = strip_xml_wrappers(raw_xml);
     let title_re = regex::Regex::new(r#"<title>([^<]+)</title>"#)?;
     let narrative_re = regex::Regex::new(r#"<narrative>([\s\S]*?)</narrative>"#)?;
     let decision_re = regex::Regex::new(r#"<decision>([^<]+)</decision>"#)?;
@@ -126,6 +153,35 @@ pub async fn summarize_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_strip_xml_wrappers_bare() {
+        let xml = "<session_summary><title>Test</title></session_summary>";
+        assert_eq!(strip_xml_wrappers(xml), xml);
+    }
+
+    #[test]
+    fn test_strip_xml_wrappers_fenced() {
+        let raw = "```xml\n<session_summary>\n  <title>Auth Implementation</title>\n</session_summary>\n```";
+        let stripped = strip_xml_wrappers(raw);
+        assert!(stripped.contains("<title>Auth Implementation</title>"));
+        assert!(!stripped.contains("```"));
+    }
+
+    #[test]
+    fn test_strip_xml_wrappers_conversational() {
+        let raw = "Here is the summary:\n\n```xml\n<session_summary>\n  <title>Refactor DB</title>\n</session_summary>\n```\n\nLet me know if you need changes.";
+        let stripped = strip_xml_wrappers(raw);
+        assert!(stripped.contains("<title>Refactor DB</title>"));
+        assert!(!stripped.contains("Here is the summary"));
+    }
+
+    #[test]
+    fn test_strip_xml_wrappers_no_newline_after_fence() {
+        let raw = "```xml<session_summary><title>Tight</title></session_summary>```";
+        let stripped = strip_xml_wrappers(raw);
+        assert!(stripped.contains("<title>Tight</title>"));
+    }
 
     #[test]
     fn test_parse_summary_xml() {

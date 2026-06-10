@@ -1,21 +1,50 @@
 ---
 name: handoff
-description: Resume the most recent agent session for the current working directory. Use when the user says "where were we", "resume", "handoff", "pick up where I left off", or starts a session with no fresh context.
+description: Resume the most recent agent session for the current working directory
 argument-hint: "[optional cwd override]"
 user-invocable: true
 ---
 
 The user wants to resume work. Optional cwd override: $ARGUMENTS
 
-Determine the current project path: if `$ARGUMENTS` is provided, resolve it to an absolute, normalized path (accept relative inputs, e.g. `path.resolve(process.cwd(), $ARGUMENTS)`); otherwise use the current working directory.
+## Quick start
 
-Call the `memory_sessions` MCP tool. From the result, pick the most recent session whose normalized `cwd` matches the project path with a directory-boundary check — equality OR `session.cwd.startsWith(projectPath + path.sep)` OR `projectPath.startsWith(session.cwd + path.sep)`. Do NOT use a raw string prefix match: it produces false positives across unrelated repos that share a path prefix (e.g. `/repo-a` vs `/repo-a-staging`). Prefer sessions with status `completed` over `abandoned`. If nothing matches, fall back to the single most recent session overall.
+Call `memory_sessions`, find the most recent session matching the project path, summarize it.
 
-Once a session is selected:
-1. If the session ended on an unanswered user-facing question, surface that question FIRST as the lead. Look for it in `summary` or in the last few observations (type `conversation` with `narrative` ending in `?`).
-2. Then summarize the session: title/summary, key files touched, key decisions or errors. Use `memory_recall` with a query derived from the session's top concepts to fetch supporting observations, limit 10.
-3. End with a short "next step?" pointer the user can act on.
+## Why
 
-If neither MCP tool is available, fall back to HTTP: `GET $MEMPALACE_URL/mempalace/sessions` and `POST $MEMPALACE_URL/mempalace/recall` with `Authorization: Bearer $MEMPALACE_SECRET` when set.
+Pick up where the last session left off without re-reading history from scratch.
 
-Do not invent observations. If the most recent session has zero observations, say so and offer to start fresh.
+## Workflow
+
+1. Determine project path: `$ARGUMENTS` override or current `cwd`.
+2. Call `memory_sessions`, find the most recent session whose `cwd` matches (directory-boundary check). Prefer `completed` over `abandoned`.
+3. If the session ended on an unanswered question (narrative ending in `?`), surface it first.
+4. Summarize: title, key files, key decisions/errors. Call `memory_recall` with session concepts, limit 10.
+5. End with a "next step" pointer.
+
+## Anti-patterns
+
+**WRONG** -- raw string prefix match on `cwd`:
+
+```text
+// session.cwd.startsWith("/repo") matches unrelated "/repo-staging"
+```
+
+**RIGHT** -- directory-boundary check:
+
+```text
+// session.cwd == projectPath OR startsWith(projectPath + path.sep) OR vice versa
+```
+
+**WRONG** -- ignoring the unanswered question:
+
+```text
+// Session ended with "Should we keep the fallback?" but you don't mention it
+```
+
+## REST fallback
+
+If MCP tools are unavailable: `GET $MEMPALACE_URL/sessions` and `POST $MEMPALACE_URL/smart_search` with `Authorization: Bearer $MEMPALACE_SECRET`.
+
+> See `_shared/TROUBLESHOOTING.md` and `EXAMPLES.md` for more.

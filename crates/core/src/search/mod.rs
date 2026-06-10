@@ -5,6 +5,7 @@
 /// session-based result diversification, smart search modes, and cross-encoder reranking.
 pub mod cjk_segmenter;
 pub mod diversify;
+pub mod followup;
 pub mod query_expansion;
 pub mod reranker;
 pub mod rrf;

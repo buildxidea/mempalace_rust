@@ -268,6 +268,8 @@ export default function mempalaceExtension(pi: ExtensionAPI) {
           tool_name: "conversation",
           input: lastPrompt.slice(0, 500),
           output: assistantText.slice(0, 4000),
+          tool_input: lastPrompt.slice(0, 500),
+          tool_output: assistantText.slice(0, 4000),
         },
       },
     });

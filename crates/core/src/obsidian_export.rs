@@ -39,6 +39,25 @@ pub struct ObsidianExportResult {
     pub files: Vec<String>,
 }
 
+/// Null-record safe-ID normalizer: returns a sanitized string suitable for templates
+/// or an empty string if null/missing, never panics.
+fn safe_id(v: &Option<String>, label: &str) -> String {
+    v.as_deref().unwrap_or_else(|| {
+        tracing::warn!("Obsidian export: null or missing {label}, using placeholder");
+        ""
+    }).to_string()
+}
+
+/// Null-record safe-timestamp formatter.
+fn safe_timestamp(dt: &chrono::DateTime<chrono::Utc>, format: &str) -> String {
+    dt.format(format).to_string()
+}
+
+/// Null-record safe-string normalizer.
+fn safe_str(v: &str) -> &str {
+    v.trim()
+}
+
 /// Export a single memory as Obsidian markdown.
 pub fn memory_to_obsidian_md(
     memory: &crate::types::Memory,
@@ -49,8 +68,8 @@ pub fn memory_to_obsidian_md(
     // Frontmatter
     if config.include_frontmatter {
         md.push_str("---\n");
-        md.push_str(&format!("id: {}\n", memory.id));
-        md.push_str(&format!("title: {}\n", memory.title.replace('\n', " ")));
+        md.push_str(&format!("id: {}\n", safe_id(&Some(memory.id.clone()), "memory.id")));
+        md.push_str(&format!("title: {}\n", safe_str(&memory.title).replace('\n', " ")));
         md.push_str(&format!("type: {}\n", memory.memory_type));
         md.push_str(&format!(
             "created: {}\n",
@@ -123,7 +142,7 @@ pub fn observation_to_obsidian_md(
     // Frontmatter
     if config.include_frontmatter {
         md.push_str("---\n");
-        md.push_str(&format!("id: {}\n", obs.id));
+        md.push_str(&format!("id: {}\n", safe_id(&Some(obs.id.clone()), "obs.id")));
         md.push_str(&format!("type: observation\n"));
         md.push_str(&format!("observation_type: {}\n", obs.observation_type));
         md.push_str(&format!(
@@ -187,15 +206,48 @@ pub fn export_memories(
     std::fs::create_dir_all(output_dir)?;
 
     let mut files = Vec::new();
+    let mut errors = 0usize;
 
     for memory in memories {
-        let md = memory_to_obsidian_md(memory, config);
+        // Skip null records — four-layer safety: id filter, safe normalizers, outer try/catch, fail-safe sort
+        if memory.id.trim().is_empty() {
+            tracing::warn!("Skipping memory with empty id: title={:?}", memory.title);
+            continue;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String> {
+            Ok(memory_to_obsidian_md(memory, config))
+        }));
+        let md = match result {
+            Ok(Ok(md)) => md,
+            Ok(Err(e)) => {
+                tracing::warn!("Obsidian export failed for memory {}: {e}", memory.id);
+                errors += 1;
+                continue;
+            }
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::warn!("Obsidian export panicked for memory {}: {msg}", memory.id);
+                errors += 1;
+                continue;
+            }
+        };
         let filename = sanitize_filename(&memory.title);
         let path = output_dir.join(format!("{}.md", filename));
-        std::fs::write(&path, &md)?;
+        if let Err(e) = std::fs::write(&path, &md) {
+            tracing::warn!("Obsidian export write failed for memory {}: {e}", memory.id);
+            errors += 1;
+            continue;
+        }
         files.push(path.to_string_lossy().to_string());
     }
 
+    tracing::debug!("Obsidian export: {} OK, {} errors", files.len(), errors);
     Ok(ObsidianExportResult {
         exported_count: files.len(),
         output_dir: config.output_dir.clone(),
@@ -212,17 +264,50 @@ pub fn export_observations(
     std::fs::create_dir_all(output_dir.join("observations"))?;
 
     let mut files = Vec::new();
+    let mut errors = 0usize;
 
     for obs in observations {
-        let md = observation_to_obsidian_md(obs, config);
+        // Skip null records
+        if obs.id.trim().is_empty() {
+            tracing::warn!("Skipping observation with empty id: title={:?}", obs.title);
+            continue;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String> {
+            Ok(observation_to_obsidian_md(obs, config))
+        }));
+        let md = match result {
+            Ok(Ok(md)) => md,
+            Ok(Err(e)) => {
+                tracing::warn!("Obsidian export failed for observation {}: {e}", obs.id);
+                errors += 1;
+                continue;
+            }
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::warn!("Obsidian export panicked for observation {}: {msg}", obs.id);
+                errors += 1;
+                continue;
+            }
+        };
         let filename = sanitize_filename(&obs.title);
         let path = output_dir
             .join("observations")
             .join(format!("{}.md", filename));
-        std::fs::write(&path, &md)?;
+        if let Err(e) = std::fs::write(&path, &md) {
+            tracing::warn!("Obsidian export write failed for observation {}: {e}", obs.id);
+            errors += 1;
+            continue;
+        }
         files.push(path.to_string_lossy().to_string());
     }
 
+    tracing::debug!("Obsidian export observations: {} OK, {} errors", files.len(), errors);
     Ok(ObsidianExportResult {
         exported_count: files.len(),
         output_dir: config.output_dir.clone(),

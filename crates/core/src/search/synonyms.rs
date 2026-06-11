@@ -105,18 +105,45 @@ pub const SYNONYM_GROUPS: &[&[&str]] = &[
     &["serialize", "serialization"],
     &["encrypt", "encryption"],
     &["hash", "hashing"],
-
     // ── Preference / opinion ──
-    &["prefer", "preference", "prefers", "preferred", "rather", "would-rather"],
+    &[
+        "prefer",
+        "preference",
+        "prefers",
+        "preferred",
+        "rather",
+        "would-rather",
+    ],
     &["like", "likes", "liked", "enjoy", "enjoys", "love", "loves"],
     &["want", "wants", "wanted", "wish", "wishes", "would-like"],
-    &["think", "thinks", "thought", "believe", "believes", "feel", "feels"],
-    &["choose", "chooses", "chose", "choice", "pick", "picks", "select", "selects"],
+    &[
+        "think", "thinks", "thought", "believe", "believes", "feel", "feels",
+    ],
+    &[
+        "choose", "chooses", "chose", "choice", "pick", "picks", "select", "selects",
+    ],
     &["opinion", "opinions", "view", "views", "perspective"],
     // ── Comparison ──
-    &["better", "best", "worse", "worst", "compare", "comparison", "versus", "vs"],
+    &[
+        "better",
+        "best",
+        "worse",
+        "worst",
+        "compare",
+        "comparison",
+        "versus",
+        "vs",
+    ],
     // ── Reasoning ──
-    &["reason", "reasons", "because", "since", "why", "explain", "explanation"],
+    &[
+        "reason",
+        "reasons",
+        "because",
+        "since",
+        "why",
+        "explain",
+        "explanation",
+    ],
 ];
 
 /// Look up all synonyms for a given word (case-insensitive).

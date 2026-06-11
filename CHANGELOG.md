@@ -148,3 +148,10 @@ Initial release of mempalace_rust — Rust port of the MemPalace AI memory syste
 
 - 1256 tests pass, 2 pre-existing sandbox failures (port binding)
 - rustfmt compliance across codebase
+
+## v0.3.1 (2026-06-12)
+
+### Bug Fixes
+
+- **Install script**: Robust GitHub API parsing with `Accept: application/vnd.github+json` header, safer `grep`/`sed` patterns, and local git tag fallback (`v0.3.0-1-g352218b`) when API/remote fails
+- **CI/CD fixes**: Resolved compilation errors from concurrent agent edits — unused variables, mutability issues, API signature mismatches in `health.rs`, `mcp_server.rs`, `cli.rs`, `flow_compress.rs`

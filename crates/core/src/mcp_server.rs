@@ -8342,7 +8342,7 @@ mod tests {
         let state = test_state();
         let routine_id = "test_routine_1";
         {
-            let mut db = crate::palace_db::PalaceDb::open(&state.palace_path).unwrap();
+            let db = crate::palace_db::PalaceDb::open(&state.palace_path).unwrap();
             let mut coord = db.coordination();
             coord
                 .routine_create(&crate::palace_db::Routine {

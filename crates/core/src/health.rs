@@ -722,7 +722,7 @@ impl HealthCheck for EventLoopLagCheck {
         let lag = self.handle.lag_ms();
         let value = lag as f64;
         let warn = self.warn_ms as f64;
-        let crit = self.crit_ms as f64;
+        let _crit = self.crit_ms as f64;
 
         let status = if lag >= self.crit_ms {
             HealthStatus::Critical
@@ -862,6 +862,14 @@ impl GlobalHealthMonitor {
     /// Run all checks and return the report.
     pub async fn run_all(&self) -> HealthReport {
         self.monitor.read().await.run_all()
+    }
+
+    /// Maps `HealthReport.status` to an HTTP status code.
+    pub fn to_http_status(&self, report: &HealthReport) -> u16 {
+        match report.status {
+            HealthStatus::Critical => 503,
+            _ => 200,
+        }
     }
 
     /// Reset the monitor (re-creates all check handles).

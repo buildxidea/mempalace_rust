@@ -151,7 +151,7 @@ pub async fn search_memories(
         room,
         n_results,
         embedding_model,
-        true,
+        false,
         None,
         None,
     )

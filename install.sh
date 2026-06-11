@@ -66,9 +66,14 @@ resolve_version() {
 
   # Get latest release tag from GitHub API
   local tag
-  tag=$(curl -sSL --fail "https://api.github.com/repos/${repo}/releases/latest" \
+  # Try GitHub API, then git ls-remote, then local git tag
+  local api_response
+  api_response=$(curl -sSL \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null || true)
+  tag=$(echo "$api_response" \
     | grep -E '"tag_name":' \
-    | sed -E 's/.*"tag_name":\s*"v?([^"]+)".*/\1/' \
+    | sed -E 's/.*"tag_name":[[:space:]]*"v?([^"]+)".*/\1/' \
     | tr -d '[:space:]' \
     || echo "")
 
@@ -83,8 +88,15 @@ resolve_version() {
   fi
 
   if [[ -z "$tag" ]]; then
+    # Final fallback: try local git tag (when running from repo checkout)
+    if git rev-parse --git-dir >/dev/null 2>&1; then
+      tag=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "")
+    fi
+  fi
+  if [[ -z "$tag" ]]; then
     log_err "Could not resolve latest version from GitHub API"
     log_info "Use --version to specify a version explicitly"
+    log_info "  Example: curl -fsSL https://raw.githubusercontent.com/quangdang46/mempalace_rust/main/install.sh | bash -s -- --version 0.3.0"
     exit 1
   fi
 

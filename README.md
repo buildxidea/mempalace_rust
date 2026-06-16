@@ -76,6 +76,26 @@ curl -fsSL https://raw.githubusercontent.com/quangdang46/mempalace_rust/main/ins
 
 Single binary `mpr` installed to `/usr/local/bin/`. The installer auto-detects your AI tools and wires the MCP server — no manual config editing.
 
+### Windows (native PowerShell)
+
+```powershell
+# Download the latest Windows binary from releases
+# https://github.com/quangdang46/mempalace_rust/releases
+# Extract mpr.exe and add to PATH, or use:
+iwr -Uri "https://raw.githubusercontent.com/quangdang46/mempalace_rust/main/install.ps1" | iex
+```
+
+MemPalace runs natively on Windows 10/11 (x86_64 and ARM). The PowerShell installer handles PATH setup and MCP configuration for Windows AI tools (Claude Code via WSL, Cursor, VS Code).
+
+**PowerShell note:** If `npx` caches a stale version, clear with:
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\npm-cache\_npx"
+```
+
+Or force the latest with `npx -y mempalace@latest`.
+
+### From source
+
 ### From source
 
 ```bash

@@ -399,7 +399,7 @@ impl Default for Config {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
-            embedder_identity_strict: false,
+            embedder_identity_strict: true,
         }
     }
 }

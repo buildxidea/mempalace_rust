@@ -112,6 +112,7 @@ impl LlmProvider for AnthropicProvider {
         if std::env::var("MEMPALACE_LLM_EXTERNAL_WARN")
             .map(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"))
             .unwrap_or(true)
+            && !base_url_is_local("https://api.anthropic.com")
         {
             let approx_bytes = system.len() + user.len();
             tracing::warn!(

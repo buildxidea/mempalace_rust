@@ -75,6 +75,9 @@ impl SessionStore {
     /// session with this id already exists, return it; otherwise
     /// create a stub session with the given project/cwd.
     ///
+    /// Uses INSERT OR IGNORE to avoid a TOCTOU race between the
+    /// existence check and the insert.
+    ///
     /// Used by OpenCode normalizer to satisfy the observations.session_id
     /// FK without requiring an explicit session bootstrap step.
     pub fn ensure_session(
@@ -83,10 +86,16 @@ impl SessionStore {
         project: &str,
         cwd: &str,
     ) -> anyhow::Result<Session> {
-        if let Some(existing) = self.get_session(id)? {
-            return Ok(existing);
-        }
-        self.create_session(id, project, cwd)
+        let conn = self.conn.blocking_lock();
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions
+                (id, project, cwd, started_at, status, observation_count,
+                 tags, commit_shas)
+             VALUES (?1, ?2, ?3, ?4, 'active', 0, '[]', '[]')",
+            rusqlite::params![id, project, cwd, chrono::Utc::now().to_rfc3339()],
+        )?;
+        drop(conn);
+        self.get_session(id)?.ok_or_else(|| anyhow::anyhow!("session {} not found after ensure", id))
     }
 
     pub fn get_session(&self, id: &str) -> anyhow::Result<Option<Session>> {
@@ -142,35 +151,27 @@ impl SessionStore {
     }
 
     pub fn add_observation(&self, obs: &RawObservation) -> anyhow::Result<()> {
+        // mr-kqrs (B15): ensure the parent session row exists before
+        // the observation insert. Delegates to ensure_session so there
+        // is a single session auto-creation path rather than duplicating
+        // the INSERT OR IGNORE logic here.
+        //
+        // We populate a minimal session row from observation metadata
+        // when one is absent. The fields are best-effort: project and
+        // cwd fall back to "unknown"/"unknown" if not annotated.
+        let project = obs
+            .agent_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let cwd = "unknown";
+        self.ensure_session(&obs.session_id, &project, cwd)?;
+
         let conn = self.conn.blocking_lock();
         let image_data = obs
             .image_data
             .as_ref()
             .map(|img| serde_json::to_string(img))
             .transpose()?;
-        // mr-kqrs (B15): INSERT OR IGNORE the parent session row
-        // before the observation insert. The sessions table has a
-        // FOREIGN KEY constraint on observations.session_id; without
-        // this, the observation insert fails with an FK error when a
-        // caller (notably the OpenCode normalizer) drops an
-        // observation into a never-created session.
-        //
-        // We populate a minimal session row from observation metadata
-        // when one is absent. The fields are best-effort: project and
-        // cwd fall back to "unknown"/"unknown" if not annotated.
-        let now = obs.timestamp.to_rfc3339();
-        let project = obs
-            .agent_id
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        let cwd = "unknown";
-        conn.execute(
-            "INSERT OR IGNORE INTO sessions
-                (id, project, cwd, started_at, status, observation_count,
-                 tags, commit_shas)
-             VALUES (?1, ?2, ?3, ?4, 'active', 0, '[]', '[]')",
-            params![obs.session_id, project, cwd, now],
-        )?;
         conn.execute(
             "INSERT INTO observations (
                 id, session_id, timestamp, hook_type, tool_name, tool_input,

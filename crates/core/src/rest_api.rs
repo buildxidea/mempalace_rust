@@ -223,7 +223,9 @@ async fn list_tools_handler(
             "mempalace_slot_list", "mempalace_slot_get", "mempalace_slot_create",
             "mempalace_sentinel_list", "mempalace_checkpoint_list",
             "mempalace_sessions", "mempalace_commits", "mempalace_team_share",
-            "mempalace_reflect", "mempalace_migrate"
+            "mempalace_reflect", "mempalace_migrate",
+            "mempalace_list_hallways", "mempalace_delete_hallway",
+            "mempalace_mine"
         ]
     })))
 }

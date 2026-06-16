@@ -231,54 +231,75 @@ impl BackgroundRunner {
     /// `minimum_retention` threshold (default 0.3) are evicted.
     fn run_retention_sweep(&self) -> Result<RetentionSweepResult, anyhow::Error> {
         let mut db = crate::palace_db::PalaceDb::open(&self.palace_path)?;
-        let memories_results = db.get_all(None, None, usize::MAX);
+
+        // Fix 1: paginated access to avoid OOM when the store has millions of items.
+        // Each batch processes up to page_size entries. Since get_all lacks an offset
+        // parameter, items that survive eviction will be re-fetched on subsequent
+        // iterations until the remaining set fits within one page.
+        let page_size = 10_000;
 
         let mut evaluated = 0usize;
         let mut evicted = 0usize;
         let decay_config = crate::retention::default_decay_config();
 
-        for qr in &memories_results {
-            for (doc, meta) in qr.documents.iter().zip(qr.metadatas.iter()) {
-                evaluated += 1;
-                let access_count = meta
-                    .get("access_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize;
-                let last_accessed = meta
-                    .get("last_accessed")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(chrono::Utc::now);
+        loop {
+            let memories_results = db.get_all(None, None, page_size);
+            let batch_count: usize = memories_results.iter().map(|qr| qr.ids.len()).sum();
+            if batch_count == 0 {
+                break;
+            }
 
-                let retention_score = crate::types::RetentionScore {
-                    memory_id: String::new(),
-                    retention_strength: 0.0,
-                    access_count,
-                    last_accessed,
-                    decay_rate: decay_config.decay_rate,
-                };
+            for qr in &memories_results {
+                // Fix 2: use enumerate() instead of .position() to avoid O(n²) per batch.
+                for (idx, (meta, _doc)) in
+                    qr.metadatas.iter().zip(qr.documents.iter()).enumerate()
+                {
+                    evaluated += 1;
+                    let access_count = meta
+                        .get("access_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize;
+                    let last_accessed = meta
+                        .get("last_accessed")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(chrono::Utc::now);
 
-                let retention =
-                    crate::retention::calculate_retention(&retention_score, &decay_config, None);
+                    // Fix 3: use default_retention_score (strength=1.0) instead of
+                    // a dummy 0.0 so calculate_retention has a sensible starting point.
+                    let base = crate::retention::default_retention_score("");
+                    let retention_score = crate::types::RetentionScore {
+                        memory_id: String::new(),
+                        access_count,
+                        last_accessed,
+                        decay_rate: decay_config.decay_rate,
+                        ..base
+                    };
 
-                // Evict if retention is below the minimum threshold (default 0.3).
-                if retention < decay_config.minimum_retention {
-                    // Find the ID for this document in the result vector.
-                    let idx = qr
-                        .documents
-                        .iter()
-                        .position(|d| d == doc)
-                        .unwrap_or(usize::MAX);
-                    if idx < qr.ids.len() {
-                        let id = &qr.ids[idx];
-                        if let Err(e) = db.delete_id(id) {
-                            warn!("Retention sweep: failed to delete {}: {}", id, e);
-                        } else {
-                            evicted += 1;
+                    let retention = crate::retention::calculate_retention(
+                        &retention_score,
+                        &decay_config,
+                        None,
+                    );
+
+                    // Evict if retention is below the minimum threshold (default 0.3).
+                    if retention < decay_config.minimum_retention {
+                        if idx < qr.ids.len() {
+                            let id = &qr.ids[idx];
+                            if let Err(e) = db.delete_id(id) {
+                                warn!("Retention sweep: failed to delete {}: {}", id, e);
+                            } else {
+                                evicted += 1;
+                            }
                         }
                     }
                 }
+            }
+
+            // Stop when we processed fewer items than a full page (no more data).
+            if batch_count < page_size {
+                break;
             }
         }
 

@@ -177,6 +177,9 @@ pub struct AppState {
     /// Followup tracking for smart_search (mr-6g8z). Tracks when a
     /// second search within the time window has zero overlap with the prior.
     pub followup_tracker: std::sync::Arc<std::sync::Mutex<crate::search::followup::FollowupTracker>>,
+    /// Shared session store (Finding 5). Opened once at startup and reused
+    /// across tool_observe calls instead of opening a new connection each time.
+    pub session_store: std::sync::Arc<crate::session::SessionStore>,
 }
 
 impl AppState {
@@ -184,6 +187,9 @@ impl AppState {
         let palace_path = config.palace_path.clone();
         let db = crate::palace_db::PalaceDb::open(&palace_path)?;
         let mesh = crate::coordination::mesh::Mesh::new(None);
+        let session_store = std::sync::Arc::new(crate::session::SessionStore::open(
+            &palace_path.join("sessions"),
+        )?);
         Ok(Self {
             config,
             db,
@@ -193,6 +199,7 @@ impl AppState {
             followup_tracker: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::search::followup::FollowupTracker::new(),
             )),
+            session_store,
         })
     }
 }
@@ -474,7 +481,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "mempalace_commits" => tool_commits(&state, args),
                 "mempalace_commit_lookup" => tool_commit_lookup(&state, args),
                 // mr-dghp: in-process mine
-                "mempalace_mine" => tool_mine(&state, args),
+                "mempalace_mine" => tool_mine(&state, args).await,
                 // Smart features - smart search with progressive disclosure
                 "mempalace_smart_search" => tool_smart_search(&state, args),
                 "mempalace_hybrid_search" => tool_hybrid_search(&state, args),
@@ -5607,6 +5614,21 @@ fn tool_observe(state: &AppState, args: JsonObject) -> Result<CallToolResult, Er
     }
     let input: Input = parse_args(args)?;
 
+    // Finding 19: reject oversized data payload before processing
+    if let Some(ref data_val) = input.data {
+        let data_str = serde_json::to_string(data_val)
+            .map_err(|e| internal_error_safe(&e))?;
+        if data_str.len() > 65536 {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "data payload too large: {} bytes (max 65536)",
+                    data_str.len()
+                ),
+                None,
+            ));
+        }
+    }
+
     let hook_type: crate::types::HookType = match input.hook_type.parse() {
         Ok(ht) => ht,
         Err(e) => {
@@ -5641,23 +5663,16 @@ fn tool_observe(state: &AppState, args: JsonObject) -> Result<CallToolResult, Er
         Err(e) => return Err(internal_error_safe(&e)),
     };
 
-    let session_store_path = state.palace_path.join("sessions");
-    match crate::session::SessionStore::open(&session_store_path) {
-        Ok(store) => {
-            if let Err(e) = store.add_observation(&obs) {
-                warn!("Failed to save observation: {}", e);
-            }
-            // Auto-end the session when a terminal hook arrives
-            if matches!(
-                hook_type,
-                crate::types::HookType::SessionEnd | crate::types::HookType::Stop
-            ) {
-                let _ = store.end_session(&input.session_id, None);
-            }
-        }
-        Err(e) => {
-            warn!("Failed to open session store: {}", e);
-        }
+    // Finding 5: reuse cached session_store from AppState instead of opening a new one
+    if let Err(e) = state.session_store.add_observation(&obs) {
+        warn!("Failed to save observation: {}", e);
+    }
+    // Auto-end the session when a terminal hook arrives
+    if matches!(
+        hook_type,
+        crate::types::HookType::SessionEnd | crate::types::HookType::Stop
+    ) {
+        let _ = state.session_store.end_session(&input.session_id, None);
     }
 
     ok_json(serde_json::json!({
@@ -6014,7 +6029,7 @@ fn tool_export(state: &AppState, _args: JsonObject) -> Result<CallToolResult, Er
     }))
 }
 
-fn tool_mine(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+async fn tool_mine(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     if state.read_only {
         return Ok(CallToolResult::error(vec![rmcp::model::Content::text(
             "mempalace_mine is disabled in read-only mode",
@@ -6027,40 +6042,67 @@ fn tool_mine(state: &AppState, args: JsonObject) -> Result<CallToolResult, Error
         mode: Option<String>,
     }
     let input: Input = parse_args_with_integer_coercion(args, &[])?;
+
+    // Finding 11: reject paths containing ".." to prevent traversal
+    if input.path.contains("..") {
+        return Ok(CallToolResult::error(vec![rmcp::model::Content::text(
+            "path must not contain '..'",
+        )]));
+    }
+
     let path = std::path::PathBuf::from(&input.path);
-    if !path.exists() {
+    // Canonicalize to verify the path is accessible and real (replaces old path.exists check)
+    if std::fs::canonicalize(&path).is_err() {
         return Ok(CallToolResult::error(vec![rmcp::model::Content::text(format!(
             "Path does not exist: {}",
             input.path
         ))]));
     }
-    let mode = input
-        .mode
-        .as_deref()
-        .map(|m| match m.to_lowercase().as_str() {
-            "projects" | "project" => crate::cli::MiningMode::Projects,
-            "convos" | "convo" | "conversations" => crate::cli::MiningMode::Convos,
-            "auto" => crate::cli::MiningMode::Auto,
-            other => {
-                crate::cli::MiningMode::Projects
-            }
-        })
-        .unwrap_or_default();
-    let palace_arg = state.palace_path.to_str();
-    let result = crate::cli::cmd_mine(
-        &path,
-        &mode,
-        None,
-        "mcp",
-        50,
-        false,
-        false,
-        &[],
-        palace_arg,
-        None,
-        false,
-        None,
-    );
+
+    // Finding 17: validate mode string before mapping
+    let mode_str = input.mode.as_deref().unwrap_or("projects");
+    match mode_str.to_lowercase().as_str() {
+        "projects" | "project" | "convos" | "convo" | "conversations" | "auto" => {}
+        _ => {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "unknown mode '{mode_str}', expected one of: projects, conversations, convos, device"
+                ),
+                None,
+            ));
+        }
+    }
+    let mode = match mode_str.to_lowercase().as_str() {
+        "projects" | "project" => crate::cli::MiningMode::Projects,
+        "convos" | "convo" | "conversations" => crate::cli::MiningMode::Convos,
+        "auto" => crate::cli::MiningMode::Auto,
+        _ => crate::cli::MiningMode::default(),
+    };
+
+    let palace_path = state.palace_path.clone();
+    let palace_arg = palace_path.to_str().map(|s| s.to_string());
+
+    // Finding 4: spawn_blocking to avoid blocking the tokio runtime
+    let mode_for_closure = mode.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::cli::cmd_mine(
+            &path,
+            &mode_for_closure,
+            None,
+            "mcp",
+            50,
+            false,
+            false,
+            &[],
+            palace_arg.as_deref(),
+            None,
+            false,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| internal_error_safe(&anyhow::anyhow!("mine task panicked: {}", e)))?;
+
     match result {
         Ok(()) => ok_json(serde_json::json!({
             "success": true,
@@ -6622,6 +6664,12 @@ mod tests {
             palace_path: state.palace_path.clone(),
             mesh: std::sync::RwLock::new(crate::coordination::mesh::Mesh::new(None)),
             followup_tracker: state.followup_tracker.clone(),
+            session_store: std::sync::Arc::new(
+                crate::session::SessionStore::open(
+                    &state.palace_path.join("sessions"),
+                )
+                .unwrap(),
+            ),
         };
         let f = make_dispatch(Arc::new(owned_state));
         let args = args.as_object().cloned().unwrap_or_default();

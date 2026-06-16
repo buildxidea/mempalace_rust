@@ -109,9 +109,9 @@ impl FallbackChain {
                     for factory in &self.re_resolve_factories {
                         match factory() {
                             Ok(new_provider) => {
-                                if !wp.circuit_breaker.allow_request().await {
-                                    continue;
-                                }
+                                // `mr-52h9` Finding 7: skip the old provider's
+                                // circuit breaker — the fresh provider hasn't
+                                // been tested yet.
                                 match new_provider.complete(system, user).await {
                                     Ok(result) => {
                                         wp.circuit_breaker.record_success();

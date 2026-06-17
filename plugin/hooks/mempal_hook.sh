@@ -23,4 +23,4 @@ case "$HARNESS" in
 esac
 
 BIN="${MEMPALACE_BIN:-mpr}"
-exec "$BIN" hook run --hook "$HOOK" --harness "$HARNESS"
+exec "$BIN" hook --hook "$HOOK"

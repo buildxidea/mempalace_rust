@@ -1,7 +1,7 @@
 #!/bin/bash
 # MEMPALACE PRE-COMPACT HOOK — Emergency save before compaction
 #
-# Rust wrapper around `mpr hook run --hook precompact`.
+# Rust wrapper around `mpr hook --hook precompact`.
 # Reads hook JSON from stdin and emits JSON to stdout.
 
 set -euo pipefail
@@ -16,4 +16,4 @@ case "$HARNESS" in
 esac
 
 BIN="${MEMPALACE_BIN:-mpr}"
-exec "$BIN" hook run --hook precompact --harness "$HARNESS"
+exec "$BIN" hook --hook precompact

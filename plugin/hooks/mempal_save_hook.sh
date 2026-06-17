@@ -1,7 +1,7 @@
 #!/bin/bash
 # MEMPALACE SAVE HOOK — Auto-save every N exchanges
 #
-# Rust wrapper around `mpr hook run --hook stop`.
+# Rust wrapper around `mpr hook --hook stop`.
 # Reads hook JSON from stdin and emits JSON to stdout.
 
 set -euo pipefail
@@ -16,4 +16,4 @@ case "$HARNESS" in
 esac
 
 BIN="${MEMPALACE_BIN:-mpr}"
-exec "$BIN" hook run --hook stop --harness "$HARNESS"
+exec "$BIN" hook --hook stop

@@ -569,7 +569,7 @@ case "\$HARNESS" in
     exit 1
     ;;
 esac
-exec "${bin_path}" hook run --hook stop --harness "\$HARNESS"
+exec "${bin_path}" hook --hook stop
 EOF
 
   cat > "$hooks_dir/mempal_precompact_hook.sh" <<EOF
@@ -583,7 +583,7 @@ case "\$HARNESS" in
     exit 1
     ;;
 esac
-exec "${bin_path}" hook run --hook precompact --harness "\$HARNESS"
+exec "${bin_path}" hook --hook precompact
 EOF
 
   chmod 755 "$hooks_dir/mempal_save_hook.sh" "$hooks_dir/mempal_precompact_hook.sh"

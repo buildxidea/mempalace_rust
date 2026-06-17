@@ -628,14 +628,14 @@ precompact_hook = os.path.join(hooks_dir, "mempal_precompact_hook.sh")
 hook_defs = {
     "Stop": [{
         "hooks": [{
-            "command": save_hook,
+            "command": "'{}'".format(save_hook),
             "type": "command",
             "statusMessage": "mempalace: saving session state",
         }],
     }],
     "PreCompact": [{
         "hooks": [{
-            "command": precompact_hook,
+            "command": "'{}'".format(precompact_hook),
             "type": "command",
             "statusMessage": "mempalace: saving before compact",
         }],

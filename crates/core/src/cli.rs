@@ -34,9 +34,11 @@ use crate::miner::{self, MiningResult};
 use crate::palace_db::{self, PalaceDb};
 use crate::room_detector_local::{detect_rooms_from_folders, RoomMapping};
 use crate::searcher;
+use crate::coordination::actions::ActionStore;
 use crate::session::SessionStore;
 use crate::split_mega_files::split_file_with_options;
 use crate::sweeper::{sweep, sweep_directory};
+use crate::types::ActionStatus;
 
 // ---------------------------------------------------------------------------
 // Environment Variables
@@ -2122,6 +2124,47 @@ fn cmd_sessions(palace_arg: Option<&str>, wing: Option<&str>, limit: usize) -> R
     Ok(())
 }
 
+fn cmd_actions(
+    palace_arg: Option<&str>,
+    status_filter: Option<&str>,
+    limit: usize,
+) -> Result<()> {
+    let palace_path = resolve_palace_path(palace_arg)?;
+    let coord_dir = palace_path.join("coordination");
+    std::fs::create_dir_all(&coord_dir).context("Failed to create coordination directory")?;
+    let store = ActionStore::open(&coord_dir.join("actions.db"))
+        .context("Failed to open action store")?;
+
+    let parsed_status = match status_filter {
+        Some(s) => Some(
+            s.parse::<ActionStatus>()
+                .map_err(|e: String| anyhow::anyhow!("Invalid action status '{}': {}", s, e))?,
+        ),
+        None => None,
+    };
+
+    let actions = store
+        .list_actions(None, parsed_status)
+        .context("Failed to list actions")?;
+
+    if actions.is_empty() {
+        let msg = match status_filter {
+            Some(s) => format!(" with status '{}'", s),
+            None => String::new(),
+        };
+        println!("No actions found{}", msg);
+    } else {
+        println!("Actions (showing up to {}):", limit);
+        for a in actions.iter().take(limit) {
+            println!(
+                "  {:<20} | P{:<2} | {:<12} | {}",
+                a.id, a.priority, a.status, a.title
+            );
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Output helpers
 // ---------------------------------------------------------------------------
@@ -2389,10 +2432,7 @@ pub fn run() -> Result<()> {
             cmd_sessions(palace_arg, wing.as_deref(), *limit)?;
         }
         Commands::Actions { status, limit } => {
-            println!(
-                "Feature coming soon: actions (status={:?}, limit={})",
-                status, limit
-            );
+            cmd_actions(palace_arg, status.as_deref(), *limit)?;
         }
         Commands::Frontier {
             agent,

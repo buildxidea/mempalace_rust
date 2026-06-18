@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.6.0 (2026-06-18)
+
+### Major: FTS5 Search Strategy (Default, 0MB)
+
+- **SearchStrategy trait** with 4 backends: FTS5, Naive, BM25, Embedding
+- **New default** search strategy is FTS5 (built into SQLite, 0MB, instant)
+- **`mpr init --search-strategy fts5|naive|bm25|embedding`** to choose at setup
+- **`mpr search --strategy fts5`** override per-call
+- Default switched from naive Jaccard to FTS5 (zero-dep by default)
+- CJK support via trigram tokenizer (future)
+
+### Major: `.md` Notes (AGENT.md / USER.md)
+
+- **`mpr remember <text>`** — append timestamped entry to AGENT.md
+- **`mpr recall`** — display both AGENT.md and USER.md
+- **`mpr user set key value`** / `mpr user get key` / `mpr user list`
+- `mempalace_note_recall` MCP tool for AI agent integration
+- Notes auto-created on `mpr init` (use `--no-notes` to skip)
+- Human-readable markdown, version-controllable, edit with any text editor
+
+### Patches
+
+- **search_strategy** config key (default: fts5)
+- **max_cache_size_mb** performance config (default: 128)
+- Low-resource optimization: auto_forget_enabled, consolidation_enabled
+- Notes auto-created on `mpr init`
+- All search strategy modules compile in release mode
+- 1,329 lib tests pass, 70 CLI integration tests pass
+
 ## v0.5.0 (2026-06-18)
 
 ### Masterplan Complete — 100% feature parity with agentmemory ~90%

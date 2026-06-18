@@ -558,17 +558,39 @@ pub fn start_background_tasks(palace_path: std::path::PathBuf) -> BackgroundRunn
                     }
                     info!("Retention sweep task stopped");
                 });
+
+                // Search history sweep task: every 2 hours
+                let search_sweep_path = palace_path.clone();
+                let search_sweep_shutdown = shutdown.clone();
+                tokio::spawn(async move {
+                    let mut ticker = interval(StdDuration::from_secs(RETENTION_SWEEP_INTERVAL_MINUTES * 60));
+                    tokio::time::sleep(StdDuration::from_secs(240)).await;
+
+                    while !search_sweep_shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                        ticker.tick().await;
+                        if search_sweep_shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                            break;
+                        }
+                        if let Ok(removed) = crate::recent_searches_sweep::run_sweep(&search_sweep_path, None) {
+                            if removed > 0 {
+                                info!("Search history sweep: removed={}", removed);
+                            }
+                        }
+                    }
+                    info!("Search history sweep task stopped");
+                });
             })
         })
         .expect("failed to spawn background thread");
 
     info!(
-        "Background tasks started: auto-forget={}m consolidation={}h lesson_decay={}h insight_decay={}h index_persist={}m retention_sweep={}m",
+        "Background tasks started: auto-forget={}m consolidation={}h lesson_decay={}h insight_decay={}h index_persist={}m retention_sweep={}m search_sweep={}m",
         AUTO_FORGET_INTERVAL_MINUTES,
         CONSOLIDATION_INTERVAL_MINUTES / 60,
         LESSON_DECAY_INTERVAL_MINUTES / 60,
         INSIGHT_DECAY_INTERVAL_MINUTES / 60,
         INDEX_PERSIST_INTERVAL_MINUTES,
+        RETENTION_SWEEP_INTERVAL_MINUTES,
         RETENTION_SWEEP_INTERVAL_MINUTES,
     );
 

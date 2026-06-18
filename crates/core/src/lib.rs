@@ -142,6 +142,8 @@ pub mod project_scanner;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod query_sanitizer;
+pub mod recent_searches_sweep;
+pub mod migrate_vector_index;
 pub mod reflect;
 pub mod relations;
 #[doc(hidden)]
@@ -379,5 +381,37 @@ pub mod error {
             #[source]
             crate::embed::ManifestMismatch,
         ),
+
+        /// Compression error (AAAK dialect, etc.).
+        #[error("Compression error: {0}")]
+        Compression(String),
+
+        /// Consolidation pipeline error.
+        #[error("Consolidation error: {0}")]
+        Consolidation(String),
+
+        /// Retention/decay error.
+        #[error("Retention error: {0}")]
+        Retention(String),
+
+        /// Coordination module error.
+        #[error("Coordination error: {0}")]
+        Coordination(String),
+
+        /// Vision/Search error.
+        #[error("Vision error: {0}")]
+        Vision(String),
+
+        /// Export/Import error.
+        #[error("Export/Import error: {0}")]
+        ExportImport(String),
+
+        /// LLM provider error.
+        #[error("LLM provider error: {0}")]
+        LlmProvider(String),
+
+        /// Circuit breaker open — operation blocked.
+        #[error("Circuit breaker open: {0}")]
+        CircuitBreakerOpen(String),
     }
 }

@@ -562,6 +562,8 @@ enum RepairCommands {
     Rebuild,
     /// Clean up stale PID file from interrupted mine operations
     CleanupPid,
+    /// Migrate vector index schema (re-index with current embedder)
+    MigrateVectorIndex,
 }
 
 #[derive(Subcommand, Clone, Debug)]
@@ -1302,6 +1304,13 @@ fn cmd_repair(cmd: &RepairCommands, palace_arg: Option<&str>) -> Result<()> {
         }
         RepairCommands::CleanupPid => {
             crate::repair::cleanup_pid(Some(palace_path.as_path()))?;
+        }
+        RepairCommands::MigrateVectorIndex => {
+            let result = crate::migrate_vector_index::migrate_index(&palace_path)?;
+            println!(
+                "  Vector index migration complete: v{} -> v{}, {} drawers re-indexed ({} errors)",
+                result.old_version, result.new_version, result.drawers_reindexed, result.errors
+            );
         }
     }
 

@@ -136,7 +136,7 @@ fn default_true() -> bool {
     true
 }
 
-fn default_topic_wings() -> Vec<String> {
+pub(crate) fn default_topic_wings() -> Vec<String> {
     vec![
         "emotions",
         "consciousness",
@@ -151,7 +151,152 @@ fn default_topic_wings() -> Vec<String> {
     .collect()
 }
 
-fn default_hall_keywords() -> HashMap<String, Vec<String>> {
+/// Domain-appropriate topic wings for code/project repositories,
+/// replacing the conversation-oriented defaults (emotions, family, etc.)
+/// with code-relevant categories.
+pub fn default_code_topic_wings() -> Vec<String> {
+    vec![
+        "architecture",
+        "backend",
+        "frontend",
+        "api",
+        "database",
+        "devops",
+        "testing",
+        "security",
+        "performance",
+        "refactoring",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// Domain-appropriate hall keywords for code/project repositories,
+/// detecting topics relevant to software projects.
+pub fn default_code_hall_keywords() -> HashMap<String, Vec<String>> {
+    let mut m = HashMap::new();
+    m.insert(
+        "architecture".to_string(),
+        vec![
+            "pattern", "architecture", "design", "module", "component", "service", "microservice",
+            "dependency", "layer", "abstraction",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m.insert(
+        "backend".to_string(),
+        vec![
+            "server", "backend", "api", "route", "endpoint", "middleware", "handler",
+            "controller", "service",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m.insert(
+        "frontend".to_string(),
+        vec![
+            "ui", "frontend", "component", "react", "vue", "css", "html", "template",
+            "render", "view",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m.insert(
+        "api".to_string(),
+        vec![
+            "api", "rest", "graphql", "endpoint", "rpc", "http", "request", "response",
+            "serialize", "json",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m.insert(
+        "database".to_string(),
+        vec![
+            "database", "sql", "query", "schema", "migration", "model", "orm", "index",
+            "transaction", "cache",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m.insert(
+        "devops".to_string(),
+        vec![
+            "deploy", "ci", "cd", "docker", "kubernetes", "pipeline", "monitor", "config",
+            "infrastructure", "terraform",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m.insert(
+        "testing".to_string(),
+        vec![
+            "test", "assert", "mock", "coverage", "integration", "unit", "e2e", "benchmark",
+            "qa", "quality",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m.insert(
+        "security".to_string(),
+        vec![
+            "auth", "oauth", "jwt", "password", "encrypt", "token", "permission", "role",
+            "secure", "vulnerability",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    m
+}
+
+/// Heuristic: detect whether a directory looks like a software project
+/// (contains source code, manifest files, git repo, etc.)
+pub fn is_code_project(dir: &std::path::Path) -> bool {
+    // Check for common code project indicators.
+    let indicators = [
+        ".git",
+        "Cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        "go.mod",
+        "CMakeLists.txt",
+        "Makefile",
+        "pom.xml",
+        "build.gradle",
+        "Gemfile",
+        "Cargo.lock",
+        "yarn.lock",
+        "package-lock.json",
+        "requirements.txt",
+        "setup.py",
+        "go.sum",
+        "composer.json",
+    ];
+    indicators.iter().any(|name| dir.join(name).exists())
+}
+
+/// Return the appropriate default topic wings for a project directory.
+/// Code repos get code-relevant wings; everything else gets the
+/// conversation-oriented defaults.
+pub fn topic_wings_for_project(dir: &std::path::Path) -> Vec<String> {
+    if is_code_project(dir) {
+        default_code_topic_wings()
+    } else {
+        default_topic_wings()
+    }
+}
+
+pub(crate) fn default_hall_keywords() -> HashMap<String, Vec<String>> {
     let mut m = HashMap::new();
     #[allow(clippy::useless_vec)]
     m.insert(
@@ -479,6 +624,17 @@ impl Config {
         Ok(())
     }
 
+    /// Remove the global config directory (config.json, entity registry,
+    /// identity, etc.). Returns the path that was removed.
+    pub fn deinit() -> anyhow::Result<PathBuf> {
+        let config_dir = Self::config_dir()?;
+        if config_dir.exists() {
+            std::fs::remove_dir_all(&config_dir)
+                .with_context(|| format!("Failed to remove config directory: {}", config_dir.display()))?;
+        }
+        Ok(config_dir)
+    }
+
     pub fn init(&self) -> anyhow::Result<PathBuf> {
         let config_dir = Self::config_dir()?;
         std::fs::create_dir_all(&config_dir)?;
@@ -670,7 +826,7 @@ impl Config {
         Ok(count)
     }
 
-    fn config_file_path() -> anyhow::Result<PathBuf> {
+    pub fn config_file_path() -> anyhow::Result<PathBuf> {
         Ok(Self::config_dir()?.join("config.json"))
     }
 }

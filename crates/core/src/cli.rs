@@ -69,6 +69,7 @@ static VERBOSE: LazyLock<bool> = LazyLock::new(|| {
 #[derive(Parser)]
 #[command(
     name = "mpr",
+    version = env!("CARGO_PKG_VERSION"),
     about = "MemPalace - Give your AI a memory. No API key required.",
     long_about = None,
     infer_subcommands = true,
@@ -489,7 +490,22 @@ pub enum Commands {
         /// Only remove the active palace data dir, keep global config.
         #[arg(long)]
         palace_only: bool,
+
+        /// Remove palace data AND global config directory entirely.
+        #[arg(long)]
+        all: bool,
     },
+
+    /// De-initialize the palace: remove palace data AND global config.
+    Deinit {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Show or modify MemPalace configuration.
+    #[command(subcommand)]
+    Config(ConfigCommands),
 
     /// Seed a demo palace with example memories for first-run exploration.
     Demo {
@@ -542,6 +558,14 @@ pub enum Commands {
         #[arg(long)]
         data: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// Show the current MemPalace configuration.
+    Show,
+    /// Print the configuration file path.
+    Path,
 }
 
 #[derive(Subcommand)]
@@ -840,6 +864,17 @@ fn cmd_init(
     // Set the palace path. When --palace was explicit, this is the user-supplied
     // location; otherwise it equals the project directory (existing behaviour).
     config.palace_path = palace_path.clone();
+
+    // Issue #60: Use domain-aware topic_wings for code repos vs conversation defaults.
+    // Clean stale config values (old conversation-oriented wings like "emotions",
+    // "consciousness", "family" for a code project).
+    if crate::config::is_code_project(dir) {
+        config.topic_wings = crate::config::default_code_topic_wings();
+        config.hall_keywords = crate::config::default_code_hall_keywords();
+    } else {
+        config.topic_wings = crate::config::default_topic_wings();
+        config.hall_keywords = crate::config::default_hall_keywords();
+    }
     config.save()?;
 
     let config_path = config.init()?;
@@ -2991,8 +3026,25 @@ pub fn run() -> Result<()> {
         Commands::Connect { adapter, dry_run } => {
             crate::connect::run(adapter.as_deref(), *dry_run)?;
         }
-        Commands::Remove { force, palace_only } => {
-            cmd_remove(*force, *palace_only, palace_arg)?;
+        Commands::Remove { force, palace_only, all } => {
+            cmd_remove(*force, *palace_only, *all, palace_arg)?;
+        }
+        Commands::Config(ref cmd) => {
+            match cmd {
+                ConfigCommands::Show => {
+                    let config = Config::load()?;
+                    println!("{:#?}", config);
+                }
+                ConfigCommands::Path => {
+                    match Config::config_file_path() {
+                        Ok(p) => println!("{}", p.display()),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+            }
+        }
+        Commands::Deinit { force } => {
+            cmd_deinit(*force)?;
         }
         Commands::Demo { dir, force } => {
             cmd_demo(dir.as_deref(), *force, palace_arg)?;
@@ -3094,11 +3146,11 @@ fn cmd_vision(query: &str, limit: usize, palace_arg: Option<&str>) -> Result<()>
 // Remove Command
 // ---------------------------------------------------------------------------
 
-fn cmd_remove(force: bool, palace_only: bool, palace_arg: Option<&str>) -> Result<()> {
+fn cmd_remove(force: bool, palace_only: bool, all: bool, palace_arg: Option<&str>) -> Result<()> {
     let config = crate::config::Config::load()?;
     let data_dir = resolve_palace_path(palace_arg)?;
 
-    if !data_dir.exists() {
+    if !data_dir.exists() && !all {
         println!("No data found. Nothing to remove.");
         return Ok(());
     }
@@ -3109,18 +3161,33 @@ fn cmd_remove(force: bool, palace_only: bool, palace_arg: Option<&str>) -> Resul
         if !palace_only {
             println!("  config: {}", Config::config_dir()?.display());
         }
+        if all {
+            println!("  WARNING: --all will also remove the global config directory.");
+        }
         println!("Use --force to skip this confirmation.");
         return Ok(());
     }
 
     if palace_only {
-        std::fs::remove_dir_all(&data_dir)
-            .with_context(|| "Failed to remove data directory.".to_string())?;
-        println!("Removed data: {}", data_dir.display());
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir)
+                .with_context(|| "Failed to remove data directory.".to_string())?;
+            println!("Removed data: {}", data_dir.display());
+        }
+    } else if all {
+        // Remove both palace data and global config
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir)
+                .with_context(|| "Failed to remove data directory.".to_string())?;
+            println!("Removed data: {}", data_dir.display());
+        }
+        crate::config::Config::deinit()?;
     } else {
-        std::fs::remove_dir_all(&data_dir)
-            .with_context(|| "Failed to remove data directory.".to_string())?;
-        println!("Removed data: {}", data_dir.display());
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir)
+                .with_context(|| "Failed to remove data directory.".to_string())?;
+            println!("Removed data: {}", data_dir.display());
+        }
         let cd = Config::config_dir()?;
         println!(
             "Config directory left intact at {}. To remove it, delete manually: rm -rf '{}'",
@@ -3129,6 +3196,28 @@ fn cmd_remove(force: bool, palace_only: bool, palace_arg: Option<&str>) -> Resul
         );
     }
 
+    Ok(())
+}
+
+fn cmd_deinit(force: bool) -> Result<()> {
+    let config_dir = crate::config::Config::config_dir()?;
+
+    if !config_dir.exists() {
+        println!("No MemPalace configuration found at {}", config_dir.display());
+        println!("Nothing to de-initialize.");
+        return Ok(());
+    }
+
+    if !force {
+        println!("This will permanently remove ALL MemPalace data and configuration.");
+        println!("  config: {}", config_dir.display());
+        println!("Use --force to skip this confirmation.");
+        return Ok(());
+    }
+
+    crate::config::Config::deinit()?;
+    println!("MemPalace fully de-initialized.");
+    println!("  Removed: {}", config_dir.display());
     Ok(())
 }
 

@@ -30,6 +30,7 @@ pub mod onboarding;
 pub mod prompts;
 pub mod retention;
 pub mod search;
+pub mod search_strategy;
 pub mod searcher;
 pub mod session;
 pub mod sync;

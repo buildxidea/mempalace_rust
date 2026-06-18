@@ -1189,6 +1189,12 @@ impl PalaceDb {
         Self::open_collection(palace_path, DEFAULT_COLLECTION_NAME)
     }
 
+    /// Path to the palace directory (used by search strategies that
+    /// need direct SQLite access for FTS5 / trigram).
+    pub fn path(&self) -> &std::path::Path {
+        &self.palace_path
+    }
+
     pub fn open_collection(
         palace_path: &std::path::Path,
         collection_name: &str,

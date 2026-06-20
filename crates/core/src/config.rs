@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_config_dir_respects_xdg_config_home() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_path = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_path);
@@ -886,7 +886,7 @@ mod tests {
 
     #[test]
     fn test_data_dir_respects_xdg_data_home() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         // Canonicalize to resolve symlinks that may cause path mismatches
         let xdg_path = temp_dir.path().canonicalize().unwrap();
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_state_dir_respects_xdg_state_home() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_path = temp_dir.path().canonicalize().unwrap();
         let xdg_str = xdg_path.to_str().unwrap();
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn test_config_dir_fallback_to_tilde_mempalace() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         // Clear XDG vars to test fallback
         std::env::remove_var("XDG_CONFIG_HOME");
         let result = Config::config_dir().unwrap();
@@ -932,7 +932,7 @@ mod tests {
 
     #[test]
     fn test_default_palace_path_uses_data_dir() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_config = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_config);
@@ -944,7 +944,7 @@ mod tests {
 
     #[test]
     fn test_load_people_map_falls_back_to_embedded_config_value() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_root = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_root);
@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn test_registry_and_identity_paths_use_config_dir() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_root = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_root);
@@ -1053,7 +1053,7 @@ mod tests {
 
     #[test]
     fn test_old_path_none_when_not_exists() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         // Ensure ~/.mempalace is not detected as "old" when it's the default
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var("XDG_DATA_HOME");
@@ -1066,7 +1066,7 @@ mod tests {
 
     #[test]
     fn test_init_creates_config_file() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_root = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_root);
@@ -1087,7 +1087,7 @@ mod tests {
 
     #[test]
     fn test_save_people_map_persists_json() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_root = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_root);
@@ -1111,7 +1111,7 @@ mod tests {
     fn test_save_people_map_uses_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_root = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_root);
@@ -1201,7 +1201,7 @@ mod tests {
     /// grant without needing the env override.
     #[test]
     fn test_record_llm_consent_persists_flag() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = tempfile::tempdir().unwrap();
         let xdg_root = temp_dir.path().to_str().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", xdg_root);

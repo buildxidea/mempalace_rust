@@ -108,7 +108,7 @@ impl ProfileStore {
             updated_at: now,
         };
 
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().map_err(|e| anyhow::anyhow!("cache lock poisoned: {}", e))?;
         cache.profile = Some(profile.clone());
         cache.cached_at = Some(now);
 
@@ -116,7 +116,7 @@ impl ProfileStore {
     }
 
     pub fn get_profile(&self) -> Option<ProjectProfile> {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock().expect("cache lock poisoned");
         if let (Some(profile), Some(cached_at)) = (&cache.profile, cache.cached_at) {
             if Utc::now() - cached_at < Duration::seconds(CACHE_TTL_SECONDS) {
                 return Some(profile.clone());
@@ -126,7 +126,7 @@ impl ProfileStore {
     }
 
     pub fn invalidate_cache(&self) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().expect("cache lock poisoned");
         cache.profile = None;
         cache.cached_at = None;
     }

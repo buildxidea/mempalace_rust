@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::mcp_server::AppState;
+use crate::normalize::safe_truncate;
 use crate::searcher;
 
 /// Environment flags for context injection.
@@ -73,7 +74,7 @@ fn format_context_as_markdown(response: &crate::searcher::SearchResponse) -> Str
     let mut output = String::from("## Recent Context\n");
     for result in response.results.iter() {
         let preview = if result.text.len() > 200 {
-            format!("{}...", &result.text[..200])
+            format!("{}...", safe_truncate(&result.text, 200))
         } else {
             result.text.clone()
         };

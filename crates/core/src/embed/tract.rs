@@ -3,8 +3,7 @@
 //! Uses `tokio::task::spawn_blocking` to do CPU-bound ONNX inference without
 //! blocking the async reactor. HuggingFace `tokenizers` is used for tokenisation.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -117,9 +116,8 @@ fn probe_dimension(model_path: &PathBuf) -> anyhow::Result<usize> {
 }
 
 pub struct TractEmbedder {
-    /// Opaque handle — the concrete type is confined to `run_embed_batch`.
-    _model_handle: Arc<()>,
-    tokenizer_path: PathBuf,
+    model_bytes: Vec<u8>,
+    tokenizer_bytes: Vec<u8>,
     dim: usize,
     fingerprint: String,
 }
@@ -142,9 +140,15 @@ impl TractEmbedder {
         let dim = probe_dimension(&model_path)?;
         let fp = format!("tract:{}:{}", model_name_owned, dim);
 
+        // Read both files into memory once — eliminates disk I/O on every embed call.
+        let model_bytes = std::fs::read(&model_path)
+            .context("tract: read model file for caching")?;
+        let tokenizer_bytes = std::fs::read(&tokenizer_path)
+            .context("tract: read tokenizer file for caching")?;
+
         Ok(Self {
-            _model_handle: Arc::new(()),
-            tokenizer_path,
+            model_bytes,
+            tokenizer_bytes,
             dim,
             fingerprint: fp,
         })
@@ -172,22 +176,13 @@ impl Embedder for TractEmbedder {
             return Ok(Vec::new());
         }
 
-        let tokenizer_path = self.tokenizer_path.clone();
-        let model_name = tokenizer_path
-            .parent()
-            .map(|p| {
-                p.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .unwrap_or_default();
-
         let owned: Vec<String> = texts.iter().map(|s| (*s).to_owned()).collect();
         let dim = self.dim;
+        let model_bytes = self.model_bytes.clone();
+        let tokenizer_bytes = self.tokenizer_bytes.clone();
 
         tokio::task::spawn_blocking(move || {
-            run_embed_batch(&model_name, tokenizer_path.as_path(), &owned, dim)
+            run_embed_batch(&model_bytes, &tokenizer_bytes, &owned, dim)
         })
         .await
         .map_err(|e| anyhow::anyhow!("tract: spawn_blocking join error: {}", e))
@@ -197,23 +192,20 @@ impl Embedder for TractEmbedder {
 }
 
 fn run_embed_batch(
-    model_name: &str,
-    tokenizer_path: &Path,
+    model_bytes: &[u8],
+    tokenizer_bytes: &[u8],
     texts: &[String],
     dim: usize,
 ) -> anyhow::Result<Vec<Vec<f32>>> {
-    let cache = huggingface_cache_dir();
-    let model_path = cache.join(model_name).join("model.onnx");
-
     let inference_model = tract_onnx::onnx()
-        .model_for_path(&model_path)
-        .with_context(|| format!("tract: failed to load ONNX model '{}'", model_name))?;
+        .model_for_read(&mut std::io::Cursor::new(model_bytes))
+        .context("tract: failed to load ONNX model from bytes")?;
 
     let runnable = inference_model
         .into_runnable()
-        .with_context(|| format!("tract: failed to build runnable for '{}'", model_name))?;
+        .context("tract: failed to build runnable")?;
 
-    let tokenizer = Tokenizer::from_file(tokenizer_path.to_str().unwrap())
+    let tokenizer = Tokenizer::from_bytes(tokenizer_bytes)
         .map_err(|e| anyhow::anyhow!("tract: failed to load tokenizer: {}", e))?;
 
     let encodings: Vec<_> = texts

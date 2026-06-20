@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn from_env_requires_api_key() {
-        let _lock = crate::test_env_lock().lock().unwrap();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: single-threaded under test_env_lock.
         unsafe {
             std::env::remove_var("OPENROUTER_API_KEY");
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn fingerprint_includes_full_model() {
-        let _lock = crate::test_env_lock().lock().unwrap();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: single-threaded under test_env_lock.
         unsafe {
             std::env::set_var("OPENROUTER_API_KEY", "test-key");
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn fingerprint_format() {
-        let _lock = crate::test_env_lock().lock().unwrap();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: single-threaded under test_env_lock.
         unsafe {
             std::env::set_var("OPENROUTER_API_KEY", "test-key");

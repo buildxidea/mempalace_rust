@@ -3029,7 +3029,7 @@ byte indices. After that change it works. Finally figured it out.
         let state_sink = last_state.clone();
         palace.activity_sink = Some(Arc::new(move |evt: ActivityEvent| {
             counter_sink.fetch_add(1, Ordering::SeqCst);
-            *state_sink.lock().unwrap() = Some(evt.state);
+            *state_sink.lock().expect("activity sink lock poisoned") = Some(evt.state);
         }));
 
         palace
@@ -3042,7 +3042,7 @@ byte indices. After that change it works. Finally figured it out.
             "expected >=1 activity event, got {}",
             counter.load(Ordering::SeqCst)
         );
-        let captured = last_state.lock().unwrap().clone();
+        let captured = last_state.lock().expect("last state lock poisoned").clone();
         assert!(
             matches!(captured, Some(ActivityState::Extracting)),
             "expected Extracting event, got {:?}",

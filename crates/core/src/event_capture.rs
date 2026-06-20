@@ -122,7 +122,7 @@ impl MultiEventCapture {
     }
 
     pub fn register(&self, listener: EventCaptureBox) {
-        self.listeners.write().unwrap().push(listener);
+        self.listeners.write().expect("event_capture listeners write poisoned").push(listener);
     }
 }
 
@@ -134,7 +134,7 @@ impl Default for MultiEventCapture {
 
 impl EventCapture for MultiEventCapture {
     fn on_session_start(&self, event: SessionStartEvent) {
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().expect("event_capture listeners read lock poisoned");
         for listener in listeners.iter() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.on_session_start(event.clone());
@@ -143,7 +143,7 @@ impl EventCapture for MultiEventCapture {
     }
 
     fn on_user_prompt_submit(&self, event: UserPromptEvent) {
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().expect("event_capture listeners read lock poisoned");
         for listener in listeners.iter() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.on_user_prompt_submit(event.clone());
@@ -152,7 +152,7 @@ impl EventCapture for MultiEventCapture {
     }
 
     fn on_pre_tool_use(&self, event: PreToolEvent) {
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().expect("event_capture listeners read lock poisoned");
         for listener in listeners.iter() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.on_pre_tool_use(event.clone());
@@ -161,7 +161,7 @@ impl EventCapture for MultiEventCapture {
     }
 
     fn on_post_tool_use(&self, event: PostToolEvent) {
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().expect("event_capture listeners read lock poisoned");
         for listener in listeners.iter() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.on_post_tool_use(event.clone());
@@ -170,7 +170,7 @@ impl EventCapture for MultiEventCapture {
     }
 
     fn on_memory_write(&self, event: MemoryWriteEvent) {
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().expect("event_capture listeners read lock poisoned");
         for listener in listeners.iter() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.on_memory_write(event.clone());
@@ -179,7 +179,7 @@ impl EventCapture for MultiEventCapture {
     }
 
     fn on_stop(&self, event: StopEvent) {
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().expect("event_capture listeners read lock poisoned");
         for listener in listeners.iter() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.on_stop(event.clone());
@@ -188,7 +188,7 @@ impl EventCapture for MultiEventCapture {
     }
 
     fn on_embedder_ready(&self, event: EmbedderEvent) {
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().expect("event_capture listeners read lock poisoned");
         for listener in listeners.iter() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.on_embedder_ready(event.clone());

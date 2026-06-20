@@ -709,7 +709,7 @@ mod tests {
     /// Persisted flag = true is the strongest in-band signal: granted.
     #[test]
     fn test_check_env_consent_persisted_true_grants() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("MEMPALACE_LLM_CONSENT");
         assert_eq!(
             check_env_consent(true, "openai", "https://api.openai.com"),
@@ -723,7 +723,7 @@ mod tests {
     /// env-fallback LLM calls succeed.
     #[test]
     fn test_check_env_consent_persisted_false_requires() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("MEMPALACE_LLM_CONSENT");
         assert_eq!(
             check_env_consent(false, "anthropic", "https://api.anthropic.com"),
@@ -735,7 +735,7 @@ mod tests {
     /// false. This is the "I know what I'm doing" path for CI / tests.
     #[test]
     fn test_check_env_consent_env_true_overrides_persisted_false() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("MEMPALACE_LLM_CONSENT", "true");
         assert_eq!(
             check_env_consent(false, "openai", "https://api.openai.com"),
@@ -749,7 +749,7 @@ mod tests {
     /// also work because we trim + lowercase.
     #[test]
     fn test_check_env_consent_env_truthy_variants_grant() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         for truthy in ["1", "yes", "on", "True", "  YES  ", "On"] {
             std::env::set_var("MEMPALACE_LLM_CONSENT", truthy);
             assert_eq!(
@@ -767,7 +767,7 @@ mod tests {
     /// that's the caller's distinction to make.
     #[test]
     fn test_check_env_consent_env_unset_returns_prior_state() {
-        let _guard = test_env_lock().lock().unwrap();
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("MEMPALACE_LLM_CONSENT");
         // Persisted true → Granted.
         assert_eq!(

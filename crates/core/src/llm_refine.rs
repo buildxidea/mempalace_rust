@@ -715,7 +715,7 @@ mod tests {
                 _json_mode: bool,
                 think: bool,
             ) -> Result<LlmResponse, crate::llm_client::LlmError> {
-                *self.think.lock().unwrap() = Some(think);
+                *self.think.lock().expect("think lock poisoned") = Some(think);
                 Ok(LlmResponse {
                     text: "{}".into(),
                     model: "test-model".into(),
@@ -742,9 +742,9 @@ mod tests {
         };
         // Default classify() folds to think=false.
         let _ = p.classify("sys", "usr", true);
-        assert_eq!(*p.think.lock().unwrap(), Some(false));
+        assert_eq!(*p.think.lock().expect("think lock poisoned"), Some(false));
         // classify_with_think() forwards the flag verbatim.
         let _ = p.classify_with_think("sys", "usr", true, true);
-        assert_eq!(*p.think.lock().unwrap(), Some(true));
+        assert_eq!(*p.think.lock().expect("think lock poisoned"), Some(true));
     }
 }

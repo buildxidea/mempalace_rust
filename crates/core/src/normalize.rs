@@ -5,6 +5,20 @@ use std::collections::HashSet;
 const SLACK_PROVENANCE_FOOTER: &str =
     "\n[source: slack-export | multi-party chat — speaker roles are positional, not verified]";
 
+/// Returns a prefix of `s` truncated to at most `max_bytes` bytes,
+/// ensuring the result ends on a valid UTF-8 character boundary.
+/// If `max_bytes` is >= `s.len()`, returns `s` unchanged.
+pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 fn strip_noise(text: &str) -> String {
     let mut result = text.to_string();
 
@@ -89,7 +103,7 @@ fn format_tool_use(content: &Value) -> String {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if cmd.len() > 200 {
-                format!("[Bash] {}...", &cmd[..200])
+                format!("[Bash] {}...", safe_truncate(cmd, 200))
             } else {
                 format!("[Bash] {}", cmd)
             }
@@ -130,7 +144,7 @@ fn format_tool_use(content: &Value) -> String {
                 .map(|a| serde_json::to_string(a).unwrap_or_default())
                 .unwrap_or_default();
             let summary = if args_str.len() > 200 {
-                format!("{}...", &args_str[..200])
+                format!("{}...", safe_truncate(&args_str, 200))
             } else {
                 args_str
             };
@@ -185,7 +199,7 @@ fn format_tool_result(content: &Value, tool_name: Option<&str>) -> String {
         }
         _ => {
             if text.len() > 2048 {
-                format!("→ {}", &text[..2048])
+                format!("→ {}", safe_truncate(text, 2048))
             } else if text.is_empty() {
                 String::new()
             } else {

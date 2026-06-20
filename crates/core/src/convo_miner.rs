@@ -1,5 +1,5 @@
 use crate::general_extractor::{extract_memories, MemoryType};
-use crate::normalize::normalize;
+use crate::normalize::{normalize, safe_truncate};
 use crate::palace_db::PalaceDb;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -364,7 +364,7 @@ pub async fn mine_conversations(
                 .and_then(|name| name.to_str())
                 .map(|name| {
                     if name.len() > 50 {
-                        name[..50].to_string()
+                        safe_truncate(name, 50).to_string()
                     } else {
                         format!("{:<50}", name)
                     }

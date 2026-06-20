@@ -12,6 +12,7 @@
 
 use crate::config::Config;
 use crate::entity_detector::detect_from_content;
+use crate::normalize::safe_truncate;
 use crate::palace_db::PalaceDb;
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -74,7 +75,7 @@ pub fn ingest_diaries(
             .and_then(|s| s.to_str())
             .and_then(|s| {
                 if s.len() >= 10 && s.chars().nth(4) == Some('-') {
-                    Some(&s[..10])
+                    Some(safe_truncate(s, 10))
                 } else {
                     None
                 }

@@ -78,7 +78,7 @@ impl OpenRouterRemoteEmbedder {
                 .timeout(Duration::from_secs(30))
                 .connect_timeout(Duration::from_secs(10))
                 .build()
-                .unwrap(),
+                .expect("reqwest Client::builder with valid timeout durations"),
             api_key,
             model: model.to_string(),
             dim,

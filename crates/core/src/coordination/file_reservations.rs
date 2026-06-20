@@ -7,7 +7,25 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::Path;
+
+/// Error returned when parsing an invalid reservation mode string.
+
+#[derive(Debug, Clone)]
+pub struct InvalidReservationMode(pub String);
+
+impl fmt::Display for InvalidReservationMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid reservation mode '{}': expected 'exclusive' or 'shared'",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InvalidReservationMode {}
 
 /// Reservation mode: exclusive or shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,13 +43,31 @@ impl ReservationMode {
             ReservationMode::Shared => "shared",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
+impl std::str::FromStr for ReservationMode {
+    type Err = InvalidReservationMode;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "exclusive" => Ok(ReservationMode::Exclusive),
             "shared" | "non_exclusive" | "non-exclusive" | "observe" | "read" => {
-                ReservationMode::Shared
+                Ok(ReservationMode::Shared)
             }
-            _ => ReservationMode::Exclusive,
+            _ => Err(InvalidReservationMode(s.to_string())),
+        }
+    }
+}
+
+/// Parse a reservation mode from a DB string, falling back to Exclusive
+/// with a warning for unrecognised values.
+fn parse_mode_or_warn(s: &str) -> ReservationMode {
+    match s.parse::<ReservationMode>() {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(mode = %s, "unrecognised reservation mode in DB, defaulting to Exclusive");
+            tracing::debug!(error = %e, "reservation mode parse failure detail");
+            ReservationMode::Exclusive
         }
     }
 }
@@ -201,7 +237,7 @@ impl FileReservationStore {
 
         for row in rows {
             let (other_path, other_agent, other_mode_str, other_expires) = row?;
-            let other_mode = ReservationMode::from_str(&other_mode_str);
+            let other_mode = parse_mode_or_warn(&other_mode_str);
 
             // Check if paths overlap
             if !paths_overlap(path_pattern, &other_path) {
@@ -249,7 +285,7 @@ impl FileReservationStore {
                 id: row.get(0)?,
                 path_pattern: row.get(1)?,
                 agent_id: row.get(2)?,
-                mode: ReservationMode::from_str(&row.get::<_, String>(3)?),
+                mode: parse_mode_or_warn(&row.get::<_, String>(3)?),
                 reason: row.get(4)?,
                 acquired_at: DateTime::parse_from_rfc3339(&acquired_at)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -286,7 +322,7 @@ impl FileReservationStore {
                 id: row.get(0)?,
                 path_pattern: row.get(1)?,
                 agent_id: row.get(2)?,
-                mode: ReservationMode::from_str(&row.get::<_, String>(3)?),
+                mode: parse_mode_or_warn(&row.get::<_, String>(3)?),
                 reason: row.get(4)?,
                 acquired_at: DateTime::parse_from_rfc3339(&acquired_at)
                     .map(|dt| dt.with_timezone(&Utc))

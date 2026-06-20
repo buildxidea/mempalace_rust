@@ -57,7 +57,7 @@ fn download_from_huggingface(repo: &str, path: &str, dest: &PathBuf) -> anyhow::
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .unwrap();
+        .expect("reqwest::blocking Client::builder with valid timeout durations");
     let response = client
         .get(&url)
         .header("User-Agent", "mempalace/1.0")

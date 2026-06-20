@@ -1,6 +1,6 @@
 use crate::coordination::actions::ActionStore;
 use crate::types::{Action, ActionStatus, Routine, RoutineRun, RoutineStep};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -139,16 +139,19 @@ impl RoutineStore {
             .ok_or_else(|| anyhow::anyhow!("Run {} not found", run_id))?;
 
         let routine_id: String = row.get("routine_id")?;
-        let started_at = chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("started_at")?)
+        let started_at_str: String = row.get("started_at")?;
+        let started_at = chrono::DateTime::parse_from_rfc3339(&started_at_str)
             .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now());
+            .with_context(|| format!("get_run_status: invalid started_at '{started_at_str}'"))?;
         let completed_at = row
             .get::<_, Option<String>>("completed_at")?
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
         let status: String = row.get("status")?;
+        let step_results_str: String = row.get("step_results")?;
         let step_results: HashMap<String, String> =
-            serde_json::from_str(&row.get::<_, String>("step_results")?).unwrap_or_default();
+            serde_json::from_str(&step_results_str)
+                .with_context(|| format!("get_run_status: invalid step_results JSON '{step_results_str}'"))?;
 
         Ok(RoutineRun {
             id: run_id.to_string(),
@@ -173,23 +176,35 @@ impl RoutineStore {
 
 impl RoutineStore {
     fn row_to_routine(&self, row: &rusqlite::Row) -> rusqlite::Result<Routine> {
+        let steps_str: String = row.get("steps")?;
+        let tags_str: String = row.get("tags")?;
+        let proc_ids_str: String = row.get("source_procedural_ids")?;
+        let created_at_str: String = row.get("created_at")?;
+        let updated_at_str: String = row.get("updated_at")?;
         Ok(Routine {
             id: row.get("id")?,
             name: row.get("name")?,
             description: row.get("description")?,
-            steps: serde_json::from_str(&row.get::<_, String>("steps")?).unwrap_or_default(),
-            created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("created_at")?)
+            steps: serde_json::from_str(&steps_str).map_err(|e| {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+            })?,
+            created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>("updated_at")?)
+                .map_err(|e| {
+                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+                })?,
+            updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
+                .map_err(|e| {
+                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+                })?,
             frozen: row.get::<_, i64>("frozen")? != 0,
-            tags: serde_json::from_str(&row.get::<_, String>("tags")?).unwrap_or_default(),
-            source_procedural_ids: serde_json::from_str(
-                &row.get::<_, String>("source_procedural_ids")?,
-            )
-            .unwrap_or_default(),
+            tags: serde_json::from_str(&tags_str).map_err(|e| {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+            })?,
+            source_procedural_ids: serde_json::from_str(&proc_ids_str).map_err(|e| {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+            })?,
         })
     }
 }

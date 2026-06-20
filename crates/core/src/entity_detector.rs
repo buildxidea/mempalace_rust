@@ -8,6 +8,7 @@
 
 #![doc(hidden)]
 
+use crate::normalize::safe_truncate;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1416,7 +1417,7 @@ pub fn detect_entities(
             continue;
         };
         let content = if content.len() > MAX_BYTES_PER_FILE {
-            content[..MAX_BYTES_PER_FILE].to_string()
+            safe_truncate(&content, MAX_BYTES_PER_FILE).to_string()
         } else {
             content
         };

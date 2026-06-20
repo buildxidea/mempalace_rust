@@ -37,10 +37,14 @@ pub const STRICTER_SUFFIX: &str = r#"
 
 IMPORTANT: Your previous response was invalid. Please ensure your output strictly follows the required XML format. Every required field must be present with valid values."#;
 
-/// Truncate a string to a maximum length.
+/// Truncate a string to a maximum byte length, safely handling UTF-8 boundaries.
 fn truncate(s: &str, max: usize) -> String {
     if s.len() > max {
-        format!("{}[...truncated]", &s[..max])
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}[...truncated]", &s[..end])
     } else {
         s.to_string()
     }

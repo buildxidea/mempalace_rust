@@ -16,7 +16,7 @@ use std::sync::Arc;
 fn open_for_search(palace_path: &Path, embedding_model: Option<&str>) -> anyhow::Result<PalaceDb> {
     // Resolve the effective embedding model: CLI flag > config file > env > default.
     // When the parameter is None, read the palace config so a user who ran
-    // `mpr init --search-strategy fts5 --no-llm` (which writes
+    // `mpr init --search-strategy contains --no-llm` (which writes
     // embedding_model: "naive") doesn't silently trigger an ONNX model download.
     let resolved: anyhow::Result<Box<dyn crate::embed::Embedder>> = match embedding_model {
         Some(v) => match v {

@@ -133,7 +133,7 @@ fn default_embedding_model() -> String {
 }
 
 fn default_search_strategy() -> String {
-    "fts5".to_string()
+    "contains".to_string()
 }
 
 fn default_max_cache_size_mb() -> usize {
@@ -471,7 +471,7 @@ pub struct Config {
     pub embedder_identity_strict: bool,
     #[serde(default)]
     pub languages: Vec<String>,
-    /// Search strategy (v0.6.0+): "fts5" (default, 0MB), "naive",
+    /// Search strategy (v0.6.0+): "contains" (default, 0MB), "naive",
     /// "bm25", or "embedding" (90MB+).
     #[serde(default = "default_search_strategy")]
     pub search_strategy: String,

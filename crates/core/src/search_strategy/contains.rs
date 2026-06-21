@@ -1,4 +1,4 @@
-//! FTS5 strategy — in-memory substring matching.
+//! Contains strategy — in-memory substring matching.
 //!
 //! Default strategy. 0MB extra, instant, lexical matching.
 //! Reads directly from PalaceDb's in-memory documents HashMap instead of
@@ -10,27 +10,27 @@ use super::traits::{SearchHit, SearchStrategy};
 use crate::palace_db::PalaceDb;
 use anyhow::Result;
 
-pub struct Fts5Strategy;
+pub struct ContainsStrategy;
 
-impl Fts5Strategy {
+impl ContainsStrategy {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for Fts5Strategy {
+impl Default for ContainsStrategy {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SearchStrategy for Fts5Strategy {
+impl SearchStrategy for ContainsStrategy {
     fn name(&self) -> &str {
-        "fts5"
+        "contains"
     }
 
     fn search(&self, query: &str, db: &PalaceDb, n: usize) -> Result<Vec<SearchHit>> {
-        match fts5_search(db, query, n) {
+        match contains_search(db, query, n) {
             Ok(hits) if !hits.is_empty() => Ok(hits),
             Ok(_) | Err(_) => NaiveJaccardStrategy::new().search(query, db, n),
         }
@@ -41,7 +41,7 @@ impl SearchStrategy for Fts5Strategy {
 ///
 /// Each query term is matched as a substring against document content.
 /// Results are scored by the number of matching terms and truncated to `n`.
-fn fts5_search(db: &PalaceDb, query: &str, n: usize) -> Result<Vec<SearchHit>> {
+fn contains_search(db: &PalaceDb, query: &str, n: usize) -> Result<Vec<SearchHit>> {
     let terms: Vec<String> = query
         .to_lowercase()
         .split_whitespace()

@@ -16,7 +16,7 @@ pub struct SearchHit {
 
 /// Trait for search strategies. All strategies must implement this.
 pub trait SearchStrategy: Send + Sync {
-    /// Short identifier (e.g. "fts5", "naive").
+    /// Short identifier (e.g. "contains", "naive").
     fn name(&self) -> &str;
 
     /// Run a search against the given PalaceDb.

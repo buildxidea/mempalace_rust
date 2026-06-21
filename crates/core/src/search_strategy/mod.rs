@@ -5,14 +5,14 @@
 //! at `mpr init` time and can override per-call via `--strategy`.
 //!
 //! Available strategies:
-//! - [`Fts5Strategy`]: SQLite FTS5, 0MB, fast, default
+//! - [`ContainsStrategy`]: Substring match, 0MB, fast, default
 //! - [`NaiveJaccardStrategy`]: Jaccard token overlap, 0MB, slow for large palaces
 //! - [`Bm25Strategy`]: BM25 rerank on top of naive, 0MB, fast
 //! - [`EmbeddingStrategy`]: ONNX MiniLM + HNSW, 90MB+, semantic, slow
 
 pub mod bm25;
 pub mod embedding;
-pub mod fts5;
+pub mod contains;
 pub mod naive;
 pub mod traits;
 
@@ -23,10 +23,10 @@ use anyhow::Result;
 use std::path::Path;
 
 /// Strategy identifier. Stored in `~/.mempalace/config.json` under
-/// `search.strategy`. Default = "fts5".
+/// `search.strategy`. Default = "contains".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrategyName {
-    Fts5,
+    Contains,
     Naive,
     Bm25,
     Embedding,
@@ -35,7 +35,7 @@ pub enum StrategyName {
 impl StrategyName {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Fts5 => "fts5",
+            Self::Contains => "contains",
             Self::Naive => "naive",
             Self::Bm25 => "bm25",
             Self::Embedding => "embedding",
@@ -44,7 +44,7 @@ impl StrategyName {
 
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "fts5" => Some(Self::Fts5),
+            "contains" => Some(Self::Contains),
             "naive" => Some(Self::Naive),
             "bm25" => Some(Self::Bm25),
             "embedding" => Some(Self::Embedding),
@@ -55,14 +55,14 @@ impl StrategyName {
 
 impl Default for StrategyName {
     fn default() -> Self {
-        Self::Fts5
+        Self::Contains
     }
 }
 
-/// Build a strategy instance by name. Falls back to FTS5 if name unknown.
+/// Build a strategy instance by name. Falls back to Contains if name unknown.
 pub fn build_strategy(name: StrategyName) -> Box<dyn SearchStrategy> {
     match name {
-        StrategyName::Fts5 => Box::new(fts5::Fts5Strategy::new()),
+        StrategyName::Contains => Box::new(contains::ContainsStrategy::new()),
         StrategyName::Naive => Box::new(naive::NaiveJaccardStrategy::new()),
         StrategyName::Bm25 => Box::new(bm25::Bm25Strategy::new()),
         StrategyName::Embedding => Box::new(embedding::EmbeddingStrategy::new()),

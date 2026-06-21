@@ -2031,6 +2031,35 @@ impl PalaceDb {
         *guard = Some(engine);
     }
 
+    /// Search using the lazy BM25 index. Calls `ensure_bm25()` to build the
+    /// index on first invocation, then reuses it on subsequent calls.
+    /// Returns [`SearchHit`](crate::search_strategy::SearchHit) results sorted
+    /// by descending BM25 score.
+    pub fn bm25_search(&self, query: &str, n: usize) -> Vec<crate::search_strategy::SearchHit> {
+        self.ensure_bm25();
+        let guard = self.bm25.lock().expect("bm25 lock poisoned");
+        let engine = match guard.as_ref() {
+            Some(e) => e,
+            None => return vec![],
+        };
+        engine
+            .search(query, n)
+            .into_iter()
+            .map(|result| {
+                let metadata = self
+                    .documents
+                    .get(&result.document.id)
+                    .map(|entry| serde_json::to_value(&entry.metadata))
+                    .and_then(Result::ok);
+                crate::search_strategy::SearchHit {
+                    id: result.document.id.clone(),
+                    score: result.score as f64,
+                    metadata,
+                }
+            })
+            .collect()
+    }
+
     pub async fn query(
         &self,
         query_text: &str,

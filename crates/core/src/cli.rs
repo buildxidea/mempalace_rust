@@ -131,8 +131,8 @@ pub enum Commands {
         #[arg(long)]
         lang: Option<String>,
 
-        /// Search strategy: fts5 (default, 0MB), naive, bm25, embedding (90MB+)
-        #[arg(long, value_name = "STRATEGY", default_value = "fts5")]
+        /// Search strategy: contains (default, 0MB), naive, bm25, embedding (90MB+)
+        #[arg(long, value_name = "STRATEGY", default_value = "contains")]
         search_strategy: String,
 
         /// Skip creating AGENT.md / USER.md notes
@@ -213,7 +213,7 @@ pub enum Commands {
         #[arg(long, value_name = "MODE")]
         fusion_mode: Option<String>,
 
-        /// Search strategy: fts5 (default, 0MB), naive, bm25, embedding
+        /// Search strategy: contains (default, 0MB), naive, bm25, embedding
         #[arg(long, value_name = "STRATEGY")]
         strategy: Option<String>,
 
@@ -927,7 +927,7 @@ fn cmd_init(
     if !search_strategy.is_empty() {
         config.search_strategy = search_strategy.to_string();
         println!(
-            "  Search strategy: {} (FTS5=0MB, embedding=90MB+)",
+            "  Search strategy: {} (contains=0MB, embedding=90MB+)",
             search_strategy
         );
     }
@@ -1114,14 +1114,32 @@ fn detect_mining_mode(dir: &PathBuf) -> MiningMode {
             continue;
         };
 
-        // Check for conversation markers
+        // Short-circuit: source-code directories or source files → file-based mining
         let name_lower = name.to_lowercase();
+        if path.is_dir() {
+            if name_lower == "src"
+                || name_lower == "lib"
+                || name_lower == "tests"
+                || name_lower == "scripts"
+                || name_lower == "bin"
+            {
+                return MiningMode::Projects;
+            }
+        } else if path.is_file() {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if matches!(
+                ext.to_lowercase().as_str(),
+                "rs" | "py" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h" | "hpp"
+            ) {
+                return MiningMode::Projects;
+            }
+        }
+
+        // Check for conversation markers (no json/jsonl - these are build artifacts)
         if name_lower.contains("conversation")
             || name_lower.contains("transcript")
             || name_lower.contains("chatgpt")
             || name_lower.contains("claude")
-            || name_lower.ends_with(".jsonl")
-            || name_lower.ends_with(".json")
         {
             has_conversation_markers += 1;
         }
@@ -1139,14 +1157,14 @@ fn detect_mining_mode(dir: &PathBuf) -> MiningMode {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if matches!(
                 ext.to_lowercase().as_str(),
-                "rs" | "py" | "js" | "ts" | "go" | "java" | "txt" | "md"
+                "rs" | "py" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h" | "hpp" | "txt" | "md"
             ) {
                 has_project_markers += 1;
             }
         }
     }
 
-    if has_conversation_markers > has_project_markers {
+    if has_conversation_markers > has_project_markers && has_conversation_markers > 0 {
         MiningMode::Convos
     } else {
         MiningMode::Projects
@@ -1357,7 +1375,7 @@ fn cmd_search(
         let sname =
             crate::search_strategy::StrategyName::from_str_opt(strategy_name).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown strategy '{}'. Use fts5, naive, bm25, or embedding.",
+                    "unknown strategy '{}'. Use contains, naive, bm25, or embedding.",
                     strategy_name
                 )
             })?;
@@ -1380,6 +1398,38 @@ fn cmd_search(
             }
         }
         return Ok(());
+    }
+
+    // Fast path: dispatch to the configured search strategy from config.
+    // Avoids the expensive hybrid_search() pipeline when the user has set a
+    // specific strategy (e.g. "contains") in their config. Only direct strategies
+    // (contains, naive, bm25, embedding) take this path; others fall through.
+    if let Ok(config) = Config::load() {
+        if !config.search_strategy.is_empty() {
+            if let Some(sname) =
+                crate::search_strategy::StrategyName::from_str_opt(&config.search_strategy)
+            {
+                let db = crate::palace_db::PalaceDb::open(&palace_path)?;
+                let hits = crate::search_strategy::run_search(sname, query, &db, results)?;
+                if json_output {
+                    let json: Vec<serde_json::Value> = hits
+                        .iter()
+                        .map(|h| {
+                            serde_json::json!({
+                                "id": h.id,
+                                "score": h.score,
+                            })
+                        })
+                        .collect();
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                } else {
+                    for (i, h) in hits.iter().enumerate() {
+                        println!("  {}. {}  (score: {:.4})", i + 1, h.id, h.score);
+                    }
+                }
+                return Ok(());
+            }
+        }
     }
 
     let response = searcher::search_memories_with_rerank(
@@ -3827,7 +3877,7 @@ mod tests {
             false,
             false,
             None,
-            "fts5",
+            "contains",
             false,
         )
         .unwrap();
@@ -3866,7 +3916,7 @@ mod tests {
             false,
             false,
             None,
-            "fts5",
+            "contains",
             false,
         );
         std::env::remove_var("MEMPALACE_NONINTERACTIVE");
@@ -3915,7 +3965,7 @@ mod tests {
             false,
             false,
             None,
-            "fts5",
+            "contains",
             false,
         )
         .unwrap();
@@ -3963,7 +4013,7 @@ mod tests {
             false,
             false,
             None,
-            "fts5",
+            "contains",
             false,
         )
         .unwrap();

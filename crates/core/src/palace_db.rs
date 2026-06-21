@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -154,6 +154,28 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Build a `source_file` → drawer-IDs index from an existing document map.
+///
+/// Every drawer whose metadata contains a `"source_file"` string-value key is
+/// indexed.  This produces an O(1) lookup path used by
+/// [`PalaceDb::file_already_mined_with_mode`] instead of scanning every
+/// entry linearly.
+fn build_file_source_index(
+    documents: &HashMap<String, DocumentEntry>,
+) -> HashMap<String, HashSet<String>> {
+    let mut index: HashMap<String, HashSet<String>> = HashMap::new();
+    for (id, entry) in documents {
+        if let Some(src) = entry
+            .metadata
+            .get("source_file")
+            .and_then(|v| v.as_str())
+        {
+            index.entry(src.to_string()).or_default().insert(id.clone());
+        }
+    }
+    index
+}
+
 pub struct PalaceDb {
     documents: HashMap<String, DocumentEntry>,
     palace_path: PathBuf,
@@ -165,6 +187,10 @@ pub struct PalaceDb {
     /// (the "naive" Jaccard path). Populated lazily when first vector search
     /// is requested, or eagerly by `open_with_embedder`.
     embedding_db: Option<EmbeddingDb>,
+    /// Maps `source_file` → set of drawer IDs for O(1) dedup lookups.
+    /// Built eagerly in `open_collection()` and kept in sync by `add()`,
+    /// `upsert_documents()`, and `delete_id()`.
+    file_source_index: HashMap<String, HashSet<String>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1226,6 +1252,7 @@ impl PalaceDb {
         } else {
             HashMap::new()
         };
+        let file_source_index = build_file_source_index(&documents);
 
         let embedder: Arc<dyn crate::embed::Embedder> =
             Arc::new(crate::embed::NullEmbedder::new(384));
@@ -1238,6 +1265,7 @@ impl PalaceDb {
             bm25: Mutex::new(None),
             embedder,
             embedding_db: None,
+            file_source_index,
         })
     }
 
@@ -1983,6 +2011,7 @@ impl PalaceDb {
 
         let embedding_db = EmbeddingDb::with_embedder(embedder.clone())?;
         validate_or_write_manifest(palace_path, embedder.as_ref(), model_name, documents.len())?;
+        let file_source_index = build_file_source_index(&documents);
 
         let mut db = Self {
             documents,
@@ -1992,6 +2021,7 @@ impl PalaceDb {
             bm25: Mutex::new(None),
             embedder,
             embedding_db: Some(embedding_db),
+            file_source_index,
         };
 
         // Try loading cached embeddings first (fast), fall back to sync_embeddings (slow)
@@ -2371,13 +2401,22 @@ impl PalaceDb {
             // user-text `content` field is processed.
             let redacted = crate::privacy::redact(content).redacted_text;
 
+            let id_str = id.to_string();
             self.documents.insert(
-                id.to_string(),
+                id_str.clone(),
                 DocumentEntry {
                     content: redacted.clone(),
-                    metadata: meta_map,
+                    metadata: meta_map.clone(),
                 },
             );
+
+            // Update file_source_index if this document has a source_file
+            if let Some(src) = meta_map.get("source_file").and_then(|v| v.as_str()) {
+                self.file_source_index
+                    .entry(src.to_string())
+                    .or_default()
+                    .insert(id_str.clone());
+            }
 
             // Index document in BM25
             self.ensure_bm25();
@@ -2424,6 +2463,22 @@ impl PalaceDb {
         documents: &[(String, String, HashMap<String, serde_json::Value>)],
     ) -> anyhow::Result<()> {
         for (id, content, metadata) in documents {
+            // Remove old source_file mapping if the document already exists
+            if let Some(old_entry) = self.documents.get(id) {
+                if let Some(old_src) = old_entry
+                    .metadata
+                    .get("source_file")
+                    .and_then(|v| v.as_str())
+                {
+                    if let Some(ids) = self.file_source_index.get_mut(old_src) {
+                        ids.remove(id);
+                        if ids.is_empty() {
+                            self.file_source_index.remove(old_src);
+                        }
+                    }
+                }
+            }
+
             // Privacy filter (mp-031, ADR-12) — same as `add()`.
             let redacted = crate::privacy::redact(content).redacted_text;
 
@@ -2434,6 +2489,15 @@ impl PalaceDb {
                     metadata: metadata.clone(),
                 },
             );
+
+            // Update file_source_index if this document has a source_file
+            if let Some(src) = metadata.get("source_file").and_then(|v| v.as_str()) {
+                self.file_source_index
+                    .entry(src.to_string())
+                    .or_default()
+                    .insert(id.clone());
+            }
+
             self.ensure_bm25();
             self.bm25
                 .lock()
@@ -2447,11 +2511,19 @@ impl PalaceDb {
     }
 
     pub fn delete_id(&mut self, id: &str) -> anyhow::Result<bool> {
-        let removed = self.documents.remove(id).is_some();
-        if removed {
+        let removed = self.documents.remove(id);
+        if let Some(ref entry) = removed {
+            if let Some(src) = entry.metadata.get("source_file").and_then(|v| v.as_str()) {
+                if let Some(ids) = self.file_source_index.get_mut(src) {
+                    ids.remove(id);
+                    if ids.is_empty() {
+                        self.file_source_index.remove(src);
+                    }
+                }
+            }
             self.save()?;
         }
-        Ok(removed)
+        Ok(removed.is_some())
     }
 
     pub fn file_already_mined(&self, source_file: &str, check_mtime: bool) -> bool {
@@ -2470,65 +2542,72 @@ impl PalaceDb {
         check_mtime: bool,
         extract_mode: Option<&str>,
     ) -> bool {
-        let Some(entry) = self.documents.values().find(|entry| {
-            let same_source =
-                entry.metadata.get("source_file").and_then(|v| v.as_str()) == Some(source_file);
-            if !same_source {
-                return false;
-            }
+        // O(1) index lookup instead of scanning every document linearly.
+        let Some(matching_ids) = self.file_source_index.get(source_file) else {
+            return false;
+        };
+
+        'next_drawer: for id in matching_ids {
+            let Some(entry) = self.documents.get(id) else {
+                continue;
+            };
+
             match extract_mode {
-                None => true,
+                None => {}
                 Some(want) => {
                     let stored = entry.metadata.get("extract_mode").and_then(|v| v.as_str());
-                    match stored {
+                    let ok = match stored {
                         Some(value) => value == want,
-                        // Legacy: unfielded rows are treated as exchange.
                         None => want == "exchange",
+                    };
+                    if !ok {
+                        continue;
                     }
                 }
             }
-        }) else {
-            return false;
-        };
 
-        // Pre-v2 drawers have no version field — treat them as stale.
-        // Returns false so the file gets re-mined with the new schema.
-        let stored_version = entry
-            .metadata
-            .get("normalize_version")
-            .and_then(|v| {
-                v.as_i64()
-                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-            })
-            .unwrap_or(1);
-        if stored_version < crate::constants::NORMALIZE_VERSION as i64 {
-            return false;
+            // Pre-v2 drawers have no version field — treat them as stale.
+            let stored_version = entry
+                .metadata
+                .get("normalize_version")
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                })
+                .unwrap_or(1);
+            if stored_version < crate::constants::NORMALIZE_VERSION as i64 {
+                continue;
+            }
+
+            if !check_mtime {
+                return true;
+            }
+
+            let Some(stored_mtime) = entry
+                .metadata
+                .get("source_mtime")
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse::<f64>().ok())
+            else {
+                continue;
+            };
+
+            let Ok(metadata) = std::fs::metadata(source_file) else {
+                continue;
+            };
+            let Ok(modified) = metadata.modified() else {
+                continue;
+            };
+            let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) else {
+                continue;
+            };
+
+            if (duration.as_secs_f64() - stored_mtime).abs() < f64::EPSILON {
+                return true;
+            }
         }
 
-        if !check_mtime {
-            return true;
-        }
-
-        let Some(stored_mtime) = entry
-            .metadata
-            .get("source_mtime")
-            .and_then(|v| v.as_str())
-            .and_then(|v| v.parse::<f64>().ok())
-        else {
-            return false;
-        };
-
-        let Ok(metadata) = std::fs::metadata(source_file) else {
-            return false;
-        };
-        let Ok(modified) = metadata.modified() else {
-            return false;
-        };
-        let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) else {
-            return false;
-        };
-
-        (duration.as_secs_f64() - stored_mtime).abs() < f64::EPSILON
+        false
     }
 
     pub fn flush(&mut self) -> anyhow::Result<()> {

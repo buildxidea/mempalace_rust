@@ -1157,7 +1157,17 @@ fn detect_mining_mode(dir: &PathBuf) -> MiningMode {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if matches!(
                 ext.to_lowercase().as_str(),
-                "rs" | "py" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h" | "hpp" | "txt" | "md"
+                "rs" | "py"
+                    | "js"
+                    | "ts"
+                    | "go"
+                    | "java"
+                    | "cpp"
+                    | "c"
+                    | "h"
+                    | "hpp"
+                    | "txt"
+                    | "md"
             ) {
                 has_project_markers += 1;
             }

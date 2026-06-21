@@ -11,8 +11,8 @@
 //! - [`EmbeddingStrategy`]: ONNX MiniLM + HNSW, 90MB+, semantic, slow
 
 pub mod bm25;
-pub mod embedding;
 pub mod contains;
+pub mod embedding;
 pub mod naive;
 pub mod traits;
 

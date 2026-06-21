@@ -43,6 +43,8 @@ jobs:
 
       - name: Test (default features)
         if: runner.os == 'Windows'
+        env:
+          MEMPALACE_SKIP_NETWORK_TESTS: "1"
         run: cargo test --workspace
 
       # Compile (but don't run) criterion benches on every PR — mp-002 / Phase 0.

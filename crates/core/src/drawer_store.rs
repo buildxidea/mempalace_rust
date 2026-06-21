@@ -241,7 +241,7 @@ impl DrawerStore {
         let fts_query = build_fts_query(query);
 
         let sql = format!(
-            "SELECT d.id, d.content, bm25(drawers_fts, 0.0, 0.0, 1.0, 1.0) AS score
+            "SELECT drawers.id, drawers.content, bm25(drawers_fts, 0.0, 0.0, 1.0, 1.0) AS score
              FROM drawers_fts
              JOIN drawers ON drawers.rowid = drawers_fts.rowid
              WHERE drawers_fts MATCH ?1
@@ -280,7 +280,7 @@ impl DrawerStore {
         let fts_query = build_fts_query(query);
 
         let sql = format!(
-            "SELECT d.id, d.content, d.metadata, d.wing, d.room,
+            "SELECT drawers.id, drawers.content, drawers.metadata, drawers.wing, drawers.room,
                     bm25(drawers_fts, 0.0, 0.0, 1.0, 1.0) AS score
              FROM drawers_fts
              JOIN drawers ON drawers.rowid = drawers_fts.rowid

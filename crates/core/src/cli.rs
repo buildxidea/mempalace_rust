@@ -686,20 +686,40 @@ impl std::str::FromStr for MiningMode {
 
 fn resolve_palace_path(palace_arg: Option<&str>) -> Result<PathBuf> {
     let config = Config::load()?;
-    match palace_arg {
+    let path = match palace_arg {
         Some(p) => {
             if p.starts_with("~/") {
                 if let Ok(home) = std::env::var("HOME") {
-                    Ok(PathBuf::from(home).join(p.strip_prefix("~/").unwrap()))
+                    PathBuf::from(home).join(p.strip_prefix("~/").unwrap())
                 } else {
-                    Ok(PathBuf::from(p))
+                    PathBuf::from(p)
                 }
             } else {
-                Ok(PathBuf::from(p))
+                PathBuf::from(p)
             }
         }
-        None => Ok(config.palace_path.clone()),
+        None => config.palace_path.clone(),
+    };
+
+    // Auto-detect: when --palace receives a project directory (not a
+    // .mempalace/ dir itself), check if <path>/.mempalace/ exists with
+    // any valid palace file and use that instead.  This matches how
+    // `mpr init <dir>` creates <dir>/.mempalace/ and sets
+    // config.palace_path to the full <dir>/.mempalace path, while the
+    // user naturally passes `--palace <dir>` on the CLI.
+    let path_str = path.to_string_lossy();
+    let looks_like_project_dir = !path_str.contains(".mempalace");
+    if palace_arg.is_some() && looks_like_project_dir {
+        let sub = path.join(".mempalace");
+        if sub.join("mempalace.json").exists()
+            || sub.join("drawers.db").exists()
+            || sub.join("mempalace_drawers.json").exists()
+        {
+            return Ok(sub);
+        }
     }
+
+    Ok(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -813,12 +833,17 @@ fn cmd_init(
 
     // Check if palace location is the same as the previously configured palace
     if canonical_palace_path == existing_palace_path {
-        // Check if it's a valid palace
-        let palace_db_path = palace_path.join(format!(
-            "{}.json",
-            crate::palace_db::DEFAULT_COLLECTION_NAME
-        ));
-        let is_valid_palace = palace_db_path.exists();
+        // Check if it's a valid palace — look for ANY marker file
+        // (mempalace_drawers.json for JSON storage, drawers.db for
+        // SQLite, or mempalace.json for config-only init).
+        let is_valid_palace = palace_path
+            .join(format!(
+                "{}.json",
+                crate::palace_db::DEFAULT_COLLECTION_NAME
+            ))
+            .exists()
+            || palace_path.join("drawers.db").exists()
+            || palace_path.join("mempalace.json").exists();
 
         if is_valid_palace {
             println!();
@@ -3420,7 +3445,10 @@ fn cmd_deinit(force: bool) -> Result<()> {
 fn cmd_demo(custom_dir: Option<&Path>, force: bool, palace_arg: Option<&str>) -> Result<()> {
     let target = if let Some(dir) = custom_dir {
         let pb = PathBuf::from(dir);
-        if pb.exists() && !force {
+        // Check for a sentinel demo file — not just the directory — so that
+        // an existing (but empty) target doesn't block demo. (#1509)
+        let sentinel = pb.join("001_mempalace_intro.md");
+        if sentinel.exists() && !force {
             println!(
                 "Demo data already exists at {}. Use --force to overwrite.",
                 pb.display()

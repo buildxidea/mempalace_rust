@@ -93,7 +93,24 @@ pub fn mine_palace_lock_with_path(palace_path: &Path) -> Result<PathBuf, MineAlr
 
 fn get_lock_dir() -> io::Result<PathBuf> {
     let home = std::env::var_os("HOME")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "$HOME not set"))?;
+        .or_else(|| {
+            #[cfg(windows)]
+            {
+                std::env::var_os("USERPROFILE")
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            let msg = if cfg!(windows) {
+                "neither $HOME nor $USERPROFILE is set"
+            } else {
+                "$HOME is not set"
+            };
+            io::Error::new(io::ErrorKind::NotFound, msg)
+        })?;
     Ok(PathBuf::from(home).join(".mempalace").join("locks"))
 }
 

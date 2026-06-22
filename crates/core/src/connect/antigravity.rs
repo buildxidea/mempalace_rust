@@ -69,7 +69,7 @@ impl ConnectAdapter for AntigravityAdapter {
         }
 
         let path = self.config_path();
-        let result = write_mcp_config(&path, "mempalace", "mcpServers");
+        let result = write_mcp_config(&path, "mempalace", "mcpServers", opts.dry_run);
         Ok(result)
     }
 }

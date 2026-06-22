@@ -32,7 +32,7 @@ impl ConnectAdapter for ZedAdapter {
     fn connect(&self, opts: &ConnectOptions) -> std::result::Result<ConnectResult, anyhow::Error> {
         let path = self.config_path();
         // Zed uses "context_servers" not "mcpServers"
-        let result = write_mcp_config(&path, "mempalace", "context_servers");
+        let result = write_mcp_config(&path, "mempalace", "context_servers", opts.dry_run);
         if opts.dry_run {
             tracing::info!(
                 "connect [dry-run] {} → {:?} (wrote={})",

@@ -30,7 +30,7 @@ impl ConnectAdapter for CopilotCliAdapter {
 
     fn connect(&self, opts: &ConnectOptions) -> std::result::Result<ConnectResult, anyhow::Error> {
         let path = self.config_path();
-        let result = write_mcp_config(&path, "mempalace", "mcpServers");
+        let result = write_mcp_config(&path, "mempalace", "mcpServers", opts.dry_run);
         if opts.dry_run {
             tracing::info!(
                 "connect [dry-run] {} -> {:?} (wrote={})",

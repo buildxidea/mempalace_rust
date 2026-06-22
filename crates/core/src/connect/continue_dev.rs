@@ -54,7 +54,7 @@ impl ConnectAdapter for ContinueDevAdapter {
 
         // Branch 2: json exists → modify in place
         if json_path.exists() {
-            let result = write_mcp_config(&json_path, "mempalace", "mcpServers");
+            let result = write_mcp_config(&json_path, "mempalace", "mcpServers", opts.dry_run);
             if opts.dry_run {
                 tracing::info!(
                     "connect [dry-run] {} → {:?} (wrote={})",
@@ -87,7 +87,7 @@ impl ConnectAdapter for ContinueDevAdapter {
         }
 
         // Write fresh config.json with mcpServers entry
-        let result = write_mcp_config(&json_path, "mempalace", "mcpServers");
+        let result = write_mcp_config(&json_path, "mempalace", "mcpServers", opts.dry_run);
         Ok(result)
     }
 }

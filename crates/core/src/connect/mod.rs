@@ -227,7 +227,7 @@ mod tests {
 
         let tmpdir = tempfile::TempDir::new().expect("temp dir");
         let path = tmpdir.path().join("mcp.json");
-        let result = write_mcp_config(&path, "mempalace", "mcpServers");
+        let result = write_mcp_config(&path, "mempalace", "mcpServers", false);
         assert!(result.wrote, "write should succeed");
         assert!(path.exists(), "file should exist after write");
 
@@ -248,7 +248,7 @@ mod tests {
 
         let tmpdir = tempfile::TempDir::new().expect("temp dir");
         let path = tmpdir.path().join("atomic.json");
-        let result = write_mcp_config(&path, "mempalace", "mcpServers");
+        let result = write_mcp_config(&path, "mempalace", "mcpServers", false);
 
         // No .tmp files should remain after a successful write
         let entries: Vec<_> = tmpdir

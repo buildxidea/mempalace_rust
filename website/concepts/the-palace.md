@@ -84,7 +84,9 @@ Same room. Three wings. The graph can use that shared room name as a bridge.
 
 ### Closets
 
-Closets are the summary layer in the broader MemPalace vocabulary: compact notes that point back to the original content. In the current implementation, the main persisted storage path is still the underlying drawer text plus metadata.
+Closets are compact AAAK summaries that point back to the original drawer. They live in `crates/core/src/closet_llm.rs` (`regenerate_closets`) and are produced by an optional LLM pass that condenses drawer text into the AAAK dialect. Closets are stored alongside their source drawers so search can surface either verbatim or compressed form depending on the strategy.
+
+The main persisted storage path remains the underlying drawer text plus metadata; closets are a derived layer that the consolidation pipeline refreshes.
 
 ### Drawers
 

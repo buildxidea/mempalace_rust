@@ -1,7 +1,7 @@
 # Contradiction Detection
 
-::: warning Experimental
-Contradiction detection is a planned capability, not a shipped end-to-end feature in the current MCP workflow. The examples below show the intended behavior rather than a fully integrated command path.
+::: tip Status
+The fact-checking primitives live in `crates/core/src/fact_checker.rs` and the time-aware query helpers in `crates/core/src/knowledge_graph.rs`. They are used by `mempalace_kg_query` and the consolidation pipeline, but there isn't a single end-to-end "check this assertion" MCP tool exposed to AI agents yet — the examples below show how the underlying components are intended to compose.
 :::
 
 ## What It Does
@@ -28,6 +28,30 @@ Facts are checked against the knowledge graph:
 
 Ages, dates, and tenures are calculated dynamically from the entity's recorded facts — not hardcoded.
 
+## Rust API
+
+The fact checker is a pure function over plain text. Use it as a building block in your own consolidation or reflection passes:
+
+```rust
+use mempalace_core::fact_checker::check_text;
+
+let issues = check_text("Soren finished the auth migration in 2024.");
+for issue in issues {
+    println!("{:?} {:?}: {}", issue.severity, issue.kind, issue.message);
+}
+```
+
+For more precise queries (by entity, time-bounded), combine it with the knowledge graph directly:
+
+```rust
+use mempalace_core::knowledge_graph::KnowledgeGraph;
+
+let kg = KnowledgeGraph::open(std::path::Path::new("~/.mempalace/knowledge.db"))?;
+let facts = kg.query_entity("Maya", Some("2026-01-20"), "both")?;
+```
+
+The `as_of` parameter is the key — pass the date at which you want to evaluate the assertion, and the KG returns only facts that were valid at that point.
+
 ## Status
 
-The current codebase includes the temporal knowledge graph primitives needed for this direction, but not a complete contradiction-checking tool exposed through the CLI or MCP server.
+The current codebase includes the temporal knowledge graph primitives and the fact checker module needed for this direction, but there isn't a single `mempalace_check_assertion` tool wired through MCP yet. If you need it today, compose `mempalace_kg_query` with `fact_checker::check_text` in your own tooling.

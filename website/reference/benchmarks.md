@@ -108,40 +108,17 @@ reference:
 
 ## Reproducing Results
 
-Every benchmark runs deterministically from this repository.
+The headline numbers on this page were measured against the reference Python implementation of MemPalace. The Rust port in this repository is the active development branch and **targets parity** with those scores — verify with the Rust bench harness below.
 
-```bash
-git clone https://github.com/MemPalace/mempalace.git
-cd mempalace
-uv sync --extra dev   # or: pip install -e ".[dev]"
+Loaded 1 multilingual (de) sample(s)
+Loaded 1 benchmark entries
+Metrics at K: [5, 10]
+Granularity: Session
+Running benchmark ...
 
-# LongMemEval — raw (96.6%)
-curl -fsSL -o /tmp/longmemeval_s_cleaned.json \
-  https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
-python benchmarks/longmemeval_bench.py /tmp/longmemeval_s_cleaned.json
+If you don't have the dataset locally, the bench binary will download it from HuggingFace on first run ().
 
-# LongMemEval — hybrid v4 on the held-out 450 (98.4%)
-python benchmarks/longmemeval_bench.py /tmp/longmemeval_s_cleaned.json \
-  --mode hybrid_v4 --held-out --split-file benchmarks/lme_split_50_450.json
+The Rust port tracks the Python reference's methodology:
+`benchmarks/results_*.jsonl` files in the reference repo include every question, every retrieved corpus id, and every score, so every individual answer is auditable — not just the aggregate.
 
-# LoCoMo — session, top-10 (60.3%)
-git clone https://github.com/snap-research/locomo.git /tmp/locomo
-python benchmarks/locomo_bench.py /tmp/locomo/data/locomo10.json \
-  --granularity session --top-k 10
-
-# LongMemEval — hybrid v4 + rerank, any OpenAI-compatible endpoint
-python benchmarks/longmemeval_bench.py /tmp/longmemeval_s_cleaned.json \
-  --mode hybrid_v4 --llm-rerank \
-  --llm-backend ollama --llm-model <your-model-tag>
-```
-
-::: tip
-Results are deterministic: same data, same script, same split seed →
-same score. The committed `benchmarks/results_*.jsonl` files include
-every question, every retrieved corpus id, and every score, so every
-individual answer is auditable — not just the aggregate.
-:::
-
-For the complete progression (hybrid v1 → v4, diary mode, palace mode,
-LoCoMo architecture iterations, methodology integrity notes), see
-[`benchmarks/BENCHMARKS.md`](https://github.com/MemPalace/mempalace/blob/main/benchmarks/BENCHMARKS.md).
+For the complete progression (hybrid v1 → v4, diary mode, palace mode, LoCoMo architecture iterations, methodology integrity notes), see [`benchmarks/BENCHMARKS.md`](https://github.com/MemPalace/mempalace/blob/main/benchmarks/BENCHMARKS.md).

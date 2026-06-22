@@ -1,10 +1,12 @@
 # MCP Tools Reference
 
-Detailed parameter schemas for all 29 MCP tools.
+The MemPalace MCP server currently exposes **84 tools** (all prefixed `mempalace_`). They cover palace read/write, drawer CRUD, knowledge graph, navigation/tunnels, agent diary, sessions, slots, signals, sentinels, lessons, reflections, working memory, observation hooks, commit correlation, and more.
+
+This page lists the most-used tools with parameter schemas. For the canonical list, see `crates/core/src/mcp_server.rs` (`make_tools()`).
 
 ## Palace — Read Tools
 
-### `mpr_status`
+### `mempalace_status`
 
 Palace overview: total drawers, wing and room counts, AAAK spec, and memory protocol.
 
@@ -14,7 +16,17 @@ Palace overview: total drawers, wing and room counts, AAAK spec, and memory prot
 
 ---
 
-### `mpr_list_wings`
+### `mempalace_health`
+
+Liveness check for the running MCP server. Returns process info and palace connectivity.
+
+**Parameters:** None
+
+**Returns:** `{ status, palace_path, uptime_s, ... }`
+
+---
+
+### `mempalace_list_wings`
 
 List all wings with drawer counts.
 
@@ -24,7 +36,7 @@ List all wings with drawer counts.
 
 ---
 
-### `mpr_list_rooms`
+### `mempalace_list_rooms`
 
 List rooms within a wing (or all rooms if no wing given).
 
@@ -36,7 +48,7 @@ List rooms within a wing (or all rooms if no wing given).
 
 ---
 
-### `mpr_get_taxonomy`
+### `mempalace_get_taxonomy`
 
 Full wing → room → drawer count tree.
 
@@ -46,9 +58,9 @@ Full wing → room → drawer count tree.
 
 ---
 
-### `mpr_search`
+### `mempalace_search`
 
-Semantic search. Returns verbatim drawer content with similarity scores.
+Semantic or keyword search. Returns verbatim drawer content with similarity / relevance scores.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -56,12 +68,33 @@ Semantic search. Returns verbatim drawer content with similarity scores.
 | `limit` | integer | No | Max results (default: 5) |
 | `wing` | string | No | Filter by wing |
 | `room` | string | No | Filter by room |
+| `bm25` | boolean | No | Enable BM25 rerank |
+| `fusion_mode` | string | No | `vector`, `ppr`, or `hybrid` |
+| `strategy` | string | No | `contains`, `naive`, `bm25`, or `embedding` |
 
 **Returns:** `{ query, filters, results: [{ text, wing, room, source_file, similarity }] }`
 
 ---
 
-### `mpr_check_duplicate`
+### `mempalace_smart_search`
+
+AI-reranked search across wings. Same shape as `mempalace_search` but routes through the smart-rerank pipeline.
+
+---
+
+### `mempalace_hybrid_search`
+
+Hybrid keyword + vector + graph search. Useful for queries that mix entity names with descriptive text.
+
+---
+
+### `mempalace_graph_search` / `mempalace_graph_expand`
+
+Search the knowledge graph and expand by N hops. See [Knowledge Graph](#knowledge-graph-tools).
+
+---
+
+### `mempalace_check_duplicate`
 
 Check if content already exists in the palace before filing.
 
@@ -74,7 +107,7 @@ Check if content already exists in the palace before filing.
 
 ---
 
-### `mpr_get_aaak_spec`
+### `mempalace_get_aaak_spec`
 
 Returns the AAAK dialect specification.
 
@@ -86,9 +119,9 @@ Returns the AAAK dialect specification.
 
 ## Palace — Write Tools
 
-### `mpr_add_drawer`
+### `mempalace_add_drawer`
 
-File verbatim content into the palace. Identical content (same deterministic drawer ID) is silently skipped. For similarity-based duplicate detection before filing, use `mpr_check_duplicate`.
+File verbatim content into the palace. Identical content (same deterministic drawer ID) is silently skipped. For similarity-based duplicate detection before filing, use `mempalace_check_duplicate`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -96,13 +129,13 @@ File verbatim content into the palace. Identical content (same deterministic dra
 | `room` | string | **Yes** | Room (aspect: backend, decisions, etc.) |
 | `content` | string | **Yes** | Verbatim content to store |
 | `source_file` | string | No | Where this came from |
-| `added_by` | string | No | Who is filing (default: "mcp") |
+| `added_by` | string | No | Who is filing (default: `"mcp"`) |
 
 **Returns:** `{ success, drawer_id, wing, room }`
 
 ---
 
-### `mpr_delete_drawer`
+### `mempalace_delete_drawer`
 
 Delete a drawer by ID. Irreversible.
 
@@ -114,108 +147,87 @@ Delete a drawer by ID. Irreversible.
 
 ---
 
-### `mpr_get_drawer`
+### `mempalace_governance_delete`
 
-Fetch a single drawer by ID — returns full content and metadata.
+Governance-gated drawer delete. Adds an audit trail and policy check on top of raw deletion.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `drawer_id` | string | **Yes** | ID of the drawer to fetch |
-
-**Returns:** `{ drawer: { id, wing, room, content, ... } }`
+| `drawer_id` | string | **Yes** | ID of the drawer to delete |
+| `reason` | string | No | Reason recorded in the audit log |
 
 ---
 
-### `mpr_list_drawers`
+### `mempalace_compress_file`
 
-List drawers with pagination. Optional wing/room filter. Returns IDs, wings, rooms, and content previews.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `wing` | string | No | Filter by wing |
-| `room` | string | No | Filter by room |
-| `limit` | integer | No | Max results per page (default 20, max 100) |
-| `offset` | integer | No | Offset for pagination (default 0) |
-
-**Returns:** `{ drawers: [...], total, limit, offset }`
+Run AAAK compression on the contents of a file (preview only, by default).
 
 ---
 
-### `mpr_update_drawer`
+### `mempalace_obsidian_export`
 
-Update an existing drawer's content and/or metadata (wing, room). Fetches the existing drawer first; returns an error if not found.
+Export the palace to a Markdown vault at the given output path.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `drawer_id` | string | **Yes** | ID of the drawer to update |
-| `content` | string | No | New content (omit to keep existing) |
-| `wing` | string | No | New wing (omit to keep existing) |
-| `room` | string | No | New room (omit to keep existing) |
-
-**Returns:** `{ success, drawer_id, updated_fields }`
+| `output_dir` | string | **Yes** | Output directory for the vault |
 
 ---
 
 ## Knowledge Graph Tools
 
-### `mpr_kg_query`
+### `mempalace_kg_query`
 
 Query entity relationships with time filtering.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `entity` | string | **Yes** | Entity to query (e.g. "Max", "MyProject") |
-| `as_of` | string | No | Date filter — only facts valid at this date (YYYY-MM-DD) |
+| `entity` | string | **Yes** | Entity to query (e.g. `"Max"`, `"MyProject"`) |
+| `as_of` | string | No | Date filter — only facts valid at this date (`YYYY-MM-DD`) |
 | `direction` | string | No | `outgoing`, `incoming`, or `both` (default: `both`) |
 
 **Returns:** `{ entity, as_of, facts: [{ direction, subject, predicate, object, valid_from, valid_to, current }], count }`
 
 ---
 
-### `mpr_kg_add`
+### `mempalace_kg_add`
 
 Add a fact to the knowledge graph.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `subject` | string | **Yes** | The entity doing/being something |
-| `predicate` | string | **Yes** | Relationship type (e.g. "loves", "works_on") |
-| `object` | string | **Yes** | The entity being connected to |
-| `valid_from` | string | No | When this became true (YYYY-MM-DD) |
-| `source_closet` | string | No | Closet ID where this fact appears |
-
-**Returns:** `{ success, triple_id, fact }`
+| `predicate` | string | **Yes** | Relationship type |
+| `object` | string | **Yes** | The entity receiving/being described |
+| `valid_from` | string | No | When the fact became true (`YYYY-MM-DD`) |
+| `confidence` | number | No | 0.0–1.0 (default 1.0) |
 
 ---
 
-### `mpr_kg_invalidate`
+### `mempalace_kg_invalidate`
 
-Mark a fact as no longer true.
+Mark a fact as ended (sets `valid_to`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `subject` | string | **Yes** | Entity |
-| `predicate` | string | **Yes** | Relationship |
-| `object` | string | **Yes** | Connected entity |
-| `ended` | string | No | When it stopped being true (default: today) |
-
-**Returns:** `{ success, fact, ended }`
+| `subject` | string | **Yes** | Subject entity |
+| `predicate` | string | **Yes** | Relationship type |
+| `object` | string | **Yes** | Object entity |
+| `ended` | string | **Yes** | When the fact stopped being true (`YYYY-MM-DD`) |
 
 ---
 
-### `mpr_kg_timeline`
+### `mempalace_kg_timeline`
 
-Chronological timeline of facts.
+Chronological entity story.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `entity` | string | No | Entity to get timeline for (omit for full timeline) |
 
-**Returns:** `{ entity, timeline: [{ subject, predicate, object, valid_from, valid_to, current }], count }`
-
 ---
 
-### `mpr_kg_stats`
+### `mempalace_kg_stats`
 
 Knowledge graph overview.
 
@@ -225,9 +237,15 @@ Knowledge graph overview.
 
 ---
 
+### `mempalace_kg_snapshot_rebuild` / `mempalace_kg_reset`
+
+Rebuild the in-memory KG snapshot from disk, or fully reset (destructive — use with care).
+
+---
+
 ## Navigation Tools
 
-### `mpr_traverse`
+### `mempalace_traverse`
 
 Walk the palace graph from a room. Find connected ideas across wings.
 
@@ -240,7 +258,7 @@ Walk the palace graph from a room. Find connected ideas across wings.
 
 ---
 
-### `mpr_find_tunnels`
+### `mempalace_find_tunnels`
 
 Find rooms that bridge two wings.
 
@@ -249,11 +267,15 @@ Find rooms that bridge two wings.
 | `wing_a` | string | No | First wing |
 | `wing_b` | string | No | Second wing |
 
-**Returns:** `[{ room, wings, halls, count, recent }]`
+---
+
+### `mempalace_list_hallways` / `mempalace_delete_hallway`
+
+List or remove explicit hallways (edges between rooms within a wing).
 
 ---
 
-### `mpr_graph_stats`
+### `mempalace_graph_stats`
 
 Palace graph overview: nodes, tunnels, edges, connectivity.
 
@@ -263,93 +285,294 @@ Palace graph overview: nodes, tunnels, edges, connectivity.
 
 ---
 
-### `mpr_create_tunnel`
+## Sessions, Slots & Working Memory
 
-Create a cross-wing tunnel linking two palace locations. Use when content in one project relates to another — e.g., an API design in `project_api` connects to a database schema in `project_database`.
+### `mempalace_sessions`
+
+List recent mining sessions, optionally filtered by wing.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `source_wing` | string | **Yes** | Wing of the source |
-| `source_room` | string | **Yes** | Room in the source wing |
-| `target_wing` | string | **Yes** | Wing of the target |
-| `target_room` | string | **Yes** | Room in the target wing |
-| `label` | string | No | Description of the connection |
-| `source_drawer_id` | string | No | Specific source drawer ID |
-| `target_drawer_id` | string | No | Specific target drawer ID |
-
-**Returns:** `{ success, tunnel_id, source, target }`
+| `wing` | string | No | Filter by wing |
+| `limit` | integer | No | Max results (default 20) |
 
 ---
 
-### `mpr_list_tunnels`
+### `mempalace_observe`
 
-List all explicit cross-wing tunnels. Optionally filter by wing.
+Record an observation (typically invoked by `mpr hook` from a lifecycle hook).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `wing` | string | No | Filter tunnels by wing (source or target) |
-
-**Returns:** `{ tunnels: [...], count }`
+| `session_id` | string | **Yes** | Session ID |
+| `hook_type` | string | **Yes** | `notification`, `stop`, `precompact`, `session_end`, `post_tool_use`, … |
+| `project` | string | No | Project name |
+| `data` | object | No | Arbitrary JSON payload |
 
 ---
 
-### `mpr_delete_tunnel`
+### `mempalace_slot_list` / `mempalace_slot_get` / `mempalace_slot_create` / `mempalace_slot_append` / `mempalace_slot_replace` / `mempalace_slot_delete`
 
-Delete an explicit tunnel by its ID.
+Manage named slots — durable per-session scratchpads that survive context compactions. Slots are the recommended place to put TODO lists and in-progress reasoning.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tunnel_id` | string | **Yes** | Tunnel ID to delete |
-
-**Returns:** `{ success, tunnel_id }`
-
----
-
-### `mpr_follow_tunnels`
-
-Follow tunnels from a room to see what it connects to in other wings. Returns connected rooms with drawer previews.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `wing` | string | **Yes** | Wing to start from |
-| `room` | string | **Yes** | Room to follow tunnels from |
-
-**Returns:** `[{ wing, room, label, previews }]`
+| Operation | Key parameters |
+|-----------|---------------|
+| `slot_list` | `wing`, `session_id` |
+| `slot_get` | `slot_id` |
+| `slot_create` | `wing`, `session_id`, `name`, `body` |
+| `slot_append` | `slot_id`, `body` |
+| `slot_replace` | `slot_id`, `body` |
+| `slot_delete` | `slot_id` |
 
 ---
 
-## Agent Diary Tools
+### `mempalace_working_memory`
 
-### `mpr_diary_write`
-
-Write to your personal agent diary.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `agent_name` | string | **Yes** | Your name — each agent gets its own wing |
-| `entry` | string | **Yes** | Diary entry (in AAAK format recommended) |
-| `topic` | string | No | Topic tag (default: "general") |
-
-**Returns:** `{ success, entry_id, agent, topic, timestamp }`
+Combined read of slots + recent observations for the current session. Use this on wake-up instead of fetching slots one-by-one.
 
 ---
 
-### `mpr_diary_read`
+### `mempalace_context_build`
 
-Read recent diary entries.
+Assemble a context block for the AI prompt. Combines wake-up, slots, and recent memories.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `agent_name` | string | **Yes** | Your name |
-| `last_n` | integer | No | Number of recent entries (default: 10) |
+| `levels` | integer | No | Context depth (default 3) |
+| `wing` | string | No | Restrict to a wing |
 
-**Returns:** `{ agent, entries: [{ date, timestamp, topic, content }], total, showing }`
+---
+
+## Commits & File History
+
+### `mempalace_commits`
+
+Recent git commits correlated with the current session (used by `mpr status` and the palace UI).
+
+---
+
+### `mempalace_commit_lookup`
+
+Look up the commit that introduced a given drawer or file change.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | **Yes** | Repository-relative path |
+
+---
+
+### `mempalace_file_history`
+
+Chronological list of mutations on a file (drawer creates, updates, deletes).
+
+---
+
+## Signals, Sentinels, Routines
+
+### `mempalace_signal_send` / `mempalace_signal_read`
+
+Send and read agent-to-agent signals. Same shape as `mpr signals`.
+
+---
+
+### `mempalace_sentinel_create` / `mempalace_sentinel_trigger` / `mempalace_sentinel_list` / `mempalace_sentinel_delete`
+
+Watchers that fire on a condition (e.g. "wake me when keyword X appears in any new drawer"). Sentinels run in the background engine started by `mpr serve`.
+
+---
+
+### `mempalace_routine_run`
+
+Trigger a named routine (a saved sequence of MCP calls) on demand.
+
+---
+
+## Lessons, Reflections, Insights
+
+### `mempalace_lesson_save` / `mempalace_lesson_recall`
+
+Save and recall reusable lessons the AI has learned. Lessons persist across sessions and are surfaced during wake-up.
+
+---
+
+### `mempalace_reflect`
+
+Run a reflection pass: take recent observations, summarise, and write back as lessons.
+
+---
+
+### `mempalace_insight_list`
+
+List derived insights (aggregations over drawers + KG facts).
+
+---
+
+## Crystallize, Checkpoints, Snapshots
+
+### `mempalace_crystallize`
+
+Promote a slot / observation cluster into a long-lived drawer.
+
+---
+
+### `mempalace_checkpoint` / `mempalace_checkpoint_list` / `mempalace_checkpoint_resolve`
+
+Manage context-window checkpoints — explicit save points the AI can return to after compaction.
+
+---
+
+### `mempalace_snapshot_create`
+
+Create a full memory snapshot. Mirrors the CLI `mpr snapshot --name <name>`.
+
+---
+
+## Action Store & Frontier
+
+### `mempalace_action_create` / `mempalace_action_update`
+
+Track discrete actions (PR opened, file migrated, etc.) for the [frontier queue](#).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `description` | string | **Yes** | Action description |
+| `status` | string | No | `pending`, `running`, `completed`, `failed` |
+
+---
+
+### `mempalace_frontier`
+
+Show the frontier queue — pending work items grouped by priority.
+
+---
+
+### `mempalace_next`
+
+Suggest the next action to take based on the frontier queue, recent observations, and the current session.
+
+---
+
+## Lease, Team, Mesh
+
+### `mempalace_lease`
+
+Acquire/release advisory file leases so multiple agents can coordinate without clobbering each other's drawers.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | **Yes** | Glob to lease |
+| `mode` | string | No | `acquire` or `release` |
+| `ttl_seconds` | integer | No | Lease TTL |
+
+---
+
+### `mempalace_team_share` / `mempalace_team_feed`
+
+Share a drawer with the team wing, or read the shared feed.
+
+---
+
+### `mempalace_mesh_sync`
+
+Sync the mesh with peers. Same shape as `mpr mesh --operation sync`.
+
+---
+
+## Consolidate, Retention, Access
+
+### `mempalace_consolidate`
+
+Run the consolidation pipeline. Mirrors `mpr consolidate`.
+
+---
+
+### `mempalace_retention_score`
+
+Return the retention score for a drawer (used by `mpr forget` and auto-forget).
+
+---
+
+### `mempalace_access_stats`
+
+Return drawer access counts. Useful for tuning what to keep / evict.
+
+---
+
+### `mempalace_enrich`
+
+Enrich a drawer with metadata (entities, topics, embedding refresh).
+
+---
+
+## Mine & Heal
+
+### `mempalace_mine`
+
+Run `mpr mine` from MCP — given a target path, file its content as drawers.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | **Yes** | Directory or file to mine |
+| `mode` | string | No | `projects`, `convos`, `auto` |
+
+---
+
+### `mempalace_heal`
+
+Attempt to repair corrupt or unfetchable drawer entries (analogous to `mpr repair scan` + `prune`).
+
+---
+
+### `mempalace_verify`
+
+Run diagnostics on the palace (analogous to `mpr diagnose`).
+
+---
+
+### `mempalace_diagnose`
+
+Deep diagnostics (analogous to `mpr diagnose --deep`).
+
+---
+
+### `mempalace_replay_import`
+
+Replay an earlier import, useful for debugging.
+
+---
+
+## Worktrees & Branches
+
+### `mempalace_detect_worktree` / `mempalace_branch_detect` / `mempalace_branch_sessions` / `mempalace_branch_worktrees`
+
+Detect git worktrees and branch-aware sessions. Used when mining across multi-branch repos.
+
+---
+
+## Claude Bridge
+
+### `mempalace_claude_bridge_sync`
+
+Sync a Claude.ai project with the local palace. See [Claude Code Plugin](/guide/claude-code) for context.
+
+---
+
+## Facets
+
+### `mempalace_facet_tag` / `mempalace_facet_query`
+
+Tag and query drawer facets (per-drawer structured metadata beyond wing/room).
+
+| Operation | Key parameters |
+|-----------|---------------|
+| `facet_tag` | `drawer_id`, `facet`, `value` |
+| `facet_query` | `facet`, `value`, `limit` |
 
 ---
 
 ## System Tools
 
-### `mpr_hook_settings`
+### `mempalace_hook_settings`
 
 Get or set auto-save hook behaviour. `silent_save=true` saves directly without MCP-level clutter; `silent_save=false` uses the legacy blocking path. `desktop_toast=true` surfaces a desktop notification when a save completes. Call with no arguments to view the current settings.
 
@@ -358,24 +581,10 @@ Get or set auto-save hook behaviour. `silent_save=true` saves directly without M
 | `silent_save` | boolean | No | `true` = silent direct save, `false` = blocking MCP calls |
 | `desktop_toast` | boolean | No | `true` = show desktop toast via `notify-send` |
 
-**Returns:** `{ silent_save, desktop_toast }`
-
 ---
 
-### `mpr_memories_filed_away`
-
-Check whether a recent palace checkpoint was saved. Returns message count and timestamp of the last save.
-
-**Parameters:** None
-
-**Returns:** `{ filed, message_count, timestamp }`
-
----
-
-### `mpr_reconnect`
+### `mempalace_reconnect`
 
 Force a reconnect to the palace database. Use this after external scripts or CLI commands modified the palace directly, which can leave the in-memory HNSW index stale.
 
 **Parameters:** None
-
-**Returns:** `{ success, palace_path }`

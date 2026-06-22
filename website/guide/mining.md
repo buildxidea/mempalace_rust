@@ -22,7 +22,8 @@ mpr mine ~/projects/myapp --wing myapp
 # Ignore .gitignore rules
 mpr mine ~/projects/myapp --no-gitignore
 
-# Include specific ignored paths
+# Include specific ignored paths (repeat flag or comma-separated)
+mpr mine ~/projects/myapp --include-ignored dist --include-ignored build
 mpr mine ~/projects/myapp --include-ignored dist,build
 
 # Limit number of files
@@ -30,22 +31,36 @@ mpr mine ~/projects/myapp --limit 100
 
 # Preview without filing
 mpr mine ~/projects/myapp --dry-run
+
+# Override per-file chunk cap (lower to bound ONNX worst-case batches on Windows)
+mpr mine ~/projects/myapp --max-chunks-per-file 5000
 ```
 
 ### Conversations Mode
 
-Indexes conversation exports from Claude, ChatGPT, Slack, and other tools. Chunks by exchange pair (human + assistant turns).
+Indexes conversation exports from Claude, ChatGPT, Slack, Codex, OpenCode, and other tools. Chunks by exchange pair (human + assistant turns).
 
 ```bash
 mpr mine ~/chats/ --mode convos
 ```
 
-Supports five chat formats automatically:
-- Claude JSON exports
-- ChatGPT exports
-- Slack exports
-- Markdown conversations
-- Plain text transcripts
+Supports **8+ chat formats** automatically:
+- Claude Code JSONL
+- Claude.ai JSON
+- ChatGPT JSON
+- Slack JSON
+- Codex CLI JSONL
+- SoulForge JSONL
+- OpenCode SQLite
+- Plain text / Markdown
+
+### Auto Mode
+
+Let `mpr` pick `projects` or `convos` based on the file content. Useful when a directory contains a mix of code and chat dumps.
+
+```bash
+mpr mine ~/data/ --mode auto
+```
 
 ### General Extraction
 
@@ -121,17 +136,15 @@ mpr search "Soren sprint" --wing driftwood
 
 ## Agent Tag
 
-Every drawer is tagged with the agent that filed it:
+Every drawer is tagged with the agent that filed it. The default is `mpr` (the CLI binary), so plan-style drawers can be partitioned by source. Override per-call:
 
 ```bash
 # Default agent name
-mpr mine ~/data/ --agent mempalace
+mpr mine ~/data/
 
-# Custom agent name
+# Custom agent name (e.g. a specific bot or reviewer)
 mpr mine ~/data/ --agent reviewer
+mpr mine ~/data/ --agent codex
 ```
 
 This is used by [Specialist Agents](/concepts/agents) to partition memories.
-
-
----

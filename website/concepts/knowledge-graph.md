@@ -14,37 +14,40 @@ Facts have time windows. When something stops being true, you invalidate it — 
 
 ## Usage
 
-### Python API
+### Rust API
 
-```python
-from mempalace.knowledge_graph import KnowledgeGraph
+```rust
+use mempalace_core::knowledge_graph::KnowledgeGraph;
 
-kg = KnowledgeGraph()
+let kg = KnowledgeGraph::open(std::path::Path::new("~/.mempalace/knowledge.db"))?;
 
-# Add facts
-kg.add_triple("Kai", "works_on", "Orion", valid_from="2025-06-01")
-kg.add_triple("Maya", "assigned_to", "auth-migration", valid_from="2026-01-15")
-kg.add_triple("Maya", "completed", "auth-migration", valid_from="2026-02-01")
+// Add facts. valid_from, confidence, and provenance are optional.
+kg.add_triple("Kai",  "works_on",     "Orion", Some("2025-06-01"), None, Some(1.0), None, None, None, None)?;
+kg.add_triple("Maya", "assigned_to",  "auth-migration", Some("2026-01-15"), None, None, None, None, None, None)?;
+kg.add_triple("Maya", "completed",    "auth-migration", Some("2026-02-01"), None, None, None, None, None, None)?;
 
-# Query: everything about Kai
-kg.query_entity("Kai")
-# → [Kai → works_on → Orion (current), Kai → recommended → Clerk (2026-01)]
+// Query: everything about Kai
+let facts = kg.query_entity("Kai", None, "both")?;
+// → [Kai → works_on → Orion (current), Kai → recommended → Clerk (2026-01)]
 
-# Query: what was true in January?
-kg.query_entity("Maya", as_of="2026-01-20")
-# → [Maya → assigned_to → auth-migration (active)]
+// Query: what was true in January?
+let facts = kg.query_entity("Maya", Some("2026-01-20"), "both")?;
+// → [Maya → assigned_to → auth-migration (active)]
 
-# Timeline
-kg.timeline("Orion")
-# → chronological story of the project
+// Timeline
+let triples = kg.timeline(Some("Orion"))?;
+// → chronological story of the project
+
+// Stats
+let stats = kg.stats()?;
 ```
 
 ### Invalidating Facts
 
 When something stops being true:
 
-```python
-kg.invalidate("Kai", "works_on", "Orion", ended="2026-03-01")
+```rust
+kg.invalidate("Kai", "works_on", "Orion", "2026-03-01")?;
 ```
 
 Now queries for Kai's current work won't return Orion. Historical queries still will.
@@ -60,10 +63,14 @@ Through the MCP server, the knowledge graph is available as tools:
 | `mempalace_kg_invalidate` | Mark facts as ended |
 | `mempalace_kg_timeline` | Chronological entity story |
 | `mempalace_kg_stats` | Graph overview |
+| `mempalace_kg_snapshot_rebuild` | Rebuild the in-memory KG snapshot |
+| `mempalace_kg_reset` | Reset the KG (destructive) |
+
+All tools use the `mempalace_` prefix. See [MCP Tools Reference → Knowledge Graph Tools](/reference/mcp-tools#knowledge-graph-tools) for parameter schemas.
 
 ## Storage
 
-The knowledge graph uses SQLite with two tables:
+The knowledge graph uses SQLite with two main tables:
 
 **`entities`** — people, projects, tools, concepts:
 - `id` — lowercase normalized name
@@ -73,18 +80,13 @@ The knowledge graph uses SQLite with two tables:
 
 **`triples`** — relationships between entities:
 - `subject` → `predicate` → `object`
-- `valid_from` — when this became true
+- `valid_from` — when this became true (sanitized to ISO-8601 UTC)
 - `valid_to` — when it stopped being true (NULL = still current)
 - `confidence` — 0.0 to 1.0
 - `source_closet` — link back to the verbatim memory
 
-Database location: `~/.mempalace/knowledge_graph.sqlite3`
+Database location: `~/.mempalace/knowledge.db`
 
 ## Related Work
 
-Temporal entity-relationship graphs are a familiar pattern — Zep's
-Graphiti, for example, also exposes a bi-temporal model. MemPalace's
-knowledge graph is local-first (SQLite, everything on disk) and free;
-Zep is a managed service backed by Neo4j with its own pricing, SLAs,
-and compliance surface. See Zep's own [documentation](https://www.getzep.com/)
-for authoritative details on their deployment model.
+Temporal entity-relationship graphs are a familiar pattern — Zep's Graphiti, for example, also exposes a bi-temporal model. MemPalace's knowledge graph is local-first (SQLite, everything on disk) and free; Zep is a managed service backed by Neo4j with its own pricing, SLAs, and compliance surface. See Zep's own [documentation](https://www.getzep.com/) for authoritative details on their deployment model.

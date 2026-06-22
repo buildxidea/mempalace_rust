@@ -1,6 +1,6 @@
 # AAAK Dialect
 
-AAAK is an experimental lossy abbreviation system designed to pack repeated entities and relationships into fewer tokens at scale. It is readable by any LLM — Claude, GPT, Gemini, Llama, Mistral — without a decoder.
+AAAK is a lossy abbreviation dialect designed to pack repeated entities and relationships into fewer tokens at scale. It is readable by any LLM — Claude, GPT, Gemini, Llama, Mistral — without a decoder.
 
 ::: warning Experimental
 AAAK is a separate compression layer, **not the storage default**. The 96.6% benchmark score comes from raw verbatim mode. AAAK mode currently scores 84.2% R@5 — a 12.4 point regression. We're iterating.
@@ -17,7 +17,7 @@ AAAK is a separate compression layer, **not the storage default**. The 96.6% ben
 
 - **Not lossless compression.** The original text cannot be reconstructed.
 - **Not efficient at small scale.** Short text already tokenizes efficiently — AAAK overhead costs more than it saves.
-- **Not the default storage format.** MemPalace stores raw verbatim text in ChromaDB.
+- **Not the default storage format.** MemPalace stores raw verbatim text in the drawer store.
 
 ## Format
 
@@ -74,23 +74,20 @@ was excited about the schema-first approach.
 
 ## Usage
 
-### Compress drawers
+### Compress drawers via CLI
 
 ```bash
 # Preview compression
-mempalace compress --wing myapp --dry-run
+mpr compress --wing myapp --dry-run
 
 # Compress and store
-mempalace compress --wing myapp
+mpr compress --wing myapp
 ```
 
-### With entity config
+The `--config` flag points at an entity mapping file (see below).
 
-```bash
-mempalace compress --wing myapp --config entities.json
-```
+### Entity config format
 
-Entity config format:
 ```json
 {
   "entities": {"Alice": "ALC", "Bob": "BOB"},
@@ -98,21 +95,28 @@ Entity config format:
 }
 ```
 
-### Python API
+### Rust API
 
-```python
-from mempalace.dialect import Dialect
+```rust
+use std::collections::HashMap;
+use mempalace_core::dialect::{compress, compress_with_metadata, Dialect};
 
-# Basic compression
-dialect = Dialect()
-compressed = dialect.compress("We decided to use GraphQL...")
+// Top-level helper
+let mut people = HashMap::new();
+people.insert("Alice".to_string(), "ALC".to_string());
+let text = "We decided to use GraphQL instead of REST because the frontend team needs flexible queries. Kai recommended it after researching both options.";
+let compressed = compress(text, &people);
 
-# With entity mappings
-dialect = Dialect(entities={"Alice": "ALC", "Kai": "KAI"})
-compressed = dialect.compress(text, metadata={"wing": "myapp", "room": "arch"})
+// With metadata (wing/room context)
+let mut metadata = serde_json::Map::new();
+metadata.insert("wing".into(), serde_json::json!("myapp"));
+metadata.insert("room".into(), serde_json::json!("arch"));
+let compressed_with_meta = compress_with_metadata(text, &people, &metadata);
 
-# From config file
-dialect = Dialect.from_config("entities.json")
+// Full Dialect struct
+let dialect = Dialect::new();
+let stats = dialect.compression_stats(text, &compressed);
+println!("ratio: {}", stats.ratio);
 ```
 
 ## When to Use AAAK

@@ -24,15 +24,20 @@ People: Alice (creator), Bob (Alice's partner).
 Project: A journaling app that helps people process emotions.
 ```
 
-~50 tokens. Tells the AI who it is and who it works with.
+~50–100 tokens. Tells the AI who it is and who it works with.
 
 ## Layer 1: Essential Story
 
 Auto-generated from the highest-importance drawers in the palace. Groups by room, picks the top moments, and keeps the output bounded.
 
-The generation process:
-1. Reads all drawers from ChromaDB
-2. Scores each by importance/emotional weight
+The Rust implementation lives in `crates/core/src/layers.rs::Layer1`. The relevant constants are:
+
+- `Layer1::MAX_DRAWERS = 15` — top N moments included in L1
+- `Layer1::MAX_CHARS = 3200` — hard cap on L1 output length
+
+Generation steps:
+1. Reads all drawers from `PalaceDb`
+2. Scores each by importance / emotional weight
 3. Takes the top 15 moments
 4. Groups by room for readability
 5. Truncates to fit within 3,200 characters
@@ -52,19 +57,24 @@ The generation process:
 
 Loaded when a specific topic or wing comes up in conversation. Retrieves drawers filtered by wing and/or room — typically ~200–500 tokens.
 
-```python
-stack = MemoryStack()
-stack.recall(wing="driftwood", room="auth")
-# → returns recent drawers about auth in the driftwood project
+```rust
+use mempalace_core::layers::MemoryStack;
+
+let mut stack = MemoryStack::new(
+    Some("~/.mempalace/palace".into()),
+    None,
+);
+let recalled: String = stack.recall(Some("driftwood"), Some("auth"), 10);
 ```
 
 ## Layer 3: Deep Search
 
 Full semantic search against the entire palace. This is what fires when you or the AI explicitly asks a question.
 
-```python
-stack.search("why did we switch to GraphQL")
-# → returns top-5 matching drawers with similarity scores
+```rust
+let answer: String = stack
+    .search("why did we switch to GraphQL", Some("myapp"), None, 5)
+    .await;
 ```
 
 ## Wake-Up Budget
@@ -76,29 +86,37 @@ The point of the stack is bounded startup context, not a fixed universal token c
 ### CLI
 
 ```bash
-# Wake-up context (L0 + L1)
-mempalace wake-up
+# Wake-up context (L0 + L1) — ~600-900 tokens
+mpr wake-up
 
 # Project-specific wake-up
-mempalace wake-up --wing driftwood
+mpr wake-up --wing driftwood
+
+# Direct L3 search from the command line
+mpr search "why did we switch to GraphQL"
 ```
 
-### Python API
+### Rust API
 
-```python
-from mempalace.layers import MemoryStack
+```rust
+use mempalace_core::layers::MemoryStack;
 
-stack = MemoryStack()
+let mut stack = MemoryStack::new(
+    Some("~/.mempalace/palace".into()),  // palace_path
+    None,                                // identity_path (defaults to ~/.mempalace/identity.txt)
+);
 
-# L0 + L1: wake-up (~600-900 tokens in typical use)
-print(stack.wake_up())
+// L0 + L1: wake-up (~600-900 tokens in typical use)
+let context: String = stack.wake_up(Some("myapp")).await;
 
-# L2: on-demand recall
-print(stack.recall(wing="myapp"))
+// L2: on-demand recall (sync)
+let recall: String = stack.recall(Some("myapp"), Some("auth"), 10);
 
-# L3: deep search
-print(stack.search("pricing change"))
+// L3: deep search (async)
+let results: String = stack.search("pricing change", Some("myapp"), None, 5).await;
 
-# Status
-print(stack.status())
+// Status
+let status = stack.status();
 ```
+
+For the full per-method parameter list, see [API Reference](/reference/api-reference#mempalace_corelayers).

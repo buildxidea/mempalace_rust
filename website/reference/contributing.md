@@ -5,82 +5,111 @@ PRs welcome. MemPalace is open source and we welcome contributions of all sizes 
 ## Getting Started
 
 ```bash
-git clone https://github.com/MemPalace/mempalace.git
-cd mempalace
+git clone https://github.com/quangdang46/mempalace_rust.git
+cd mempalace_rust
 
-# Recommended: uv (https://docs.astral.sh/uv/) manages the venv for you
-uv sync --extra dev
+# Build the CLI
+cargo build --release
 
-# Or with pip in your own venv:
-# pip install -e ".[dev]"
+# Install the binary onto your PATH
+cargo install --path crates/cli
+
+# (Optional) Build the HTTP REST API into the CLI
+cargo build --release --features http-server
 ```
+
+### Toolchain
+
+- **Rust 1.75+** (workspace edition 2021)
+- **No API key.** Everything runs locally.
 
 ## Running Tests
 
+The workspace currently contains **1,400+ tests** spanning `crates/core` (unit + integration) and the CLI binary. Run them all:
+
 ```bash
-uv run pytest tests/ -v
+# Fast — unit tests in the core crate
+cargo test --workspace
+
+# Full suite (adds CLI integration tests + conformance)
+cargo test --all
+
+# A specific test
+cargo test -p mempalace-core config_roundtrip
 ```
 
-All tests must pass before submitting a PR. Tests should run without API keys or network access.
+All tests must pass before submitting a PR. The test suite is fully offline — no API keys or network access required (the embedder test fixtures use deterministic hashing instead of downloading ONNX weights).
 
 ## Running Benchmarks
 
 ```bash
-# Quick test (20 questions, ~30 seconds)
-uv run python benchmarks/longmemeval_bench.py /path/to/longmemeval_s_cleaned.json --limit 20
+# Build the benchmark harness
+cargo build --release -p mempalace-bench
 
-# Full benchmark (500 questions, ~5 minutes)
-uv run python benchmarks/longmemeval_bench.py /path/to/longmemeval_s_cleaned.json
+# LongMemEval — quick smoke test
+./target/release/mempalace-bench longmemeval --limit 20
+
+# LongMemEval — full 500 questions
+./target/release/mempalace-bench longmemeval
 ```
 
-See [Benchmarks](/reference/benchmarks) for data download instructions.
+See [Benchmarks](/reference/benchmarks) for the full methodology and result tables.
+
+## Project Layout
+
+```
+crates/
+  core/      ← the library (120+ modules, 1,400+ tests)
+  cli/       ← thin binary wrapper around `mempalace_core::cli::run()`
+  bench/     ← benchmark harness
+```
+
+CLI logic lives in `crates/core/src/cli.rs` (a single clap `Parser` with ~50 subcommands). Adding a new subcommand means adding a `Commands::Foo { … }` variant, a `cmd_foo()` function, and wiring it in `cli::run()`.
+
+MCP tool logic lives in `crates/core/src/mcp_server.rs` (`make_tools()` builds the 84-tool set). Adding a tool means a `tool_foo()` handler plus a `tool("mempalace_foo", …)` entry in `make_tools()`.
 
 ## PR Guidelines
 
 1. Fork the repo and create a feature branch: `git checkout -b feat/my-thing`
 2. Write your code
-3. Add or update tests if applicable
-4. Run `uv run pytest tests/ -v` — everything must pass
+3. Add or update tests — every behaviour change should come with at least one regression test
+4. Run the full pre-commit checklist:
+
+   ```bash
+   cargo fmt --all
+   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace
+   ```
+
 5. Commit with clear [conventional commits](https://www.conventionalcommits.org/):
    - `feat: add Notion export format`
-   - `fix: handle empty transcript files`
-   - `docs: update MCP tool descriptions`
-   - `bench: add LoCoMo turn-level metrics`
-6. Push to your fork and open a PR against `main`
+   - `fix(search): handle UTF-8 truncation in result text`
+   - `chore: bump clap to 4.5`
+6. Open a PR against `main`. CI runs the full build, test, clippy, and `cargo fmt --check` matrix.
 
-## Code Style
+## Issue Tracking
 
-- **Formatting**: [Ruff](https://docs.astral.sh/ruff/) with 100-char line limit
-- **Naming**: `snake_case` for functions/variables, `PascalCase` for classes
-- **Docstrings**: on all modules and public functions
-- **Type hints**: where they improve readability
-- **Dependencies**: minimize — ChromaDB + PyYAML only. Don't add new deps without discussion.
+Beads (`br`) is the source of truth for project status, priority, and dependencies. Agent Mail is used for inter-agent coordination and file reservations.
 
-## Good First Issues
+```bash
+# Pick up ready work
+br ready
 
-Check the [Issues](https://github.com/MemPalace/mempalace/issues) tab:
+# Update status as you work
+br update br-123 --status in_progress
 
-- **New chat formats** — add import support for Cursor, Copilot, or other AI tool exports
-- **Room detection** — improve pattern matching in `room_detector_local.py`
-- **Tests** — increase coverage, especially for `knowledge_graph.py` and `palace_graph.py`
-- **Entity detection** — better name disambiguation in `entity_detector.py`
-- **Docs** — improve examples, add tutorials
+# Close when done
+br close br-123 --reason "Completed"
+br sync --flush-only    # export to .beads/beads.jsonl
+```
 
-## Architecture Decisions
+See `.beads/` for the live issue list.
 
-If you're planning a significant change, open an issue first. Key principles:
+## Documentation
 
-- **Verbatim first** — never summarize user content. Store exact words.
-- **Local first** — everything runs on the user's machine. No cloud dependencies.
-- **Zero API by default** — core features must work without any API key.
-- **Palace structure is scoping, not magic** — wings, halls, and rooms act as metadata filters in the underlying vector store. They make scoping predictable when a palace holds many unrelated projects; they are not a novel retrieval mechanism.
+- **User-facing docs** (this site): `website/`
+- **API / architecture notes**: `docs/`
+- **Specs and RFCs**: `specs/`
+- **In-repo AI instructions**: `AGENTS.md` at the repo root
 
-## Community
-
-- [Discord](https://discord.com/invite/ycTQQCu6kn)
-- [GitHub Issues](https://github.com/MemPalace/mempalace/issues) — bug reports and feature requests
-- [GitHub Discussions](https://github.com/MemPalace/mempalace/discussions) — questions and ideas
-
-## License
-
-MIT — your contributions will be released under the same license.
+When you change CLI behaviour, update `website/reference/cli.md`. When you add an MCP tool, update `website/reference/mcp-tools.md`. The docs are version-controlled alongside the code, so they should never drift.

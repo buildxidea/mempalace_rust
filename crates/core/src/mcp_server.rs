@@ -7895,6 +7895,7 @@ mod tests {
             "mempalace_check_duplicate",
             "mempalace_add_drawer",
             "mempalace_delete_drawer",
+            "mempalace_delete_by_source",
             "mempalace_diary_write",
             "mempalace_diary_read",
             "mempalace_heal",

@@ -489,6 +489,8 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 // Smart features - smart search with progressive disclosure
                 "mempalace_smart_search" => tool_smart_search(&state, args),
                 "mempalace_hybrid_search" => tool_hybrid_search(&state, args),
+                // mr-daemon: daemon status
+                "mempalace_daemon_status" => tool_daemon_status(&state, args),
                 // Aliases aligned with @modelcontextprotocol/server-memory (one minor release)
                 // Core save/recall (REST API uses these names — see
                 // list_tools_handler in rest_api.rs). Must be wired or
@@ -582,6 +584,8 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
                 }
+                // mr-daemon: daemon status
+                "memory_daemon_status" => tool_daemon_status(&state, args),
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -1125,6 +1129,12 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Mempalace Claude Bridge Sync",
             "Alias for memory_claude_bridge_sync - sync memories to/from Claude Code's MEMORY.md file.",
             serde_json::json!({ "type": "object", "properties": { "direction": { "type": "string", "description": "Sync direction: push (to Claude), pull (from Claude), or sync (bidirectional, default: sync)" } }, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_daemon_status",
+            "Daemon Status",
+            "Quick daemon health check: running, processed, errored, queued counts. Returns a single overall status (running/not-running) suitable for stdio MCP mode health probes.",
+            serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
     ]
 }
@@ -1755,6 +1765,18 @@ fn tool_health(state: &AppState, _args: JsonObject) -> Result<CallToolResult, Er
         "palace_path": palace_path.to_string_lossy(),
         "drawer_count": drawer_count,
         "embedder": embedder,
+    }))
+}
+
+fn tool_daemon_status(_state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    let status = crate::daemon::daemon_status();
+    ok_json(serde_json::json!({
+        "running": status.running,
+        "processed": status.processed,
+        "errored": status.errored,
+        "queued": status.queued,
+        "palace_path": status.palace_path,
+        "status": if status.running { "running" } else { "not-running" },
     }))
 }
 
@@ -7960,6 +7982,8 @@ mod tests {
             "mempalace_hybrid_search",
             "memory_claude_bridge_sync",
             "mempalace_claude_bridge_sync",
+            // mr-daemon: daemon status tool
+            "mempalace_daemon_status",
         ];
         assert_eq!(names, expected);
     }

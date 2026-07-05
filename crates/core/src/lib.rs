@@ -285,6 +285,8 @@ pub mod maintenance;
 pub mod embed;
 
 pub use embed::{embedder_from_env, resolve_embedder, DEFAULT_EMBED_MODEL};
+
+pub mod eval;
 pub use embed::{Embedder, EmbeddingManifest, ManifestMismatch, NullEmbedder};
 
 pub use event_capture::{

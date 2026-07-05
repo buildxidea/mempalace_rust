@@ -537,20 +537,18 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
-
-    // ------------------------------------------------------------------
-    // Source adapter subsystem (RFC 002)
-    // ------------------------------------------------------------------
-
-    /// Enable the source adapter subsystem. When `false` (default),
-    /// adapter discovery and ingestion are short-circuited.
+    /// Eval framework: when true (default), quality scores are tracked
+    /// per-function. Honors `MEMPALACE_EVAL_ENABLED=true`.
+    #[serde(default = "default_true")]
+    pub eval_enabled: bool,
+    /// Eval framework: quality score threshold (0-100) below which alerts
+    /// are raised. Honors `MEMPALACE_EVAL_THRESHOLD`.
     #[serde(default)]
-    pub sources_enabled: bool,
-
-    /// Name of the adapter to use when no adapter is explicitly
-    /// specified (e.g. `"obsidian"`, `"github_issues"`).
+    pub eval_threshold: Option<u8>,
+    /// Eval framework: maximum measurements kept per function (ring-buffer).
+    /// Honors `MEMPALACE_EVAL_MAX_PER_FUNCTION`.
     #[serde(default)]
-    pub default_source_adapter: Option<String>,
+    pub eval_max_per_function: Option<usize>,
 }
 
 #[cfg(unix)]
@@ -657,8 +655,9 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
-            sources_enabled: false,
-            default_source_adapter: None,
+            eval_enabled: true,
+            eval_threshold: None,
+            eval_max_per_function: None,
         }
     }
 }
@@ -1022,8 +1021,9 @@ mod tests {
             inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
-            sources_enabled: false,
-            default_source_adapter: None,
+            eval_enabled: true,
+            eval_threshold: None,
+            eval_max_per_function: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1088,8 +1088,9 @@ mod tests {
             inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
-            sources_enabled: false,
-            default_source_adapter: None,
+            eval_enabled: true,
+            eval_threshold: None,
+            eval_max_per_function: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

@@ -28,6 +28,9 @@ pub enum StoreTier {
     Usearch,
     /// lancedb (100 k+). Phase 5.
     Lancedb,
+    /// PostgreSQL + pgvector (production, multi-process, 100 k+).
+    /// Enabled behind the `backend-pgvector` feature flag.
+    Pgvector,
 }
 
 // Re-export the concrete store implementations.
@@ -39,12 +42,12 @@ pub mod usearch_sqlite;
 #[cfg(feature = "store-usearch")]
 pub use usearch_sqlite::UsearchSqliteStore;
 
-// mr-mngt: deferred — no pgvector backend in this build.
-// When pgvector (postgres-based vector store) is added, port the
-// maintenance-hooks contract (vacuum, reindex, ANALYZE) and wire it
-// into the same `PalaceStore` trait that the embedvec/usearch tiers
-// already implement. The hooks should fire on:
-//   * `flush` — reindex after batch write
-//   * `delete` — vacuum on compaction
-//   * `count > threshold` — ANALYZE for the query planner
-// Until the backend lands, this module owns the only two tiers.
+// mr-mngt: pgvector backend for production deployments. Requires
+// PostgreSQL with the pgvector extension. Feature-gated behind
+// `backend-pgvector` to avoid pulling sqlx into CLI-only builds.
+// Maintenance hooks (vacuum, reindex, ANALYZE) are handled inside
+// `PgvectorStore::flush` and `PgvectorStore::rebuild_index`.
+#[cfg(feature = "backend-pgvector")]
+pub mod pgvector;
+#[cfg(feature = "backend-pgvector")]
+pub use pgvector::PgvectorStore;

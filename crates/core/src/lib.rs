@@ -294,6 +294,14 @@ pub use palace::PalaceStore;
 // EmbedvecStore is the default concrete store implementation.
 pub use palace::store::EmbedvecStore;
 
+// PgvectorStore is the PostgreSQL + pgvector backend (bead mempalace_rust-pg0z).
+// Feature-gated behind `backend-pgvector` to avoid pulling sqlx into
+// CLI-only or pure-CLI builds.
+#[cfg(feature = "backend-pgvector")]
+pub use palace::store::PgvectorStore;
+#[cfg(feature = "backend-pgvector")]
+pub use palace::PgvectorConfig;
+
 #[cfg(feature = "embed-fastembed")]
 pub use embed::FastEmbedEmbedder;
 

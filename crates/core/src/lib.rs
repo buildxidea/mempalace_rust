@@ -47,6 +47,7 @@ pub mod types;
 // only renders the surface above. See research/04 P2 #19.
 
 pub mod audit;
+pub mod backup;
 pub mod auth;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]

@@ -82,6 +82,7 @@ filetime = { workspace = true }
 bm25 = { version = "2.3", default-features = false, features = ["default_tokenizer"] }
 sysinfo = { version = "0.32", optional = true }
 rand = { workspace = true }
+glob = { workspace = true }
 
 # `fastembed-rs` powers `FastEmbedEmbedder` behind feature
 # `embed-fastembed` (mp-012). Pulls in `ort` (C++ ONNX Runtime) and

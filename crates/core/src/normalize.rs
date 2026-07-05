@@ -230,6 +230,7 @@ fn load_known_names() -> HashSet<String> {
     names
 }
 
+#[cfg(feature = "spellcheck")]
 fn spellcheck_transcript_preserving_known_names(content: &str) -> String {
     let known_names = load_known_names();
     content
@@ -255,6 +256,12 @@ fn spellcheck_transcript_preserving_known_names(content: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(not(feature = "spellcheck"))]
+fn spellcheck_transcript_preserving_known_names(content: &str) -> String {
+    // Spellcheck not enabled — return content unmodified.
+    content.to_string()
 }
 
 pub fn normalize(file_path: &std::path::Path, content: &str) -> anyhow::Result<String> {

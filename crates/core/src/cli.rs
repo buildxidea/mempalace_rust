@@ -561,24 +561,21 @@ pub enum Commands {
         kill: bool,
     },
 
-    /// Query or manage the write-ahead log (WAL).
-    Wal {
-        /// WAL operation: list, filter, prune, count.
-        operation: String,
+    /// Check and correct spelling in a query (feature: spellcheck).
+    #[cfg(feature = "spellcheck")]
+    Spellcheck {
+        /// Text to spellcheck.
+        text: Vec<String>,
 
-        /// Filter by operation type (for filter).
+        /// Maximum edit distance (default: 3).
         #[arg(long)]
-        op: Option<String>,
+        max_edit: Option<usize>,
 
-        /// Limit results (for list/filter).
-        #[arg(long, default_value = "20")]
-        limit: usize,
-
-        /// Retention days for prune (default: 90).
+        /// Maximum number of suggestions (default: 5).
         #[arg(long)]
-        retention_days: Option<u64>,
+        max_suggestions: Option<usize>,
 
-        /// Output as JSON.
+        /// Output results as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -3331,14 +3328,14 @@ pub fn run() -> Result<()> {
         Commands::Stop { pid_file, kill } => {
             cmd_stop(pid_file.as_deref().and_then(|p| p.to_str()), *kill)?;
         }
-        Commands::Wal {
-            operation,
-            op,
-            limit,
-            retention_days,
+        #[cfg(feature = "spellcheck")]
+        Commands::Spellcheck {
+            text,
+            max_edit,
+            max_suggestions,
             json,
         } => {
-            cmd_wal(palace_arg, operation, op.as_deref(), *limit, *retention_days, *json)?;
+            cmd_spellcheck(text, *max_edit, *max_suggestions, *json)?;
         }
         Commands::Hook {
             hook,
@@ -3349,6 +3346,57 @@ pub fn run() -> Result<()> {
         } => {
             cmd_hook(hook, session_id, project, cwd, data.as_deref())?;
         }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Spellcheck Command (feature-gated)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "spellcheck")]
+fn cmd_spellcheck(
+    text: &[String],
+    max_edit: Option<usize>,
+    max_suggestions: Option<usize>,
+    json_output: bool,
+) -> Result<()> {
+    let query = text.join(" ");
+    if query.trim().is_empty() {
+        anyhow::bail!("Please provide text to spellcheck.");
+    }
+
+    let mut config = crate::spellcheck::SpellcheckConfig::default();
+    if let Some(me) = max_edit {
+        config.max_edit_distance = me;
+    }
+    if let Some(ms) = max_suggestions {
+        config.max_suggestions = ms;
+    }
+
+    let result = crate::spellcheck::spellcheck(&query, &config);
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!();
+        println!("  Original:   {}", result.original);
+        println!("  Corrected:  {}", result.corrected);
+        if result.was_corrected {
+            println!("  Corrections applied:");
+            for tc in &result.token_corrections {
+                if tc.was_corrected {
+                    println!("    {} → {}  (edit distance: {})", tc.original, tc.corrected, tc.distance);
+                    if !tc.alternatives.is_empty() {
+                        println!("      Alternatives: {}", tc.alternatives.join(", "));
+                    }
+                }
+            }
+        } else {
+            println!("  No corrections needed.");
+        }
+        println!();
     }
 
     Ok(())

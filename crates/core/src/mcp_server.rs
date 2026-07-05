@@ -582,11 +582,8 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
                 }
-                // WAL tools
-                "mempalace_wal_list" => tool_wal_list(&state, args),
-                "mempalace_wal_filter" => tool_wal_filter(&state, args),
-                "mempalace_wal_count" => tool_wal_count(&state, args),
-                "mempalace_wal_prune" => tool_wal_prune(&state, args),
+                #[cfg(feature = "spellcheck")]
+                "mempalace_spellcheck" => tool_spellcheck(&state, args),
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -1131,29 +1128,12 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Alias for memory_claude_bridge_sync - sync memories to/from Claude Code's MEMORY.md file.",
             serde_json::json!({ "type": "object", "properties": { "direction": { "type": "string", "description": "Sync direction: push (to Claude), pull (from Claude), or sync (bidirectional, default: sync)" } }, "additionalProperties": false }),
         ),
+        #[cfg(feature = "spellcheck")]
         tool(
-            "mempalace_wal_list",
-            "WAL List",
-            "List recent write-ahead log entries, newest first.",
-            serde_json::json!({ "type": "object", "properties": { "limit": { "type": "integer", "description": "Max entries (default: 20)" } } }),
-        ),
-        tool(
-            "mempalace_wal_filter",
-            "WAL Filter",
-            "Filter write-ahead log entries by operation type and/or date range.",
-            serde_json::json!({ "type": "object", "properties": { "operation": { "type": "string", "description": "Operation type: add, delete, update, sync (optional)" }, "date_from": { "type": "string", "description": "Start date YYYY-MM-DD (optional)" }, "date_to": { "type": "string", "description": "End date YYYY-MM-DD (optional)" }, "limit": { "type": "integer", "description": "Max entries (default: 20)" } } }),
-        ),
-        tool(
-            "mempalace_wal_count",
-            "WAL Count",
-            "Count total write-ahead log entries.",
-            serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
-        ),
-        tool(
-            "mempalace_wal_prune",
-            "WAL Prune",
-            "Prune write-ahead log entries older than the retention period (default: 90 days).",
-            serde_json::json!({ "type": "object", "properties": { "retention_days": { "type": "integer", "description": "Retention period in days (optional, default: 90)" } } }),
+            "mempalace_spellcheck",
+            "Spellcheck",
+            "Check and correct spelling in text. Returns the corrected text along with per-token diagnostics. Useful for fixing search queries before retrying.",
+            serde_json::json!({ "type": "object", "properties": { "text": { "type": "string", "description": "Text to spellcheck" }, "max_edit": { "type": "integer", "description": "Maximum edit distance (default: 3)" }, "max_suggestions": { "type": "integer", "description": "Maximum number of suggestions (default: 5)" } }, "required": ["text"] }),
         ),
     ]
 }
@@ -6727,94 +6707,39 @@ fn tool_claude_bridge_sync(
     }
 }
 
-fn tool_wal_list(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+#[cfg(feature = "spellcheck")]
+fn tool_spellcheck(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Input {
-        limit: Option<usize>,
+        text: String,
+        max_edit: Option<usize>,
+        max_suggestions: Option<usize>,
     }
-    let input: Input = parse_args_with_integer_coercion(args, &["limit"])?;
-    let limit = input.limit.unwrap_or(20);
-    let wal_path = state.palace_path.join("wal");
-    std::fs::create_dir_all(&wal_path).map_err(|e| internal_error_safe(&e))?;
-    let store = crate::wal::WalStore::open(wal_path.join("wal.db"))
-        .map_err(|e| internal_error_safe(&e))?;
-    let entries = store.list_recent(limit).map_err(|e| internal_error_safe(&e))?;
-    ok_json(serde_json::json!({
-        "entries": entries,
-        "total": entries.len(),
-    }))
-}
+    let input: Input = parse_args_with_integer_coercion(args, &["max_edit", "max_suggestions"])?;
 
-fn tool_wal_filter(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        operation: Option<String>,
-        date_from: Option<String>,
-        date_to: Option<String>,
-        limit: Option<usize>,
+    let mut config = crate::spellcheck::SpellcheckConfig::default();
+    if let Some(me) = input.max_edit {
+        config.max_edit_distance = me;
     }
-    let input: Input = parse_args_with_integer_coercion(args, &["limit"])?;
-    let limit = input.limit.unwrap_or(20);
-
-    let date_from = input.date_from.as_deref().and_then(|s| {
-        // Try full RFC 3339 first, then date-only YYYY-MM-DD, both converted to Utc.
-        let rfc = chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc));
-        let date_only = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-            .ok()
-            .and_then(|d| d.and_hms_opt(0, 0, 0))
-            .map(|dt| chrono::DateTime::<chrono::Utc>::from_utc(dt, chrono::Utc));
-        rfc.or(date_only)
-    });
-    let date_to = input.date_to.as_deref().and_then(|s| {
-        let rfc = chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc));
-        let date_only = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-            .ok()
-            .and_then(|d| d.and_hms_opt(23, 59, 59))
-            .map(|dt| chrono::DateTime::<chrono::Utc>::from_utc(dt, chrono::Utc));
-        rfc.or(date_only)
-    });
-
-    let wal_path = state.palace_path.join("wal");
-    std::fs::create_dir_all(&wal_path).map_err(|e| internal_error_safe(&e))?;
-    let store = crate::wal::WalStore::open(wal_path.join("wal.db"))
-        .map_err(|e| internal_error_safe(&e))?;
-    let entries = store
-        .filter(input.operation.as_deref(), date_from, date_to, limit)
-        .map_err(|e| internal_error_safe(&e))?;
-    ok_json(serde_json::json!({
-        "entries": entries,
-        "total": entries.len(),
-    }))
-}
-
-fn tool_wal_count(state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
-    let wal_path = state.palace_path.join("wal");
-    std::fs::create_dir_all(&wal_path).map_err(|e| internal_error_safe(&e))?;
-    let store = crate::wal::WalStore::open(wal_path.join("wal.db"))
-        .map_err(|e| internal_error_safe(&e))?;
-    let count = store.count().map_err(|e| internal_error_safe(&e))?;
-    ok_json(serde_json::json!({
-        "count": count,
-    }))
-}
-
-fn tool_wal_prune(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        retention_days: Option<u64>,
+    if let Some(ms) = input.max_suggestions {
+        config.max_suggestions = ms;
     }
-    let input: Input = parse_args_with_integer_coercion(args, &["retention_days"])?;
-    let wal_path = state.palace_path.join("wal");
-    std::fs::create_dir_all(&wal_path).map_err(|e| internal_error_safe(&e))?;
-    let store = crate::wal::WalStore::open(wal_path.join("wal.db"))
-        .map_err(|e| internal_error_safe(&e))?;
-    let pruned = store.prune(input.retention_days).map_err(|e| internal_error_safe(&e))?;
+
+    let result = crate::spellcheck::spellcheck(&input.text, &config);
+
+    let suggestions = if result.was_corrected {
+        crate::spellcheck::suggest_for_search(&input.text, &config)
+    } else {
+        vec![]
+    };
+
     ok_json(serde_json::json!({
-        "pruned": pruned,
-        "retention_days": input.retention_days.unwrap_or(90),
+        "original": result.original,
+        "corrected": result.corrected,
+        "was_corrected": result.was_corrected,
+        "suggestions": suggestions,
+        "token_corrections": result.token_corrections,
     }))
 }
 

@@ -427,6 +427,21 @@ pub fn print_search_response_json(response: &SearchResponse) -> i32 {
 pub fn print_search_response(response: &SearchResponse) -> i32 {
     if response.results.is_empty() {
         println!("\n  No results found for: \"{}\"", response.query);
+        #[cfg(feature = "spellcheck")]
+        {
+            let config = crate::spellcheck::config_from_env();
+            if config.enable_search_integration {
+                let suggestions = crate::spellcheck::suggest_for_search(&response.query, &config);
+                if !suggestions.is_empty() {
+                    println!();
+                    println!("  Did you mean:");
+                    for s in &suggestions {
+                        println!("    {}", s);
+                    }
+                    println!();
+                }
+            }
+        }
         return 1;
     }
 

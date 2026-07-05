@@ -169,8 +169,8 @@ pub mod sentinels;
 pub mod signal_handler;
 pub mod sketches;
 pub mod slots;
+#[cfg(feature = "spellcheck")]
 #[doc(hidden)]
-#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod spellcheck;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]

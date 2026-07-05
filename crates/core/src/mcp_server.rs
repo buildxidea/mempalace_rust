@@ -773,8 +773,8 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
         tool(
             "mempalace_obsidian_export",
             "Obsidian Export",
-            "Export memories or observations to an Obsidian-compatible markdown vault.",
-            serde_json::json!({ "type": "object", "properties": { "export_type": { "type": "string", "description": "What to export: 'memories' or 'observations'" }, "output_dir": { "type": "string", "description": "Output directory for exported markdown files (default: ./memory-export)" }, "include_frontmatter": { "type": "boolean", "description": "Include YAML frontmatter in exported files (default: true)" }, "include_tags": { "type": "boolean", "description": "Include tags in exported files (default: true)" } }, "required": ["export_type"] }),
+            "Export memories, observations, lessons, crystals, and sessions to an Obsidian-compatible markdown vault with YAML frontmatter, inline #tags, [[wikilinks]], and a MOC index.",
+            serde_json::json!({ "type": "object", "properties": { "export_type": { "type": "string", "description": "What to export: 'memories', 'observations', 'lessons', 'crystals', 'sessions', or 'all'" }, "output_dir": { "type": "string", "description": "Output directory for exported markdown files (default: ./memory-export)" }, "include_frontmatter": { "type": "boolean", "description": "Include YAML frontmatter in exported files (default: true)" }, "include_tags": { "type": "boolean", "description": "Include tags in exported files (default: true)" }, "include_links": { "type": "boolean", "description": "Include [[wikilinks]] to related items (default: true)" }, "generate_moc": { "type": "boolean", "description": "Generate a Map of Content (MOC) index file (default: true)" }, "inline_tags": { "type": "boolean", "description": "Include inline #tags in the markdown body (default: true)" }, "date_format": { "type": "string", "description": "Chrono date format string (default: %Y-%m-%d %H:%M)" } }, "required": ["export_type"] }),
         ),
         tool(
             "mempalace_compress_file",
@@ -2700,51 +2700,101 @@ fn tool_obsidian_export(state: &AppState, args: JsonObject) -> Result<CallToolRe
         output_dir: Option<String>,
         include_frontmatter: Option<bool>,
         include_tags: Option<bool>,
+        include_links: Option<bool>,
+        generate_moc: Option<bool>,
+        inline_tags: Option<bool>,
+        date_format: Option<String>,
     }
     let input: Input = parse_args(args)?;
 
     let db = fresh_db(state)?;
     let all_entries = db.get_all(None, None, usize::MAX);
 
+    let tag_prefix = state
+        .config
+        .obsidian_tag_prefix
+        .clone()
+        .unwrap_or_else(|| "mempalace/".to_string());
+
+    let date_format = input
+        .date_format
+        .or_else(|| state.config.obsidian_date_format.clone())
+        .unwrap_or_else(|| "%Y-%m-%d %H:%M".to_string());
+
     let config = crate::obsidian_export::ObsidianExportConfig {
         output_dir: input
             .output_dir
+            .or_else(|| state.config.obsidian_export_dir.clone())
             .unwrap_or_else(|| "./memory-export".to_string()),
         include_frontmatter: input.include_frontmatter.unwrap_or(true),
         include_tags: input.include_tags.unwrap_or(true),
-        include_links: true,
-        tag_prefix: "memory/".to_string(),
-        date_format: "%Y-%m-%d %H:%M".to_string(),
+        include_links: input.include_links.unwrap_or(true),
+        tag_prefix,
+        date_format,
+        generate_moc: input.generate_moc.unwrap_or(true),
+        inline_tags: input.inline_tags.unwrap_or(true),
+        export_types: vec![],
     };
 
-    let export_result = if input.export_type == "observations" {
-        let observations: Vec<crate::types::CompressedObservation> = all_entries
-            .iter()
-            .filter_map(|entry| {
-                entry.documents.first().and_then(|doc| {
-                    serde_json::from_str::<crate::types::CompressedObservation>(doc).ok()
+    // Parse the export type to decide what to export
+    let export_type: crate::obsidian_export::ExportType = input
+        .export_type
+        .parse()
+        .map_err(|e: String| internal_error_safe(&anyhow::anyhow!(e)))?;
+
+    let export_result = match export_type {
+        crate::obsidian_export::ExportType::Observations => {
+            let observations: Vec<crate::types::CompressedObservation> = all_entries
+                .iter()
+                .filter_map(|entry| {
+                    entry.documents.first().and_then(|doc| {
+                        serde_json::from_str::<crate::types::CompressedObservation>(doc).ok()
+                    })
                 })
-            })
-            .collect();
-        crate::obsidian_export::export_observations(&observations, &config)
-    } else {
-        let memories: Vec<crate::types::Memory> = all_entries
-            .iter()
-            .filter_map(|entry| {
-                entry
-                    .documents
-                    .first()
-                    .and_then(|doc| serde_json::from_str::<crate::types::Memory>(doc).ok())
-            })
-            .collect();
-        crate::obsidian_export::export_memories(&memories, &config)
-    }
-    .map_err(|e| internal_error_safe(&e))?;
+                .collect();
+            crate::obsidian_export::export_observations(&observations, &config)
+                .map_err(|e| internal_error_safe(&e))?
+        }
+        crate::obsidian_export::ExportType::Lessons => {
+            // Lessons are stored separately in the lessons SQLite DB.
+            // For MCP we fall back to an empty list; CLI path populates them.
+            crate::obsidian_export::export_lessons(&[], &config)
+                .map_err(|e| internal_error_safe(&e))?
+        }
+        crate::obsidian_export::ExportType::Crystals => {
+            // Crystals are stored separately; empty for MCP fallback.
+            crate::obsidian_export::export_crystals(&[], &config)
+                .map_err(|e| internal_error_safe(&e))?
+        }
+        crate::obsidian_export::ExportType::Sessions => {
+            // Sessions come from the session store
+            let sessions = state
+                .session_store
+                .list_sessions(None)
+                .unwrap_or_default();
+            crate::obsidian_export::export_sessions(&sessions, &config)
+                .map_err(|e| internal_error_safe(&e))?
+        }
+        crate::obsidian_export::ExportType::Memories => {
+            let memories: Vec<crate::types::Memory> = all_entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .documents
+                        .first()
+                        .and_then(|doc| serde_json::from_str::<crate::types::Memory>(doc).ok())
+                })
+                .collect();
+            crate::obsidian_export::export_memories(&memories, &config)
+                .map_err(|e| internal_error_safe(&e))?
+        }
+    };
 
     ok_json(serde_json::json!({
         "exported_count": export_result.exported_count,
         "output_dir": export_result.output_dir,
         "files": export_result.files,
+        "moc_path": export_result.moc_path,
     }))
 }
 

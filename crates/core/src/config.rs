@@ -533,6 +533,17 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+    /// Default output directory for Obsidian export. Overridden by
+    /// `MEMPALACE_OBSIDIAN_EXPORT_DIR` env var.
+    #[serde(default)]
+    pub obsidian_export_dir: Option<String>,
+    /// Date format string for Obsidian export frontmatter (chrono syntax).
+    /// Overridden by `MEMPALACE_OBSIDIAN_DATE_FORMAT` env var.
+    #[serde(default)]
+    pub obsidian_date_format: Option<String>,
+    /// Tag prefix used in Obsidian frontmatter tags (e.g. "mempalace/").
+    #[serde(default)]
+    pub obsidian_tag_prefix: Option<String>,
 }
 
 #[cfg(unix)]
@@ -639,6 +650,9 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            obsidian_export_dir: None,
+            obsidian_date_format: None,
+            obsidian_tag_prefix: None,
         }
     }
 }
@@ -994,6 +1008,9 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            obsidian_export_dir: None,
+            obsidian_date_format: None,
+            obsidian_tag_prefix: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1057,6 +1074,9 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            obsidian_export_dir: None,
+            obsidian_date_format: None,
+            obsidian_tag_prefix: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

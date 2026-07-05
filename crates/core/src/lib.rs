@@ -109,6 +109,8 @@ pub mod instructions;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod languages;
+#[doc(hidden)]
+pub mod locales;
 pub mod lessons;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]

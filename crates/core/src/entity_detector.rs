@@ -52,6 +52,88 @@ pub fn load_locale_patterns(locale_code: &str) -> Option<LocalePatterns> {
     })
 }
 
+/// Auto-detect language from text content and return locale patterns.
+///
+/// Uses the [`crate::locales::detect_language_heuristic`] function to
+/// detect the dominant language, then loads patterns for that language
+/// from the locale system. Falls back to English when detection fails.
+pub fn auto_detect_patterns(text: &str) -> Option<LocalePatterns> {
+    let detected = crate::locales::detect_language_heuristic(text);
+    load_locale_patterns(detected)
+}
+
+/// Load locale patterns from the new locales module (compile-time embed).
+///
+/// Differs from [`load_locale_patterns`] which uses the older
+/// `crate::i18n::LocaleManager` runtime system. This function uses
+/// the compile-time embedded JSON via `include_str!` in the locales
+/// module.
+pub fn load_locale_patterns_new(code: &str) -> Option<LocalePatterns> {
+    let locale = crate::locales::resolve(code);
+    let e = &locale.entity;
+
+    // Build person_verbs as flat word list from the template patterns.
+    let person_verbs: Vec<String> = e
+        .person_verb_patterns
+        .iter()
+        .flat_map(|p| extract_verb_from_template(p))
+        .collect();
+
+    let project_verbs: Vec<String> = e
+        .project_verb_patterns
+        .iter()
+        .flat_map(|p| extract_verb_from_template(p))
+        .collect();
+
+    Some(LocalePatterns {
+        person_verbs,
+        project_verbs,
+        pronouns: e.pronoun_patterns.clone(),
+        stopwords: e.stopwords.clone(),
+        candidate_pattern: e.candidate_pattern.clone(),
+        boundary_chars: e.boundary_chars.clone(),
+        versioned_pattern: e.candidate_pattern.clone(),
+    })
+}
+
+/// Extract a verb word from a `{name}` template pattern.
+///
+/// For templates like `\b{name}\s+said\b` this extracts `"said"`.
+/// For templates like `{name}说` (CJK) it extracts `"说"`.
+/// Returns the verb portion after name, or the whole pattern minus
+/// `{name}` markup if no space boundary is found.
+fn extract_verb_from_template(template: &str) -> Vec<String> {
+    let mut verbs = Vec::new();
+
+    // Strip the {name} placeholder and any regex syntax around it.
+    let cleaned = template
+        .replace("{name}", "")
+        .replace('{', "")
+        .replace('}', "");
+
+    // If there's a verb captured after the name position (e.g. "said"),
+    // try to extract it.
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return verbs;
+    }
+
+    // Try to extract the main verb - look for word characters.
+    let re = regex::Regex::new(r"\b([a-zA-ZäöüßÄÖÜéèêëàâäçùûüÿœæŒÆñáéíóúÁÉÍÓÚđĐa-яёА-ЯЁ぀-ゟ゠-ヿ一-鿿가-힣]+)").ok();
+    if let Some(re) = re {
+        for cap in re.captures_iter(trimmed) {
+            if let Some(m) = cap.get(1) {
+                let verb = m.as_str().to_string();
+                if !verb.is_empty() {
+                    verbs.push(verb);
+                }
+            }
+        }
+    }
+
+    verbs
+}
+
 /// Get localized CLI string for a given key and locale code
 pub fn get_localized_string(key: &str, locale_code: &str) -> String {
     use crate::i18n::LocaleManager;

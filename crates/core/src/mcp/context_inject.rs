@@ -167,7 +167,9 @@ impl ContextInjector {
     /// Returns a markdown-formatted context string within the character
     /// budget, or an empty string if injection is disabled.
     pub fn build_context(&self, tool_name: &str, tool_params: &str) -> String {
-        if !is_context_injection_enabled() || is_sdk_child_context() {
+        // Injection is enabled if env var is set OR config field is true.
+        let enabled = is_context_injection_enabled() || self.state.config.inject_context_enabled;
+        if !enabled || is_sdk_child_context() {
             return String::new();
         }
 
@@ -564,10 +566,10 @@ pub fn build_context_for_tool(
     if !is_context_injection_enabled() {
         return Ok(String::new());
     }
-    let injector = ContextInjector::new(std::sync::Arc::new(AppState::new(
-        state.config.clone(),
-        state.read_only,
-    )?));
+    let injector = ContextInjector::new(std::sync::Arc::new(
+        AppState::new(state.config.clone(), state.read_only)
+            .map_err(|e| e.to_string())?,
+    ));
     Ok(injector.build_context(tool_name, tool_params))
 }
 
@@ -1004,8 +1006,9 @@ mod tests {
 
     #[test]
     fn test_extract_paths_from_command_ignores_flags() {
+        // "-r" and "pattern" are not paths, but "src/" is a valid path fragment
         let paths = extract_paths_from_command("grep -r pattern src/");
-        assert!(paths.is_empty());
+        assert_eq!(paths, vec!["src/".to_string()]);
     }
 
     #[test]

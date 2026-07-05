@@ -537,17 +537,11 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
-    /// Default output directory for Obsidian export. Overridden by
-    /// `MEMPALACE_OBSIDIAN_EXPORT_DIR` env var.
+    /// Context injection on PreToolUse. When true, injects pinned slots,
+    /// profile, lessons, and session summaries into tool context within
+    /// a ~4000 char budget. Default: false (opt-in via env or config).
     #[serde(default)]
-    pub obsidian_export_dir: Option<String>,
-    /// Date format string for Obsidian export frontmatter (chrono syntax).
-    /// Overridden by `MEMPALACE_OBSIDIAN_DATE_FORMAT` env var.
-    #[serde(default)]
-    pub obsidian_date_format: Option<String>,
-    /// Tag prefix used in Obsidian frontmatter tags (e.g. "mempalace/").
-    #[serde(default)]
-    pub obsidian_tag_prefix: Option<String>,
+    pub inject_context_enabled: bool,
 }
 
 #[cfg(unix)]
@@ -654,9 +648,7 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
-            obsidian_export_dir: None,
-            obsidian_date_format: None,
-            obsidian_tag_prefix: None,
+            inject_context_enabled: false,
         }
     }
 }
@@ -1017,7 +1009,7 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
-            wal_retention_days: None,
+            inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
             obsidian_export_dir: None,
@@ -1084,7 +1076,7 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
-            wal_retention_days: None,
+            inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
             obsidian_export_dir: None,

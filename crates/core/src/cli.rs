@@ -561,6 +561,28 @@ pub enum Commands {
         kill: bool,
     },
 
+    /// Query or manage the write-ahead log (WAL).
+    Wal {
+        /// WAL operation: list, filter, prune, count.
+        operation: String,
+
+        /// Filter by operation type (for filter).
+        #[arg(long)]
+        op: Option<String>,
+
+        /// Limit results (for list/filter).
+        #[arg(long, default_value = "20")]
+        limit: usize,
+
+        /// Retention days for prune (default: 90).
+        #[arg(long)]
+        retention_days: Option<u64>,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Capture a lifecycle hook observation (internal/CLI usage).
     Hook {
         /// Hook type (e.g. session_end, post_tool_use, stop, notification).
@@ -3270,6 +3292,15 @@ pub fn run() -> Result<()> {
         Commands::Stop { pid_file, kill } => {
             cmd_stop(pid_file.as_deref().and_then(|p| p.to_str()), *kill)?;
         }
+        Commands::Wal {
+            operation,
+            op,
+            limit,
+            retention_days,
+            json,
+        } => {
+            cmd_wal(palace_arg, operation, op.as_deref(), *limit, *retention_days, *json)?;
+        }
         Commands::Hook {
             hook,
             session_id,
@@ -3657,6 +3688,118 @@ fn cmd_stop(pid_file: Option<&str>, kill: bool) -> Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// WAL Command
+// ---------------------------------------------------------------------------
+
+fn cmd_wal(
+    palace_arg: Option<&str>,
+    operation: &str,
+    op_filter: Option<&str>,
+    limit: usize,
+    retention_days: Option<u64>,
+    json_output: bool,
+) -> Result<()> {
+    let config = crate::config::Config::load()?;
+    let palace_path = if let Some(ref p) = palace_arg {
+        std::path::PathBuf::from(p)
+    } else {
+        config.palace_path.clone()
+    };
+    let wal_dir = palace_path.join("wal");
+    std::fs::create_dir_all(&wal_dir)?;
+    let store = crate::wal::WalStore::open(wal_dir.join("wal.db"))?;
+
+    match operation {
+        "list" => {
+            let entries = store.list_recent(limit)?;
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else {
+                if entries.is_empty() {
+                    println!("No WAL entries found.");
+                    return Ok(());
+                }
+                println!("[{:<36}] {:<26} {:<8} {:<20} source", "id", "timestamp", "op", "target");
+                println!("{}", "-".repeat(100));
+                for e in &entries {
+                    println!(
+                        "[{}] {} {:<8} {:<20} {}",
+                        &e.id[..std::cmp::min(36, e.id.len())],
+                        e.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+                        e.operation,
+                        if e.target.len() > 20 {
+                            format!("{}…", &e.target[..19])
+                        } else {
+                            e.target.clone()
+                        },
+                        e.source_file,
+                    );
+                }
+                println!("{} entries", entries.len());
+            }
+        }
+        "filter" => {
+            let entries = store.filter(op_filter, None, None, limit)?;
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else {
+                if entries.is_empty() {
+                    println!("No matching WAL entries found.");
+                    return Ok(());
+                }
+                println!("[{:<36}] {:<26} {:<8} {:<20} source", "id", "timestamp", "op", "target");
+                println!("{}", "-".repeat(100));
+                for e in &entries {
+                    println!(
+                        "[{}] {} {:<8} {:<20} {}",
+                        &e.id[..std::cmp::min(36, e.id.len())],
+                        e.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+                        e.operation,
+                        if e.target.len() > 20 {
+                            format!("{}…", &e.target[..19])
+                        } else {
+                            e.target.clone()
+                        },
+                        e.source_file,
+                    );
+                }
+                println!("{} entries", entries.len());
+            }
+        }
+        "prune" => {
+            let effective_days = retention_days
+                .or(config.wal_retention_days)
+                .unwrap_or(90);
+            let deleted = store.prune(Some(effective_days))?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::json!({"pruned": deleted, "retention_days": effective_days})
+                );
+            } else {
+                println!("Pruned {deleted} WAL entries older than {effective_days} days.");
+            }
+        }
+        "count" => {
+            let count = store.count()?;
+            if json_output {
+                println!("{}", serde_json::json!({"count": count}));
+            } else {
+                println!("WAL entry count: {count}");
+            }
+        }
+        other => {
+            anyhow::bail!(
+                "Unknown WAL operation '{other}'. Use: list, filter, prune, count"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 // Helper Functions
 // ---------------------------------------------------------------------------
 

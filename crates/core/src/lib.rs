@@ -242,6 +242,8 @@ pub mod skill_extract;
 pub mod sliding_window;
 #[doc(hidden)]
 pub mod verify;
+#[doc(hidden)]
+pub mod wal;
 // Agent adapter system — `mpr connect <agent-name>` for wiring MCP config.
 pub mod connect;
 

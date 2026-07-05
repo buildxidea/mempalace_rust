@@ -533,6 +533,10 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+    /// WAL retention period in days (default: 90). Entries older than this
+    /// are pruned. Override via `MEMPALACE_WAL_RETENTION_DAYS` env var.
+    #[serde(default)]
+    pub wal_retention_days: Option<u64>,
 }
 
 #[cfg(unix)]
@@ -639,6 +643,7 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            wal_retention_days: None,
         }
     }
 }
@@ -992,6 +997,7 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
+            wal_retention_days: None,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
         };
@@ -1055,6 +1061,7 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
+            wal_retention_days: None,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
         };

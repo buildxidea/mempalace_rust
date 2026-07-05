@@ -18,6 +18,7 @@ pub mod consolidation_pipeline;
 pub mod constants;
 pub mod dialect;
 pub mod doctor;
+pub mod dynamics;
 pub mod evict;
 pub mod knowledge_graph;
 pub mod layers;

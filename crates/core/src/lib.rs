@@ -172,6 +172,7 @@ pub mod slots;
 #[cfg(feature = "spellcheck")]
 #[doc(hidden)]
 pub mod spellcheck;
+pub mod sources;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod split_mega_files;

@@ -659,9 +659,9 @@ pub enum Commands {
         data: Option<String>,
     },
 
-    /// Manage the in-process write daemon.
+    /// Manage source adapters (RFC 002).
     #[command(subcommand)]
-    Daemon(DaemonAction),
+    Sources(SourceCommands),
 }
 
 #[derive(Subcommand)]
@@ -670,6 +670,30 @@ pub enum ConfigCommands {
     Show,
     /// Print the configuration file path.
     Path,
+}
+
+#[derive(Subcommand)]
+pub enum SourceCommands {
+    /// List all registered source adapters.
+    List,
+    /// Show schema for a source adapter.
+    Schema {
+        /// Adapter name
+        adapter: String,
+    },
+    /// Discover items from a source adapter.
+    Discover {
+        /// Adapter name
+        adapter: String,
+    },
+    /// Ingest records from a source adapter.
+    Ingest {
+        /// Adapter name
+        adapter: String,
+        /// Max records to ingest (default: all discovered)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -3625,60 +3649,9 @@ pub fn run() -> Result<()> {
         } => {
             cmd_hook(hook, session_id, project, cwd, data.as_deref())?;
         }
-        Commands::Daemon(action) => {
-            cmd_daemon(action, palace_arg)?;
+        Commands::Sources(ref source_cmd) => {
+            cmd_sources(source_cmd)?;
         }
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Spellcheck Command (feature-gated)
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "spellcheck")]
-fn cmd_spellcheck(
-    text: &[String],
-    max_edit: Option<usize>,
-    max_suggestions: Option<usize>,
-    json_output: bool,
-) -> Result<()> {
-    let query = text.join(" ");
-    if query.trim().is_empty() {
-        anyhow::bail!("Please provide text to spellcheck.");
-    }
-
-    let mut config = crate::spellcheck::SpellcheckConfig::default();
-    if let Some(me) = max_edit {
-        config.max_edit_distance = me;
-    }
-    if let Some(ms) = max_suggestions {
-        config.max_suggestions = ms;
-    }
-
-    let result = crate::spellcheck::spellcheck(&query, &config);
-
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&result)?);
-    } else {
-        println!();
-        println!("  Original:   {}", result.original);
-        println!("  Corrected:  {}", result.corrected);
-        if result.was_corrected {
-            println!("  Corrections applied:");
-            for tc in &result.token_corrections {
-                if tc.was_corrected {
-                    println!("    {} → {}  (edit distance: {})", tc.original, tc.corrected, tc.distance);
-                    if !tc.alternatives.is_empty() {
-                        println!("      Alternatives: {}", tc.alternatives.join(", "));
-                    }
-                }
-            }
-        } else {
-            println!("  No corrections needed.");
-        }
-        println!();
     }
 
     Ok(())
@@ -3737,179 +3710,110 @@ fn cmd_hook(
 }
 
 // ---------------------------------------------------------------------------
-// Obsidian Export Command (full parity)
+// Source Adapter Commands (RFC 002)
 // ---------------------------------------------------------------------------
 
-fn cmd_obsidian_export(
-    palace_arg: Option<&str>,
-    output_dir: &std::path::Path,
-    types: &str,
-    generate_moc: bool,
-    inline_tags: bool,
-    date_format: Option<&str>,
-) -> Result<()> {
-    use crate::obsidian_export::{ExportType, ObsidianExportConfig};
-    use std::path::PathBuf;
+fn cmd_sources(cmd: &SourceCommands) -> Result<()> {
+    let registry = crate::sources::global_registry();
 
-    let config = Config::load().unwrap_or_default();
-    let palace_path = resolve_palace_path(palace_arg)?;
-
-    let date_fmt = date_format
-        .map(String::from)
-        .or_else(|| config.obsidian_date_format.clone())
-        .unwrap_or_else(|| "%Y-%m-%d %H:%M".to_string());
-
-    let tag_prefix = config
-        .obsidian_tag_prefix
-        .clone()
-        .unwrap_or_else(|| "mempalace/".to_string());
-
-    let export_config = ObsidianExportConfig {
-        output_dir: output_dir.to_string_lossy().to_string(),
-        include_frontmatter: true,
-        include_tags: true,
-        include_links: true,
-        tag_prefix,
-        date_format: date_fmt,
-        generate_moc,
-        inline_tags,
-        export_types: vec![],
-    };
-
-    // Parse comma-separated types
-    let export_types: Vec<ExportType> = types
-        .split(',')
-        .map(|s| s.trim().parse::<ExportType>())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!("invalid export type: {e}"))?;
-
-    // If "all" was specified, export everything
-    let export_all = export_types.is_empty()
-        || export_types.iter().any(|t| *t == ExportType::Memories);
-
-    let mut total_count = 0usize;
-    let mut all_files: Vec<String> = Vec::new();
-    let mut last_moc: Option<String> = None;
-
-    // Open DB for memories and observations
-    let db = crate::palace_db::PalaceDb::open(&palace_path)
-        .map_err(|e| anyhow::anyhow!("failed to open palace: {e}"))?;
-
-    let all_entries = db.get_all(None, None, usize::MAX);
-
-    // Export memories
-    if export_all || export_types.contains(&ExportType::Memories) {
-        let memories: Vec<crate::types::Memory> = all_entries
-            .iter()
-            .filter_map(|entry| {
-                entry
-                    .documents
-                    .first()
-                    .and_then(|doc| serde_json::from_str::<crate::types::Memory>(doc).ok())
-            })
-            .collect();
-        let result = crate::obsidian_export::export_memories(&memories, &export_config)?;
-        total_count += result.exported_count;
-        all_files.extend(result.files);
-        if let Some(moc) = result.moc_path {
-            last_moc = Some(moc);
+    match cmd {
+        SourceCommands::List => {
+            let schemas = registry.list_schemas();
+            if schemas.is_empty() {
+                println!("  No source adapters registered.");
+                println!("  Adapters are registered by external crates implementing the SourceAdapter trait.");
+                println!("  See RFC 002 for details on building a custom adapter.");
+                return Ok(());
+            }
+            println!("  Registered source adapters ({}):", schemas.len());
+            for schema in &schemas {
+                println!();
+                println!("    {}", schema.name);
+                println!("      Version:  {}", schema.version);
+                if let Some(ref desc) = schema.description {
+                    println!("      About:    {}", desc);
+                }
+                println!("      Fields:   {}", schema.fields.len());
+                println!("      Required: {}", schema.required.len());
+            }
         }
-        println!(
-            "  memories: {} files exported",
-            result.exported_count
-        );
-    }
-
-    // Export observations
-    if export_all || export_types.contains(&ExportType::Observations) {
-        let observations: Vec<crate::types::CompressedObservation> = all_entries
-            .iter()
-            .filter_map(|entry| {
-                entry.documents.first().and_then(|doc| {
-                    serde_json::from_str::<crate::types::CompressedObservation>(doc).ok()
+        SourceCommands::Schema { adapter } => {
+            let adapter_arc = registry.get_adapter(adapter).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "adapter '{}' not found. Use 'mpr sources list' to see available adapters.",
+                    adapter
+                )
+            })?;
+            let schema = adapter_arc.schema();
+            let caps = adapter_arc.capabilities();
+            println!("  Adapter:   {}", schema.name);
+            println!("  Version:   {}", schema.version);
+            if let Some(ref desc) = schema.description {
+                println!("  About:     {}", desc);
+            }
+            println!("  Capabilities:");
+            println!("    discover:  {}", caps.discover);
+            println!("    ingest:    {}", caps.ingest);
+            println!("    transform: {}", caps.transform);
+            println!("  Fields:");
+            for (name, ty) in &schema.fields {
+                let required = if schema.required.contains(name) {
+                    " (required)"
+                } else {
+                    ""
+                };
+                println!("    {}: {}{}", name, ty, required);
+            }
+        }
+        SourceCommands::Discover { adapter } => {
+            let adapter_arc = registry.get_adapter(adapter).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "adapter '{}' not found. Use 'mpr sources list' to see available adapters.",
+                    adapter
+                )
+            })?;
+            let rt = runtime();
+            let items = rt.block_on(adapter_arc.discover())?;
+            println!("  Discovered {} items from '{}' :", items.len(), adapter);
+            for item in &items {
+                let loc = item
+                    .location
+                    .as_deref()
+                    .unwrap_or("(no location)");
+                println!("    {} — {}", item.id, loc);
+            }
+        }
+        SourceCommands::Ingest { adapter, limit } => {
+            let adapter_arc = registry.get_adapter(adapter).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "adapter '{}' not found. Use 'mpr sources list' to see available adapters.",
+                    adapter
+                )
+            })?;
+            let rt = runtime();
+            let records = rt.block_on(async {
+                let items = adapter_arc.discover().await.map_err(|e| {
+                    anyhow::anyhow!("discovery failed: {}", e)
+                })?;
+                let limited = if let Some(lim) = limit {
+                    &items[..items.len().min(*lim)]
+                } else {
+                    &items
+                };
+                adapter_arc.ingest(limited).await.map_err(|e| {
+                    anyhow::anyhow!("ingestion failed: {}", e)
                 })
-            })
-            .collect();
-        let result = crate::obsidian_export::export_observations(&observations, &export_config)?;
-        total_count += result.exported_count;
-        all_files.extend(result.files);
-        if let Some(moc) = result.moc_path {
-            last_moc = Some(moc);
+            })?;
+            println!(
+                "  Ingested {} records from '{}':",
+                records.len(),
+                adapter_arc.name()
+            );
+            for record in &records {
+                println!("    {} ({})", record.record_id, record.timestamp);
+            }
         }
-        println!(
-            "  observations: {} files exported",
-            result.exported_count
-        );
     }
-
-    // Export lessons
-    if export_all || export_types.contains(&ExportType::Lessons) {
-        // Lessons live in a separate SQLite DB; query them if possible
-        let lessons_path = palace_path.join("sessions");
-        let lessons = if lessons_path.exists() {
-            // Attempt to open lesson store from the palace sessions path
-            // For now we use an in-memory fallback
-            Vec::new()
-        } else {
-            Vec::new()
-        };
-        let result = crate::obsidian_export::export_lessons(&lessons, &export_config)?;
-        total_count += result.exported_count;
-        all_files.extend(result.files);
-        if let Some(moc) = result.moc_path {
-            last_moc = Some(moc);
-        }
-        println!(
-            "  lessons: {} files exported",
-            result.exported_count
-        );
-    }
-
-    // Export crystals
-    if export_all || export_types.contains(&ExportType::Crystals) {
-        let result = crate::obsidian_export::export_crystals(&[], &export_config)?;
-        total_count += result.exported_count;
-        all_files.extend(result.files);
-        if let Some(moc) = result.moc_path {
-            last_moc = Some(moc);
-        }
-        println!(
-            "  crystals: {} files exported",
-            result.exported_count
-        );
-    }
-
-    // Export sessions
-    if export_all || export_types.contains(&ExportType::Sessions) {
-        let session_store = crate::session::SessionStore::open(
-            &palace_path.join("sessions"),
-        )
-        .map_err(|e| anyhow::anyhow!("failed to open session store: {e}"))?;
-        let sessions = session_store
-            .list_sessions(None)
-            .unwrap_or_default();
-        let result = crate::obsidian_export::export_sessions(&sessions, &export_config)?;
-        total_count += result.exported_count;
-        all_files.extend(result.files);
-        if let Some(moc) = result.moc_path {
-            last_moc = Some(moc);
-        }
-        println!(
-            "  sessions: {} files exported",
-            result.exported_count
-        );
-    }
-
-    println!();
-    println!(
-        "Obsidian export complete: {} files total to {}",
-        total_count,
-        output_dir.display()
-    );
-    if let Some(ref moc) = last_moc {
-        println!("MOC index: {}", moc);
-    }
-
     Ok(())
 }
 

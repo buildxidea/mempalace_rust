@@ -589,8 +589,10 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
                 }
-                // mr-daemon: daemon status
-                "memory_daemon_status" => tool_daemon_status(&state, args),
+                // Source adapter tools (RFC 002)
+                "mempalace_source_list" => tool_source_list(&state, args),
+                "mempalace_source_ingest" => tool_source_ingest(&state, args),
+                "mempalace_source_schema" => tool_source_schema(&state, args),
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -1153,11 +1155,24 @@ pub(crate) fn make_tools() -> Vec<rmcp::model::Tool> {
             "Alias for memory_claude_bridge_sync - sync memories to/from Claude Code's MEMORY.md file.",
             serde_json::json!({ "type": "object", "properties": { "direction": { "type": "string", "description": "Sync direction: push (to Claude), pull (from Claude), or sync (bidirectional, default: sync)" } }, "additionalProperties": false }),
         ),
+        // Source adapter tools (RFC 002)
         tool(
-            "mempalace_daemon_status",
-            "Daemon Status",
-            "Quick daemon health check: running, processed, errored, queued counts. Returns a single overall status (running/not-running) suitable for stdio MCP mode health probes.",
+            "mempalace_source_list",
+            "Source List",
+            "List all registered source adapters with their capabilities and schemas.",
             serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_source_ingest",
+            "Source Ingest",
+            "Discover and ingest records from a registered source adapter. Returns the number of records ingested and their IDs.",
+            serde_json::json!({ "type": "object", "properties": { "adapter": { "type": "string", "description": "Adapter name (e.g. 'obsidian', 'github_issues')" }, "limit": { "type": "integer", "description": "Max records to ingest (default: all discovered)" } }, "required": ["adapter"] }),
+        ),
+        tool(
+            "mempalace_source_schema",
+            "Source Schema",
+            "Return the schema for a registered source adapter, describing the shape of records it produces.",
+            serde_json::json!({ "type": "object", "properties": { "adapter": { "type": "string", "description": "Adapter name" } }, "required": ["adapter"] }),
         ),
     ]
 }
@@ -6947,39 +6962,112 @@ fn tool_claude_bridge_sync(
     }
 }
 
-#[cfg(feature = "spellcheck")]
-fn tool_spellcheck(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        text: String,
-        max_edit: Option<usize>,
-        max_suggestions: Option<usize>,
-    }
-    let input: Input = parse_args_with_integer_coercion(args, &["max_edit", "max_suggestions"])?;
+// ---------------------------------------------------------------------------
+// Source adapter tools (RFC 002)
+// ---------------------------------------------------------------------------
 
-    let mut config = crate::spellcheck::SpellcheckConfig::default();
-    if let Some(me) = input.max_edit {
-        config.max_edit_distance = me;
-    }
-    if let Some(ms) = input.max_suggestions {
-        config.max_suggestions = ms;
-    }
-
-    let result = crate::spellcheck::spellcheck(&input.text, &config);
-
-    let suggestions = if result.was_corrected {
-        crate::spellcheck::suggest_for_search(&input.text, &config)
-    } else {
-        vec![]
-    };
-
+fn tool_source_list(
+    _state: &AppState,
+    _args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
+    let registry = crate::sources::global_registry();
+    let schemas: Vec<serde_json::Value> = registry
+        .list_schemas()
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "name": s.name,
+                "version": s.version,
+                "fields": s.fields,
+                "required": s.required,
+                "description": s.description,
+            })
+        })
+        .collect();
     ok_json(serde_json::json!({
-        "original": result.original,
-        "corrected": result.corrected,
-        "was_corrected": result.was_corrected,
-        "suggestions": suggestions,
-        "token_corrections": result.token_corrections,
+        "adapters": schemas,
+        "count": schemas.len(),
+    }))
+}
+
+fn tool_source_ingest(
+    state: &AppState,
+    args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
+    read_only_guard(state)?;
+    #[derive(serde::Deserialize)]
+    struct IngestArgs {
+        adapter: String,
+        limit: Option<usize>,
+    }
+    let params: IngestArgs = parse_args(args)?;
+    let registry = crate::sources::global_registry();
+    let adapter = registry
+        .get_adapter(&params.adapter)
+        .ok_or_else(|| {
+            ErrorData::invalid_params(
+                format!("adapter not found: {}", params.adapter),
+                None,
+            )
+        })?;
+
+    // Run async discovery + ingestion in a blocking context
+    let rt = tokio::runtime::Runtime::new().map_err(|e| internal_error_safe(&e))?;
+    let adapter_name = adapter.name().to_string();
+
+    let records = rt.block_on(async {
+        let items = adapter.discover().await.map_err(|e| {
+            ErrorData::internal_error(format!("discovery failed: {e}"), None)
+        })?;
+        let limited = if let Some(limit) = params.limit {
+            &items[..items.len().min(limit)]
+        } else {
+            &items
+        };
+        adapter.ingest(limited).await.map_err(|e| {
+            ErrorData::internal_error(format!("ingestion failed: {e}"), None)
+        })
+    })?;
+
+    let record_ids: Vec<&str> = records.iter().map(|r| r.record_id.as_str()).collect();
+    ok_json(serde_json::json!({
+        "adapter": adapter_name,
+        "records_ingested": records.len(),
+        "record_ids": record_ids,
+    }))
+}
+
+fn tool_source_schema(
+    _state: &AppState,
+    args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
+    #[derive(serde::Deserialize)]
+    struct SchemaArgs {
+        adapter: String,
+    }
+    let params: SchemaArgs = parse_args(args)?;
+    let registry = crate::sources::global_registry();
+    let adapter = registry
+        .get_adapter(&params.adapter)
+        .ok_or_else(|| {
+            ErrorData::invalid_params(
+                format!("adapter not found: {}", params.adapter),
+                None,
+            )
+        })?;
+    let schema = adapter.schema();
+    let caps = adapter.capabilities();
+    ok_json(serde_json::json!({
+        "name": schema.name,
+        "version": schema.version,
+        "fields": schema.fields,
+        "required": schema.required,
+        "description": schema.description,
+        "capabilities": {
+            "discover": caps.discover,
+            "ingest": caps.ingest,
+            "transform": caps.transform,
+        },
     }))
 }
 
@@ -8288,8 +8376,10 @@ mod tests {
             "mempalace_hybrid_search",
             "memory_claude_bridge_sync",
             "mempalace_claude_bridge_sync",
-            // mr-daemon: daemon status tool
-            "mempalace_daemon_status",
+            // Source adapter tools (RFC 002)
+            "mempalace_source_list",
+            "mempalace_source_ingest",
+            "mempalace_source_schema",
         ];
         assert_eq!(names, expected);
     }

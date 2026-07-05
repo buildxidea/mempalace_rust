@@ -1,14 +1,18 @@
-//! Live-graph viewer SPA — embedded static assets.
+//! Viewer SPA — embedded static assets.
 //!
 //! Three files are bundled at compile time via `include_str!` so the
 //! MemPalace binary ships as a single file with no external asset
 //! directory. The REST router in `rest_api.rs` serves them from
 //! `/viewer/`, `/viewer/app.js`, `/viewer/styles.css`.
 //!
-//! The HTML/JS/CSS files are intentionally tiny (~250 lines combined).
-//! The full live-graph SPA (force layout, detail pane, SSE live
-//! updates, search/expand) is the G5 follow-up tracked in
-//! `REMAINING.md` — see that file for the design.
+//! The SPA provides a read-only dashboard with:
+//! - Drawer / wing / room / KG entity counts
+//! - Recent working-memory observations
+//! - Search bar (entity search via `/graph/search`)
+//! - Inline force-directed graph (no D3 dependency)
+//! - SSE live stream from `/sse`
+//!
+//! Security: the viewer is read-only; it never sends POST mutations.
 
 /// The SPA shell. Served at `GET /viewer/`.
 pub const fn viewer_html() -> &'static str {
@@ -38,5 +42,35 @@ mod tests {
         assert!(viewer_html().contains("<title>"));
         assert!(viewer_styles_css().contains("--bg"));
         assert!(viewer_app_js().contains("EventSource"));
+    }
+
+    #[test]
+    fn html_has_dashboard_cards() {
+        let html = viewer_html();
+        assert!(html.contains("card-drawers"));
+        assert!(html.contains("card-wings"));
+        assert!(html.contains("card-rooms"));
+        assert!(html.contains("card-entities"));
+    }
+
+    #[test]
+    fn js_has_search_and_graph() {
+        let js = viewer_app_js();
+        assert!(js.contains("fetchJson"));
+        assert!(js.contains("force"));
+        assert!(js.contains("/graph/search"));
+        assert!(js.contains("/graph/stats"));
+        assert!(js.contains("/kg/stats"));
+        assert!(js.contains("/working_memory"));
+    }
+
+    #[test]
+    fn js_is_readonly() {
+        let js = viewer_app_js();
+        // Ensure the SPA never sends POST to mutation endpoints
+        assert!(!js.contains("/save"));
+        assert!(!js.contains("/mempalace_save"));
+        assert!(!js.contains("/diary/write"));
+        assert!(!js.contains("/memories\", post"));
     }
 }

@@ -2,44 +2,66 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>MemPalace Live Graph</title>
+<title>MemPalace Dashboard</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/viewer/styles.css">
 </head>
 <body>
 <header class="topbar">
-  <h1>MemPalace <span class="accent">Live Graph</span></h1>
+  <h1>MemPalace <span class="accent">Dashboard</span></h1>
   <div class="stats" id="stats">connecting...</div>
 </header>
+
+<div class="dash-row">
+  <div class="dash-card" id="card-drawers">
+    <span class="dash-val" id="val-drawers">--</span>
+    <span class="dash-label">Drawers</span>
+  </div>
+  <div class="dash-card" id="card-wings">
+    <span class="dash-val" id="val-wings">--</span>
+    <span class="dash-label">Wings</span>
+  </div>
+  <div class="dash-card" id="card-rooms">
+    <span class="dash-val" id="val-rooms">--</span>
+    <span class="dash-label">Rooms</span>
+  </div>
+  <div class="dash-card" id="card-entities">
+    <span class="dash-val" id="val-entities">--</span>
+    <span class="dash-label">KG Entities</span>
+  </div>
+</div>
 
 <main class="layout">
   <aside class="left">
     <h2>Search</h2>
-    <input id="q" type="search" placeholder="search entities or run a free query..." autocomplete="off">
+    <input id="q" type="search" placeholder="search entities or memories..." autocomplete="off">
     <button id="search-btn">Search</button>
-    <button id="show-stats" class="secondary">Show Graph Stats</button>
+    <button id="show-graph" class="secondary">Refresh Graph</button>
     <h3>Results</h3>
     <ul id="results" class="results"></ul>
+    <h3>Recent Observations</h3>
+    <ul id="observations" class="observations"></ul>
   </aside>
 
   <section class="center">
     <svg id="graph" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
       <defs>
-        <marker id="arrow" viewBox="0 -5 10 10" refX="20" refY="0" markerWidth="6" markerHeight="6" orient="auto">
-          <path d="M0,-5L10,0L0,5" fill="#5b6573"></path>
+        <marker id="arrow" viewBox="0 -5 10 10" refX="20" refY="0"
+                markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,-5L10,0L0,5" fill="var(--link)"></path>
         </marker>
       </defs>
-      <g id="edges-layer"></g>
-      <g id="nodes-layer"></g>
+      <g id="zoom-group">
+        <g id="edges-layer"></g>
+        <g id="nodes-layer"></g>
+      </g>
     </svg>
     <div class="legend">
-      <span><i class="dot file"></i>file</span>
-      <span><i class="dot function"></i>function</span>
+      <span><i class="dot entity"></i>entity</span>
       <span><i class="dot concept"></i>concept</span>
-      <span><i class="dot error"></i>error</span>
-      <span><i class="dot decision"></i>decision</span>
-      <span><i class="dot library"></i>library</span>
+      <span><i class="dot file"></i>file</span>
       <span><i class="dot person"></i>person</span>
+      <span><i class="dot relation"></i>relation</span>
       <span><i class="dot default"></i>other</span>
     </div>
   </section>
@@ -49,7 +71,7 @@
     <div id="detail" class="detail">
       <p class="muted">click a node to see its facts.</p>
     </div>
-    <h3>Stream</h3>
+    <h3>Live Stream</h3>
     <ul id="stream-log" class="stream-log"></ul>
   </aside>
 </main>

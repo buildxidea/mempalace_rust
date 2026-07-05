@@ -583,6 +583,35 @@ pub enum Commands {
         #[arg(long)]
         data: Option<String>,
     },
+
+    /// Evaluate quality: record scores, view summaries, check thresholds.
+    Eval {
+        #[command(subcommand)]
+        eval_cmd: EvalCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum EvalCommands {
+    /// Record a quality score for a function.
+    Record {
+        /// Function name (e.g. "compress", "summarize", "context_relevance").
+        function_name: String,
+
+        /// Quality score (0-100).
+        #[arg(long)]
+        score: u8,
+
+        /// Optional note about this measurement.
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// Show summary statistics for all tracked functions.
+    Summary,
+
+    /// Check all functions against their quality thresholds.
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -3279,8 +3308,69 @@ pub fn run() -> Result<()> {
         } => {
             cmd_hook(hook, session_id, project, cwd, data.as_deref())?;
         }
+        Commands::Eval { eval_cmd } => {
+            cmd_eval(eval_cmd)?;
+        }
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Eval Command
+// ---------------------------------------------------------------------------
+
+fn cmd_eval(eval_cmd: &EvalCommands) -> Result<()> {
+    use crate::eval;
+
+    match eval_cmd {
+        EvalCommands::Record {
+            function_name,
+            score,
+            note,
+        } => {
+            let score = (*score).min(100);
+            eval::record_score(function_name, score, note.clone());
+            println!(
+                "Recorded score {} for function '{}'",
+                score, function_name
+            );
+            if let Some(n) = note {
+                println!("  Note: {}", n);
+            }
+        }
+        EvalCommands::Summary => {
+            let summary = eval::metrics_summary();
+            if summary.is_empty() {
+                println!("No quality measurements recorded yet.");
+                return Ok(());
+            }
+            println!("{:<25} {:>5} {:>7} {:>5} {:>5} {:>7}", "Function", "Count", "Average", "Min", "Max", "Latest");
+            println!("{}", "-".repeat(60));
+            let mut sorted: Vec<(&String, &eval::FunctionStats)> = summary.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+            for (name, stats) in sorted {
+                println!(
+                    "{:<25} {:>5} {:>7.1} {:>5} {:>5} {:>7}",
+                    name, stats.count, stats.average, stats.min, stats.max, stats.latest
+                );
+            }
+        }
+        EvalCommands::Check => {
+            let alerts = eval::check_thresholds();
+            if alerts.is_empty() {
+                println!("All functions are within quality thresholds.");
+            } else {
+                println!("Quality alerts:");
+                for (name, avg, threshold) in &alerts {
+                    println!(
+                        "  WARNING: '{}' average {:.1} is below threshold {}",
+                        name, avg, threshold
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 

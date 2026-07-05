@@ -582,6 +582,13 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
                 }
+                // Eval framework
+                "mempalace_eval_record" => tool_eval_record(&state, args),
+                "mempalace_eval_summary" => tool_eval_summary(&state, args),
+                "mempalace_eval_check" => tool_eval_check(&state, args),
+                "memory_eval_record" => tool_eval_record(&state, args),
+                "memory_eval_summary" => tool_eval_summary(&state, args),
+                "memory_eval_check" => tool_eval_check(&state, args),
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -1125,6 +1132,24 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Mempalace Claude Bridge Sync",
             "Alias for memory_claude_bridge_sync - sync memories to/from Claude Code's MEMORY.md file.",
             serde_json::json!({ "type": "object", "properties": { "direction": { "type": "string", "description": "Sync direction: push (to Claude), pull (from Claude), or sync (bidirectional, default: sync)" } }, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_eval_record",
+            "Eval Record",
+            "Record a quality score for a named function (e.g. 'compress', 'summarize'). Score is 0-100.",
+            serde_json::json!({ "type": "object", "properties": { "function_name": { "type": "string", "description": "Function name to record score for" }, "score": { "type": "integer", "description": "Quality score 0-100" }, "note": { "type": "string", "description": "Optional note about this measurement" } }, "required": ["function_name", "score"] }),
+        ),
+        tool(
+            "mempalace_eval_summary",
+            "Eval Summary",
+            "Get summary statistics for all tracked quality functions: count, average, min, max, latest score.",
+            serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_eval_check",
+            "Eval Check",
+            "Check all functions against their quality thresholds. Returns alerts for functions below threshold.",
+            serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
     ]
 }
@@ -6696,6 +6721,77 @@ fn tool_claude_bridge_sync(
             }))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Eval framework tools
+// ---------------------------------------------------------------------------
+
+fn tool_eval_record(
+    _state: &AppState,
+    args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Input {
+        function_name: String,
+        score: u8,
+        note: Option<String>,
+    }
+    let input: Input = parse_args(args)?;
+    let score = input.score.min(100);
+    crate::eval::record_score(&input.function_name, score, input.note.clone());
+    ok_json(serde_json::json!({
+        "success": true,
+        "function_name": input.function_name,
+        "score": score,
+        "note": input.note,
+    }))
+}
+
+fn tool_eval_summary(
+    _state: &AppState,
+    _args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
+    let summary = crate::eval::metrics_summary();
+    let functions: Vec<serde_json::Value> = summary
+        .iter()
+        .map(|(name, stats)| {
+            serde_json::json!({
+                "function_name": name,
+                "count": stats.count,
+                "average": (stats.average * 100.0).round() / 100.0,
+                "min": stats.min,
+                "max": stats.max,
+                "latest": stats.latest,
+            })
+        })
+        .collect();
+    ok_json(serde_json::json!({
+        "functions": functions,
+        "total_functions": functions.len(),
+    }))
+}
+
+fn tool_eval_check(
+    _state: &AppState,
+    _args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
+    let alerts = crate::eval::check_thresholds();
+    let alert_list: Vec<serde_json::Value> = alerts
+        .iter()
+        .map(|(name, avg, threshold)| {
+            serde_json::json!({
+                "function_name": name,
+                "current_average": (avg * 100.0).round() / 100.0,
+                "threshold": threshold,
+            })
+        })
+        .collect();
+    ok_json(serde_json::json!({
+        "alerts": alert_list,
+        "alert_count": alert_list.len(),
+    }))
 }
 
 fn kg_path(state: &AppState) -> std::path::PathBuf {

@@ -63,8 +63,6 @@ pub mod coordination;
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod corpus_origin;
 pub mod crystallize;
-#[doc(hidden)]
-#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod dedup;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]

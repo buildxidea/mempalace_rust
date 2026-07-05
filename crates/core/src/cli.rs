@@ -303,8 +303,8 @@ pub enum Commands {
         http: bool,
 
         /// Instance number N: assigns REST port 3111+N*100, stream port 3112+N*100,
-        /// engine port 49134+N*100. Mutually exclusive with --port.
-        #[arg(long, conflicts_with = "port")]
+        /// engine port 49134+N*100 (max 50). Mutually exclusive with --port.
+        #[arg(long, conflicts_with = "port", value_parser = clap::value_parser!(u16).range(0..=50))]
         instance: Option<u16>,
 
         /// HTTP port override for the REST API (default: 3111, env: MEMPALACE_HTTP_PORT).
@@ -1570,18 +1570,43 @@ pub fn cmd_mcp(palace_arg: Option<&str>) {
 
 /// Start the HTTP REST API server.
 ///
-/// Reads `MEMPALACE_HTTP_PORT` (default 3111) and binds on `0.0.0.0`.
-/// The axum-based server lives in `rest_api.rs` and exposes endpoints
-/// that wrap MCP tool calls for external consumers (Hermes plugin, etc.).
+/// Accepts optional `port_override` (from `--port`) and `instance_override`
+/// (from `--instance`) for multi-instance port management. When both are
+/// `None`, the port is resolved from env var `MEMPALACE_HTTP_PORT`, then
+/// config file, then default 3111.
 #[cfg(feature = "http-server")]
-fn cmd_serve_http(palace_override: Option<&str>, read_only: bool) -> Result<()> {
+fn cmd_serve_http(
+    palace_override: Option<&str>,
+    read_only: bool,
+    port_override: Option<u16>,
+    instance_override: Option<u16>,
+) -> Result<()> {
     let mut config = crate::Config::load()?;
     if let Some(p) = palace_override {
         config.palace_path = PathBuf::from(p);
     }
 
+    // Resolve effective instance from: CLI override -> env -> config -> 0.
+    let effective_instance = instance_override
+        .or_else(|| {
+            std::env::var("MEMPALACE_INSTANCE")
+                .ok()
+                .and_then(|v| v.parse::<u16>().ok())
+                .map(|n| n.min(50))
+        })
+        .unwrap_or(config.instance);
+
+    let port = crate::rest_api::get_http_port(port_override, Some(effective_instance))
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let stream_port = crate::rest_api::get_stream_port(Some(port));
+    let engine_port = crate::rest_api::get_engine_port(Some(port));
+    eprintln!(
+        "  Starting HTTP server. REST: {}, Stream: {}, Engine: {}",
+        port, stream_port, engine_port
+    );
+
     let app_state = std::sync::Arc::new(crate::mcp_server::AppState::new(config, read_only)?);
-    let port = crate::rest_api::get_http_port(None, None).map_err(|e| anyhow::anyhow!(e))?;
 
     #[cfg(feature = "health")]
     {
@@ -1602,7 +1627,12 @@ fn cmd_serve_http(palace_override: Option<&str>, read_only: bool) -> Result<()> 
 }
 
 #[cfg(not(feature = "http-server"))]
-fn cmd_serve_http(_palace_override: Option<&str>, _read_only: bool) -> Result<()> {
+fn cmd_serve_http(
+    _palace_override: Option<&str>,
+    _read_only: bool,
+    _port_override: Option<u16>,
+    _instance_override: Option<u16>,
+) -> Result<()> {
     Err(anyhow::anyhow!(
         "HTTP server not available. Rebuild with --features http-server or use the default stdio MCP server (mpr serve without --http)."
     ))
@@ -3110,15 +3140,26 @@ pub fn run() -> Result<()> {
             port,
             no_background,
         } => {
-            if *http {
-                cmd_serve_http(palace_arg, *read_only)?;
-            } else {
-                // Validate mutual exclusivity of --instance and --port.
-                if instance.is_some() && port.is_some() {
-                    anyhow::bail!("--instance and --port are mutually exclusive");
-                }
+            // Validate mutual exclusivity of --instance and --port (redundant
+            // with clap's conflicts_with but kept for the HTTP path).
+            if instance.is_some() && port.is_some() {
+                anyhow::bail!("--instance and --port are mutually exclusive");
+            }
 
-                // Compute the REST port: env MEMPALACE_HTTP_PORT > --port > --instance > default 3111.
+            if *http {
+                cmd_serve_http(palace_arg, *read_only, *port, *instance)?;
+            } else {
+                // Compute the REST port: env MEMPALACE_HTTP_PORT > --port > --instance > config > default 3111.
+                let config = Config::load().unwrap_or_default();
+                let effective_instance = instance
+                    .or_else(|| {
+                        std::env::var("MEMPALACE_INSTANCE")
+                            .ok()
+                            .and_then(|v| v.parse::<u16>().ok())
+                            .map(|n| n.min(50))
+                    })
+                    .unwrap_or(config.instance);
+
                 let rest_port: u16 = if let Some(env_port) = std::env::var("MEMPALACE_HTTP_PORT")
                     .ok()
                     .and_then(|p| p.parse().ok())
@@ -3126,10 +3167,8 @@ pub fn run() -> Result<()> {
                     env_port
                 } else if let Some(p) = port {
                     *p
-                } else if let Some(n) = instance {
-                    3111u16.saturating_add(n.saturating_mul(100))
                 } else {
-                    3111
+                    3111u16.saturating_add(effective_instance.saturating_mul(100))
                 };
 
                 let stream_port = get_stream_port(rest_port);
@@ -3770,6 +3809,7 @@ fn get_engine_port(rest_port: u16) -> u16 {
 mod tests {
     use super::{
         cmd_compress, cmd_init, cmd_mine, confirm_entities, detect_mining_mode,
+        get_engine_port, get_stream_port,
         merge_detected_into_registry, run_instructions, save_detected_entities,
         scan_and_detect_entities, Cli, Commands, DetectedEntities, InstructionName, MiningMode,
         INSTRUCTION_HELP, INSTRUCTION_INIT, INSTRUCTION_MINE, INSTRUCTION_SEARCH,
@@ -4501,5 +4541,48 @@ mod tests {
             query_hits[0].documents[0].contains("graphql")
                 || query_hits[0].documents[0].contains("GraphQL")
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Multi-instance port management tests (mempalace_rust-fqvg)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_stream_port_default() {
+        assert_eq!(get_stream_port(3111), 3112);
+        assert_eq!(get_stream_port(3211), 3212);
+        assert_eq!(get_stream_port(0), 1);
+    }
+
+    #[test]
+    fn test_get_engine_port_default() {
+        assert_eq!(get_engine_port(3111), 49134);
+        assert_eq!(get_engine_port(3211), 49234);
+    }
+
+    #[test]
+    fn test_serve_instance_port_mapping() {
+        // instance 0 -> REST 3111, stream 3112, engine 49134
+        let rest = 3111u16;
+        assert_eq!(get_stream_port(rest), 3112);
+        assert_eq!(get_engine_port(rest), 49134);
+
+        // instance 1 -> REST 3211, stream 3212, engine 49234
+        let rest = 3111u16.saturating_add(1u16.saturating_mul(100));
+        assert_eq!(rest, 3211);
+        assert_eq!(get_stream_port(rest), 3212);
+        assert_eq!(get_engine_port(rest), 49234);
+
+        // instance 5 -> REST 3611, stream 3612, engine 49634
+        let rest = 3111u16.saturating_add(5u16.saturating_mul(100));
+        assert_eq!(rest, 3611);
+        assert_eq!(get_stream_port(rest), 3612);
+        assert_eq!(get_engine_port(rest), 49634);
+
+        // instance 50 (max) -> REST 8111, stream 8112, engine 54134
+        let rest = 3111u16.saturating_add(50u16.saturating_mul(100));
+        assert_eq!(rest, 8111);
+        assert_eq!(get_stream_port(rest), 8112);
+        assert_eq!(get_engine_port(rest), 54134);
     }
 }

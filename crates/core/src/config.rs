@@ -533,6 +533,13 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+
+    /// `mempalace_rust-fqvg`: multi-instance port offset.
+    /// Instance N assigns REST port 3111+N*100, stream port 3112+N*100,
+    /// engine port 49134+N*100. Override via `MEMPALACE_INSTANCE` env var.
+    /// Default: 0.
+    #[serde(default)]
+    pub instance: u16,
 }
 
 #[cfg(unix)]
@@ -639,6 +646,7 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            instance: 0,
         }
     }
 }
@@ -646,21 +654,28 @@ impl Default for Config {
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let config_path = Self::config_file_path()?;
-        if config_path.exists() {
+        let mut config: Config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
-            let mut config: Config = serde_json::from_str(&content)?;
-
-            // env override for palace_path takes priority over config file value
-            if let Some(env_val) = std::env::var_os("MEMPALACE_PALACE_PATH")
-                .or_else(|| std::env::var_os("MEMPAL_PALACE_PATH"))
-            {
-                config.palace_path = normalize_pathbuf(expand_path(&env_val.to_string_lossy()));
-            }
-
-            Ok(config)
+            serde_json::from_str(&content)?
         } else {
-            Ok(Config::default())
+            Config::default()
+        };
+
+        // env override for palace_path takes priority over config file value
+        if let Some(env_val) = std::env::var_os("MEMPALACE_PALACE_PATH")
+            .or_else(|| std::env::var_os("MEMPAL_PALACE_PATH"))
+        {
+            config.palace_path = normalize_pathbuf(expand_path(&env_val.to_string_lossy()));
         }
+
+        // `mempalace_rust-fqvg`: MEMPALACE_INSTANCE env overrides config file value.
+        if let Ok(env_val) = std::env::var("MEMPALACE_INSTANCE") {
+            if let Ok(n) = env_val.parse::<u16>() {
+                config.instance = n.min(50);
+            }
+        }
+
+        Ok(config)
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -994,6 +1009,7 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            instance: 0,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1057,6 +1073,7 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            instance: 0,
         };
         assert_eq!(
             cfg.tunnel_file(),
@@ -1228,6 +1245,59 @@ mod tests {
         let reloaded = Config::load().unwrap();
         assert!(reloaded.llm_consent_given);
 
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    /// `mempalace_rust-fqvg`: default instance is zero.
+    #[test]
+    fn test_default_instance_is_zero() {
+        let cfg = Config::default();
+        assert_eq!(cfg.instance, 0);
+    }
+
+    /// `mempalace_rust-fqvg`: MEMPALACE_INSTANCE env overrides config value.
+    #[test]
+    fn test_instance_env_override() {
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let xdg_root = temp_dir.path().to_str().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", xdg_root);
+
+        // Default is 0
+        let cfg = Config::default();
+        assert_eq!(cfg.instance, 0);
+
+        // Write config with instance=5
+        let mut cfg = Config::default();
+        cfg.instance = 5;
+        cfg.save().unwrap();
+
+        // Load without env: should be 5
+        let loaded = Config::load().unwrap();
+        assert_eq!(loaded.instance, 5);
+
+        // With env override: env wins
+        std::env::set_var("MEMPALACE_INSTANCE", "3");
+        let loaded = Config::load().unwrap();
+        assert_eq!(loaded.instance, 3);
+
+        std::env::remove_var("MEMPALACE_INSTANCE");
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    /// `mempalace_rust-fqvg`: MEMPALACE_INSTANCE caps at 50.
+    #[test]
+    fn test_instance_env_clamped_at_fifty() {
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let xdg_root = temp_dir.path().to_str().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", xdg_root);
+
+        std::env::set_var("MEMPALACE_INSTANCE", "99");
+        let cfg = Config::load().unwrap();
+        assert_eq!(cfg.instance, 50);
+
+        std::env::remove_var("MEMPALACE_INSTANCE");
         std::env::remove_var("XDG_CONFIG_HOME");
     }
 }

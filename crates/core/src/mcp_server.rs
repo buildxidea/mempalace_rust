@@ -394,6 +394,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "mempalace_diary_write" => tool_diary_write(&state, args),
                 "mempalace_heal" => tool_heal(&state, args),
                 "mempalace_verify" => tool_verify(&state, args),
+                "mempalace_fact_check" => tool_fact_check(&state, args),
                 "mempalace_governance_delete" => tool_governance_delete(&state, args),
                 "mempalace_obsidian_export" => tool_obsidian_export(&state, args),
                 "mempalace_compress_file" => tool_compress_file(&state, args),
@@ -763,6 +764,12 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Verify Memory",
             "Verify a memory or observation by tracing its citation chain back to source. Returns confidence score and any issues found.",
             serde_json::json!({ "type": "object", "properties": { "target_id": { "type": "string", "description": "ID of the memory or observation to verify" }, "target_type": { "type": "string", "description": "Type of target: 'memory' or 'observation'" } }, "required": ["target_id", "target_type"] }),
+        ),
+        tool(
+            "mempalace_fact_check",
+            "Fact Check",
+            "Check text against the knowledge graph for fact contradictions. Detects similar-name confusion, relationship mismatches, and stale facts. Purely offline.",
+            serde_json::json!({ "type": "object", "properties": { "text": { "type": "string", "description": "Text to fact-check against the palace knowledge graph" } }, "required": ["text"] }),
         ),
         tool(
             "mempalace_governance_delete",
@@ -2635,6 +2642,29 @@ fn tool_verify(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
         "confidence": verify_result.confidence,
         "chain": verify_result.chain,
         "issues": verify_result.issues,
+    }))
+}
+
+
+fn tool_fact_check(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    struct Input {
+        text: String,
+    }
+    let input: Input = parse_args(args)?;
+
+    let kg_path = state.palace_path.join("knowledge_graph.sqlite3");
+    let report = match crate::knowledge_graph::KnowledgeGraph::open(&kg_path) {
+        Ok(kg) => crate::fact_checker::check_text_with_kg(&input.text, &kg),
+        Err(_) => {
+            // KG unavailable — fall back to entity-registry-only check
+            crate::fact_checker::check_text(&input.text)
+        }
+    };
+
+    ok_json(serde_json::json!({
+        "issues": report.issues,
+        "claims_checked": report.claims_checked,
     }))
 }
 
@@ -7900,6 +7930,7 @@ mod tests {
             "mempalace_diary_read",
             "mempalace_heal",
             "mempalace_verify",
+            "mempalace_fact_check",
             "mempalace_governance_delete",
             "mempalace_obsidian_export",
             "mempalace_compress_file",

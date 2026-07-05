@@ -19,6 +19,8 @@ pub mod constants;
 pub mod dialect;
 pub mod doctor;
 pub mod evict;
+#[doc(hidden)]
+pub mod fact_checker;
 pub mod knowledge_graph;
 pub mod layers;
 pub mod llm;

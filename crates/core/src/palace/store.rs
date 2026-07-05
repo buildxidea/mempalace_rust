@@ -28,14 +28,18 @@ pub enum StoreTier {
     Usearch,
     /// lancedb (100 k+). Phase 5.
     Lancedb,
-    /// PostgreSQL + pgvector (production, multi-process, 100 k+).
-    /// Enabled behind the `backend-pgvector` feature flag.
-    Pgvector,
+    /// Qdrant vector database via REST API.
+    Qdrant,
 }
 
 // Re-export the concrete store implementations.
 pub mod embedvec;
 pub use embedvec::EmbedvecStore;
+
+#[cfg(feature = "backend-qdrant")]
+pub mod qdrant;
+#[cfg(feature = "backend-qdrant")]
+pub use qdrant::QdrantStore;
 
 #[cfg(feature = "store-usearch")]
 pub mod usearch_sqlite;

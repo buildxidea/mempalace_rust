@@ -537,34 +537,20 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
-
-    // ----------------------------------------------------------------
-    // pgvector backend configuration (bead mempalace_rust-pg0z)
-    // ----------------------------------------------------------------
-
-    /// PostgreSQL connection string for the pgvector backend.
-    /// When set (via config or `MEMPALACE_PGVECTOR_DSN`), the palace
-    /// uses PostgreSQL + pgvector instead of the default embedvec store.
-    /// Example: `postgresql://user:pass@localhost:5432/mempalace`
+    // ---- Qdrant backend config (backend-qdrant) ----
+    //
+    /// Qdrant HTTP API base URL. Falls back to env var
+    /// `MEMPALACE_QDRANT_URL`, then to `http://localhost:6333`.
     #[serde(default)]
-    pub pgvector_dsn: Option<String>,
-
-    /// Embedding dimensionality for the pgvector backend.
-    /// Must match the configured embedder's output dimension.
-    /// Default: 384 (bge-small-en-v15). Env: `MEMPALACE_PGVECTOR_DIM`
+    pub qdrant_url: Option<String>,
+    /// Qdrant collection name. Falls back to env var
+    /// `MEMPALACE_QDRANT_COLLECTION`, then to `mempalace_drawers`.
     #[serde(default)]
-    pub pgvector_dim: Option<usize>,
-
-    /// Index algorithm for the pgvector ANN index.
-    /// `"hnsw"` (default, better recall) or `"ivfflat"` (faster build).
-    /// Env: `MEMPALACE_PGVECTOR_INDEX`
+    pub qdrant_collection: Option<String>,
+    /// Qdrant Cloud API key (optional). Falls back to env var
+    /// `MEMPALACE_QDRANT_API_KEY`.
     #[serde(default)]
-    pub pgvector_index_type: Option<String>,
-
-    /// Maximum number of connections in the pgvector pool. Default: 5.
-    /// Env: `MEMPALACE_PGVECTOR_POOL_SIZE`
-    #[serde(default)]
-    pub pgvector_pool_size: Option<u32>,
+    pub qdrant_api_key: Option<String>,
 }
 
 #[cfg(unix)]
@@ -671,10 +657,9 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
-            pgvector_dsn: None,
-            pgvector_dim: None,
-            pgvector_index_type: None,
-            pgvector_pool_size: None,
+            qdrant_url: None,
+            qdrant_collection: None,
+            qdrant_api_key: None,
         }
     }
 }
@@ -1038,10 +1023,9 @@ mod tests {
             inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
-            pgvector_dsn: None,
-            pgvector_dim: None,
-            pgvector_index_type: None,
-            pgvector_pool_size: None,
+            qdrant_url: None,
+            qdrant_collection: None,
+            qdrant_api_key: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1106,10 +1090,9 @@ mod tests {
             inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
-            pgvector_dsn: None,
-            pgvector_dim: None,
-            pgvector_index_type: None,
-            pgvector_pool_size: None,
+            qdrant_url: None,
+            qdrant_collection: None,
+            qdrant_api_key: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

@@ -302,6 +302,11 @@ pub enum Commands {
         #[arg(long)]
         http: bool,
 
+        /// Start MCP HTTP transport (POST /mcp JSON-RPC).
+        /// Port configurable via MEMPALACE_MCP_HTTP_PORT env var (default: 3112).
+        #[arg(long, conflicts_with = "http")]
+        mcp_http: bool,
+
         /// Instance number N: assigns REST port 3111+N*100, stream port 3112+N*100,
         /// engine port 49134+N*100 (max 50). Mutually exclusive with --port.
         #[arg(long, conflicts_with = "port", value_parser = clap::value_parser!(u16).range(0..=50))]
@@ -1735,6 +1740,32 @@ fn cmd_serve_http(
 ) -> Result<()> {
     Err(anyhow::anyhow!(
         "HTTP server not available. Rebuild with --features http-server or use the default stdio MCP server (mpr serve without --http)."
+    ))
+}
+
+/// Start the MCP HTTP transport server (POST /mcp JSON-RPC).
+///
+/// Reads `MEMPALACE_MCP_HTTP_PORT` (default 3112) and binds to `127.0.0.1`.
+/// The axum-based server lives in `mcp::http_transport` and exposes a
+/// single `POST /mcp` endpoint for JSON-RPC over HTTP, reusing the
+/// existing `mcp_server::make_dispatch` handler.
+#[cfg(feature = "http-server")]
+fn cmd_serve_mcp_http(
+    palace_override: Option<&str>,
+    read_only: bool,
+    port_override: Option<u16>,
+) -> Result<()> {
+    crate::mcp::http_transport::run_mcp_http(palace_override, read_only, port_override)
+}
+
+#[cfg(not(feature = "http-server"))]
+fn cmd_serve_mcp_http(
+    _palace_override: Option<&str>,
+    _read_only: bool,
+    _port_override: Option<u16>,
+) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "MCP HTTP transport not available. Rebuild with --features http-server or use the default stdio MCP server (mpr serve without --mcp-http)."
     ))
 }
 
@@ -3311,18 +3342,15 @@ pub fn run() -> Result<()> {
         Commands::Serve {
             read_only,
             http,
+            mcp_http,
             instance,
             port,
             no_background,
         } => {
-            // Validate mutual exclusivity of --instance and --port (redundant
-            // with clap's conflicts_with but kept for the HTTP path).
-            if instance.is_some() && port.is_some() {
-                anyhow::bail!("--instance and --port are mutually exclusive");
-            }
-
-            if *http {
-                cmd_serve_http(palace_arg, *read_only, *port, *instance)?;
+            if *mcp_http {
+                cmd_serve_mcp_http(palace_arg, *read_only, *port)?;
+            } else if *http {
+                cmd_serve_http(palace_arg, *read_only)?;
             } else {
                 // Compute the REST port: env MEMPALACE_HTTP_PORT > --port > --instance > config > default 3111.
                 let config = Config::load().unwrap_or_default();

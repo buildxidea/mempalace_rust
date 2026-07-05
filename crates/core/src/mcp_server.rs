@@ -582,6 +582,13 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
                 }
+                // Repair / health diagnostics (pirk)
+                "mempalace_repair_status" | "memory_repair_status" => {
+                    tool_repair_status(&state, args)
+                }
+                "mempalace_sqlite_integrity" | "memory_sqlite_integrity" => {
+                    tool_sqlite_integrity(&state, args)
+                }
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -1125,6 +1132,18 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Mempalace Claude Bridge Sync",
             "Alias for memory_claude_bridge_sync - sync memories to/from Claude Code's MEMORY.md file.",
             serde_json::json!({ "type": "object", "properties": { "direction": { "type": "string", "description": "Sync direction: push (to Claude), pull (from Claude), or sync (bidirectional, default: sync)" } }, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_repair_status",
+            "Repair Status",
+            "Show HNSW vector index health status: drawer counts, manifest, FTS5, and overall consistency.",
+            serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+        tool(
+            "mempalace_sqlite_integrity",
+            "SQLite Integrity",
+            "Run PRAGMA quick_check on the palace SQLite database. Returns whether the DB is intact.",
+            serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
     ]
 }
@@ -6733,6 +6752,46 @@ fn resolve_palace_override(raw: &str) -> std::path::PathBuf {
         }
     }
     std::path::PathBuf::from(raw)
+}
+
+// ---------------------------------------------------------------------------
+// Repair / health diagnostics (pirk)
+// ---------------------------------------------------------------------------
+
+fn tool_repair_status(state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    if collection_missing(state) {
+        return ok_json(no_palace());
+    }
+    let report = crate::repair::repair_status(&state.palace_path)
+        .map_err(|e| internal_error_safe(&e))?;
+    ok_json(serde_json::json!({
+        "sqlite_drawer_count": report.sqlite_drawer_count,
+        "document_map_count": report.document_map_count,
+        "hnsw_loaded": report.hnsw_loaded,
+        "hnsw_vector_count": report.hnsw_vector_count,
+        "manifest_exists": report.manifest_exists,
+        "manifest_model": report.manifest_model,
+        "manifest_dim": report.manifest_dim,
+        "fts5_present": report.fts5_present,
+        "drawer_store_available": report.drawer_store_available,
+        "counts_consistent": report.counts_consistent,
+        "healthy": report.healthy,
+    }))
+}
+
+fn tool_sqlite_integrity(
+    state: &AppState,
+    _args: JsonObject,
+) -> Result<CallToolResult, ErrorData> {
+    if collection_missing(state) {
+        return ok_json(no_palace());
+    }
+    let result = crate::repair::sqlite_integrity_preflight(&state.palace_path)
+        .map_err(|e| internal_error_safe(&e))?;
+    ok_json(serde_json::json!({
+        "integrity_ok": result,
+        "palace_path": state.palace_path.to_string_lossy(),
+    }))
 }
 
 // ---------------------------------------------------------------------------

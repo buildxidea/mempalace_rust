@@ -609,6 +609,14 @@ pub enum RepairCommands {
     },
     /// Rebuild the palace index
     Rebuild,
+    /// Rebuild vector embeddings from SQLite ground truth (pirk mode 1)
+    RebuildVectorIndex,
+    /// Fix poisoned max_seq_id counters (pirk mode 2)
+    FixPoisonedSeqId,
+    /// Full rebuild of palace from SQLite metadata (pirk mode 3)
+    RebuildFromSqlite,
+    /// Show HNSW vector index health status
+    Status,
     /// Clean up stale PID file from interrupted mine operations
     CleanupPid,
     /// Migrate vector index schema (re-index with current embedder)
@@ -1525,6 +1533,47 @@ fn cmd_repair(cmd: &RepairCommands, palace_arg: Option<&str>) -> Result<()> {
         }
         RepairCommands::Rebuild => {
             crate::repair::rebuild_index(Some(palace_path.as_path()))?;
+        }
+        RepairCommands::RebuildVectorIndex => {
+            let report = crate::repair::rebuild_vector_index(&palace_path)?;
+            println!(
+                "  Vector index rebuild complete: {} SQLite drawers, {} embedded, {} errors",
+                report.sqlite_count, report.embedded_count, report.errors
+            );
+        }
+        RepairCommands::FixPoisonedSeqId => {
+            let (old, new) = crate::repair::fix_poisoned_seq_id(&palace_path)?;
+            println!("  max_seq_id: {} -> {}", old, new);
+        }
+        RepairCommands::RebuildFromSqlite => {
+            let report = crate::repair::rebuild_from_sqlite(&palace_path)?;
+            println!(
+                "  Full rebuild from SQLite complete: {} SQLite drawers, {} rebuilt, hnsw={}, fts5={}, rolled_back={}",
+                report.sqlite_count, report.rebuilt_count, report.hnsw_rebuilt, report.fts5_rebuilt, report.rolled_back
+            );
+        }
+        RepairCommands::Status => {
+            let report = crate::repair::repair_status(&palace_path)?;
+            println!("\n{}", "=".repeat(55));
+            println!("  MemPalace Repair Status");
+            println!("{}\n", "=".repeat(55));
+            println!("  Palace:              {}", palace_path.display());
+            println!("  SQLite drawers:      {}", report.sqlite_drawer_count);
+            println!("  Document map count:  {}", report.document_map_count);
+            println!("  HNSW loaded:         {}", report.hnsw_loaded);
+            println!("  HNSW vectors:        {}", report.hnsw_vector_count);
+            println!("  Manifest exists:     {}", report.manifest_exists);
+            if let Some(ref model) = report.manifest_model {
+                println!("  Manifest model:      {}", model);
+            }
+            if let Some(dim) = report.manifest_dim {
+                println!("  Manifest dim:        {}", dim);
+            }
+            println!("  FTS5 present:        {}", report.fts5_present);
+            println!("  Drawer store:        {}", report.drawer_store_available);
+            println!("  Counts consistent:   {}", report.counts_consistent);
+            println!("  Healthy:             {}", report.healthy);
+            println!("{}\n", "=".repeat(55));
         }
         RepairCommands::CleanupPid => {
             crate::repair::cleanup_pid(Some(palace_path.as_path()))?;

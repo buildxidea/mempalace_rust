@@ -6,6 +6,9 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -36,9 +39,11 @@ jobs:
             use_cross: false
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
@@ -90,11 +95,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Extracted tag=${tag}, version=${tag#v}"
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Stage install scripts
+        run: |
+          cp install.sh artifacts/
+          cp install.ps1 artifacts/
+          echo "Staged install scripts:"
+          ls -la artifacts/install.*
+
+      - name: Generate checksums for staged assets
+        run: |
+          cd artifacts
+          sha256sum install.sh install.ps1 > checksums-install.txt
+          cat checksums-install.txt
+
       - uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.version.outputs.tag }}
+          body_path: CHANGELOG.md
           generate_release_notes: true
-          files: artifacts/*
+          files: |
+            artifacts/*

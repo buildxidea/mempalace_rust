@@ -45,6 +45,7 @@ rerank = []
 # contradictions. Falls back to heuristic-only when not enabled.
 llm-sidecar = []
 full = ["llm-openai", "llm-anthropic", "vision", "rerank"]
+spellcheck = []
 health = ["dep:sysinfo"]
 # HTTP REST API server (axum-based, `mpr serve --http`).
 http-server = ["dep:axum", "dep:tower-http"]

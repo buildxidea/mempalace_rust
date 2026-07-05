@@ -582,6 +582,8 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
                 }
+                #[cfg(feature = "spellcheck")]
+                "mempalace_spellcheck" => tool_spellcheck(&state, args),
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -1125,6 +1127,13 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Mempalace Claude Bridge Sync",
             "Alias for memory_claude_bridge_sync - sync memories to/from Claude Code's MEMORY.md file.",
             serde_json::json!({ "type": "object", "properties": { "direction": { "type": "string", "description": "Sync direction: push (to Claude), pull (from Claude), or sync (bidirectional, default: sync)" } }, "additionalProperties": false }),
+        ),
+        #[cfg(feature = "spellcheck")]
+        tool(
+            "mempalace_spellcheck",
+            "Spellcheck",
+            "Check and correct spelling in text. Returns the corrected text along with per-token diagnostics. Useful for fixing search queries before retrying.",
+            serde_json::json!({ "type": "object", "properties": { "text": { "type": "string", "description": "Text to spellcheck" }, "max_edit": { "type": "integer", "description": "Maximum edit distance (default: 3)" }, "max_suggestions": { "type": "integer", "description": "Maximum number of suggestions (default: 5)" } }, "required": ["text"] }),
         ),
     ]
 }
@@ -6696,6 +6705,42 @@ fn tool_claude_bridge_sync(
             }))
         }
     }
+}
+
+#[cfg(feature = "spellcheck")]
+fn tool_spellcheck(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Input {
+        text: String,
+        max_edit: Option<usize>,
+        max_suggestions: Option<usize>,
+    }
+    let input: Input = parse_args_with_integer_coercion(args, &["max_edit", "max_suggestions"])?;
+
+    let mut config = crate::spellcheck::SpellcheckConfig::default();
+    if let Some(me) = input.max_edit {
+        config.max_edit_distance = me;
+    }
+    if let Some(ms) = input.max_suggestions {
+        config.max_suggestions = ms;
+    }
+
+    let result = crate::spellcheck::spellcheck(&input.text, &config);
+
+    let suggestions = if result.was_corrected {
+        crate::spellcheck::suggest_for_search(&input.text, &config)
+    } else {
+        vec![]
+    };
+
+    ok_json(serde_json::json!({
+        "original": result.original,
+        "corrected": result.corrected,
+        "was_corrected": result.was_corrected,
+        "suggestions": suggestions,
+        "token_corrections": result.token_corrections,
+    }))
 }
 
 fn kg_path(state: &AppState) -> std::path::PathBuf {

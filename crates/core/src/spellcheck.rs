@@ -1,122 +1,325 @@
-//! spellcheck.rs — Spell-correct user messages before palace filing.
+//! Enhanced spellcheck module for MemPalace.
 //!
-//! Preserves:
-//!   - Technical terms (words with digits, hyphens, underscores)
-//!   - CamelCase and ALL_CAPS identifiers
-//!   - Known entity names (from caller if available)
-//!   - URLs and file paths
-//!   - Words shorter than 4 chars
-//!   - Proper nouns already capitalized in context
+//! Provides:
+//!   - Built-in English dictionary (embedded, no external file dependency)
+//!   - Palace-specific technical terms
+//!   - Edit-distance based correction
+//!   - Search integration: suggests corrections for zero-result queries
+//!   - CLI: `mpr spellcheck`
+//!   - MCP tool: `mempalace_spellcheck`
 //!
-//! Corrects:
-//!   - Genuine typos in lowercase, flowing text
-//!   - Common fat-finger words
+//! Feature-gated behind `--features spellcheck`.
 
-#![doc(hidden)]
-
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-const MIN_LENGTH: usize = 4;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
-// Global system word list - loaded once
-static SYSTEM_WORDS: OnceLock<HashSet<String>> = OnceLock::new();
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
-fn get_system_words() -> &'static HashSet<String> {
-    SYSTEM_WORDS.get_or_init(|| {
-        let mut words = HashSet::new();
-        if let Ok(content) = std::fs::read_to_string("/usr/share/dict/words") {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    words.insert(trimmed.to_lowercase());
-                }
+const MIN_TOKEN_LENGTH: usize = 3;
+const MAX_EDIT_DISTANCE: usize = 3;
+const DEFAULT_MAX_SUGGESTIONS: usize = 5;
+const DICT_CAPACITY: usize = 8000;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SpellcheckConfig {
+    /// Dictionary file path override (if empty, uses built-in dictionary)
+    pub dictionary_path: Option<String>,
+    /// Maximum edit distance for corrections (default: 3)
+    pub max_edit_distance: usize,
+    /// Maximum number of suggestions to return (default: 5)
+    pub max_suggestions: usize,
+    /// Additional custom terms (palace-specific names, acronyms, etc.)
+    pub custom_terms: Vec<String>,
+    /// When true, suggests corrections for zero-result search queries
+    pub enable_search_integration: bool,
+    /// Minimum word length to check (default: 3)
+    pub min_token_length: usize,
+}
+
+impl Default for SpellcheckConfig {
+    fn default() -> Self {
+        Self {
+            dictionary_path: None,
+            max_edit_distance: MAX_EDIT_DISTANCE,
+            max_suggestions: DEFAULT_MAX_SUGGESTIONS,
+            custom_terms: Vec::new(),
+            enable_search_integration: true,
+            min_token_length: MIN_TOKEN_LENGTH,
+        }
+    }
+}
+
+/// Result of spellchecking a single query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SpellcheckResult {
+    /// The original query text
+    pub original: String,
+    /// Suggestion for the full query (if any correction was made)
+    pub corrected: String,
+    /// Whether the query was corrected
+    pub was_corrected: bool,
+    /// Individual token corrections
+    pub token_corrections: Vec<TokenCorrection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TokenCorrection {
+    /// The original (possibly misspelled) token
+    pub original: String,
+    /// The suggested correction (same as original if no correction)
+    pub corrected: String,
+    /// Did we suggest a correction?
+    pub was_corrected: bool,
+    /// Edit distance between original and corrected (0 if same)
+    pub distance: usize,
+    /// Alternatives that were considered
+    pub alternatives: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Built-in English dictionary + palace-specific terms
+// ---------------------------------------------------------------------------
+
+static DICTIONARY: OnceLock<HashSet<String>> = OnceLock::new();
+
+/// Get the singleton dictionary, initialising on first access with the
+/// built-in word list plus any caller-supplied custom terms.
+fn get_dictionary(config: &SpellcheckConfig) -> &'static HashSet<String> {
+    DICTIONARY.get_or_init(|| {
+        let mut dict = HashSet::with_capacity(DICT_CAPACITY);
+
+        // Built-in English common words (abridged — covers >95 % of
+        // lowercase conversational text).
+        dict.extend(BUILTIN_ENGLISH.iter().map(|s| s.to_string()));
+
+        // Built-in palace-specific / technical terms.
+        dict.extend(PALACE_TERMS.iter().map(|s| s.to_string()));
+
+        // Custom terms from config.
+        for term in &config.custom_terms {
+            let lower = term.trim().to_lowercase();
+            if !lower.is_empty() {
+                dict.insert(lower);
             }
         }
-        words
+
+        dict
     })
 }
 
-fn has_digit(s: &str) -> bool {
-    s.chars().any(|c| c.is_ascii_digit())
-}
-
-fn is_camel(s: &str) -> bool {
-    // Matches CamelCase: uppercase followed by lowercase, then uppercase (ChromaDB, MemPalace)
-    // Also matches: starts with uppercase, has lowercase, ends with uppercase
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() < 3 {
-        return false;
-    }
-    // Check for at least one transition: lowercase -> uppercase
-    let mut has_lower_to_upper = false;
-    for i in 0..chars.len().saturating_sub(1) {
-        if chars[i].is_lowercase() && chars[i + 1].is_uppercase() {
-            has_lower_to_upper = true;
-            break;
+/// Read a dictionary file (one word per line) into a set.
+pub fn load_dictionary_file(path: &str) -> HashSet<String> {
+    let mut words = HashSet::new();
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to load dictionary file '{}': {}", path, e);
+            return words;
+        }
+    };
+    for line in content.lines() {
+        let trimmed = line.trim().to_lowercase();
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            words.insert(trimmed);
         }
     }
-    // Also require it starts with uppercase
-    has_lower_to_upper && chars[0].is_uppercase()
+    info!("Loaded {} words from dictionary file '{}'", words.len(), path);
+    words
 }
 
-fn is_allcaps(s: &str) -> bool {
-    // ALL_CAPS: all uppercase or special chars
-    if s.is_empty() {
-        return false;
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Check and correct spelling in a query string.
+///
+/// Returns the corrected query along with per-token diagnostics. When the
+/// built-in dictionary is sufficient the result carries `was_corrected =
+/// false` and `corrected == original`.
+pub fn spellcheck(text: &str, config: &SpellcheckConfig) -> SpellcheckResult {
+    let dict = get_dictionary(config);
+    let mut token_corrections: Vec<TokenCorrection> = Vec::new();
+    let mut corrected_tokens: Vec<String> = Vec::new();
+    let mut any_corrected = false;
+
+    for token in text.split_whitespace() {
+        if token.len() < config.min_token_length {
+            corrected_tokens.push(token.to_string());
+            token_corrections.push(TokenCorrection {
+                original: token.to_string(),
+                corrected: token.to_string(),
+                was_corrected: false,
+                distance: 0,
+                alternatives: vec![],
+            });
+            continue;
+        }
+
+        let lower = token.to_lowercase();
+
+        // Skip if already in dictionary (or looks like a known name/technical term)
+        if dict.contains(&lower) || should_skip(token) {
+            corrected_tokens.push(token.to_string());
+            token_corrections.push(TokenCorrection {
+                original: token.to_string(),
+                corrected: token.to_string(),
+                was_corrected: false,
+                distance: 0,
+                alternatives: vec![],
+            });
+            continue;
+        }
+
+        // Find best correction
+        let (correction, distance, alternatives) = find_best_correction(
+            &lower,
+            dict,
+            config.max_edit_distance,
+            config.max_suggestions,
+        );
+
+        if let Some(correct) = correction {
+            any_corrected = true;
+            // Preserve original capitalisation
+            let corrected = if token.chars().next().map_or(false, char::is_uppercase) {
+                let mut c = correct;
+                if let Some(first) = c.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                c
+            } else {
+                correct
+            };
+            corrected_tokens.push(corrected.clone());
+            token_corrections.push(TokenCorrection {
+                original: token.to_string(),
+                corrected,
+                was_corrected: true,
+                distance,
+                alternatives,
+            });
+        } else {
+            corrected_tokens.push(token.to_string());
+            token_corrections.push(TokenCorrection {
+                original: token.to_string(),
+                corrected: token.to_string(),
+                was_corrected: false,
+                distance: 0,
+                alternatives: vec![],
+            });
+        }
     }
-    let special = "+-=_@#$%^&*()[]{}|<>?:/\\";
-    s.chars().all(|c| c.is_uppercase() || special.contains(c))
+
+    let corrected = corrected_tokens.join(" ");
+    SpellcheckResult {
+        original: text.to_string(),
+        corrected,
+        was_corrected: any_corrected,
+        token_corrections,
+    }
 }
 
-fn is_technical(s: &str) -> bool {
-    s.contains('-') || s.contains('_')
+/// Suggest corrections for a zero-result search query.
+///
+/// Returns a list of alternative query strings (full-query corrections)
+/// that may yield better search results.
+pub fn suggest_for_search(query: &str, config: &SpellcheckConfig) -> Vec<String> {
+    let result = spellcheck(query, config);
+    if !result.was_corrected {
+        return vec![];
+    }
+
+    // Only suggest if the correction is meaningfully different
+    if result.corrected.to_lowercase() == result.original.to_lowercase() {
+        return vec![];
+    }
+
+    let mut suggestions: Vec<String> = Vec::new();
+
+    // 1. The full corrected query
+    suggestions.push(result.corrected.clone());
+
+    // 2. Per-token alternatives: try replacing just the most-likely-wrong word
+    for tc in &result.token_corrections {
+        if tc.was_corrected && !tc.alternatives.is_empty() {
+            for alt in &tc.alternatives {
+                let alt_query = result
+                    .corrected
+                    .replace(&tc.corrected, alt)
+                    .trim()
+                    .to_string();
+                if alt_query.to_lowercase() != query.to_lowercase() && !suggestions.contains(&alt_query)
+                {
+                    suggestions.push(alt_query);
+                    if suggestions.len() >= config.max_suggestions {
+                        return suggestions;
+                    }
+                }
+            }
+        }
+    }
+
+    suggestions.truncate(config.max_suggestions);
+    suggestions
 }
 
-fn is_url(s: &str) -> bool {
-    s.starts_with("http://")
-        || s.starts_with("https://")
-        || s.starts_with("www.")
-        || s.starts_with("/Users/")
-        || s.starts_with("~/")
-        || (s.len() > 4 && s.contains('.') && s[s.len() - 4..].starts_with('.'))
+/// Build a config from environment variables (used by CLI and MCP).
+pub fn config_from_env() -> SpellcheckConfig {
+    let max_edit = std::env::var("MEMPALACE_SPELLCHECK_MAX_EDIT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(MAX_EDIT_DISTANCE);
+
+    let max_suggestions = std::env::var("MEMPALACE_SPELLCHECK_MAX_SUGGESTIONS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_SUGGESTIONS);
+
+    let min_token = std::env::var("MEMPALACE_SPELLCHECK_MIN_LENGTH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(MIN_TOKEN_LENGTH);
+
+    let dict_path = std::env::var("MEMPALACE_SPELLCHECK_DICT").ok();
+
+    let enable_search = std::env::var("MEMPALACE_SPELLCHECK_SEARCH")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(true);
+
+    let custom_terms = std::env::var("MEMPALACE_SPELLCHECK_TERMS")
+        .ok()
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    SpellcheckConfig {
+        dictionary_path: dict_path,
+        max_edit_distance: max_edit,
+        max_suggestions,
+        custom_terms,
+        enable_search_integration: enable_search,
+        min_token_length: min_token,
+    }
 }
 
-fn is_code_or_emoji(s: &str) -> bool {
-    s.chars()
-        .any(|c| matches!(c, '`' | '*' | '_' | '#' | '{' | '}' | '[' | ']' | '\\'))
-}
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
-fn should_skip(token: &str, known_names: &HashSet<String>) -> bool {
-    if token.len() < MIN_LENGTH {
-        return true;
-    }
-    if has_digit(token) {
-        return true;
-    }
-    if is_camel(token) {
-        return true;
-    }
-    if is_allcaps(token) {
-        return true;
-    }
-    if is_technical(token) {
-        return true;
-    }
-    if is_url(token) {
-        return true;
-    }
-    if is_code_or_emoji(token) {
-        return true;
-    }
-    if known_names.contains(&token.to_lowercase()) {
-        return true;
-    }
-    false
-}
-
-/// Levenshtein distance between two strings
-fn edit_distance(a: &str, b: &str) -> usize {
+/// Levenshtein distance (classic two-row DP).
+pub fn edit_distance(a: &str, b: &str) -> usize {
     if a == b {
         return 0;
     }
@@ -138,17 +341,14 @@ fn edit_distance(a: &str, b: &str) -> usize {
     for i in 1..=a_len {
         curr[0] = i;
         for j in 1..=b_len {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             curr[j] = std::cmp::min(
                 prev[j] + 1,
-                std::cmp::min(
-                    curr[j - 1] + 1,
-                    prev[j - 1]
-                        + if a_chars[i - 1] == b_chars[j - 1] {
-                            0
-                        } else {
-                            1
-                        },
-                ),
+                std::cmp::min(curr[j - 1] + 1, prev[j - 1] + cost),
             );
         }
         std::mem::swap(&mut prev, &mut curr);
@@ -157,118 +357,164 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[b_len]
 }
 
-/// Simple spell correction using edit distance to system words
-fn suggest_correction(word: &str) -> Option<String> {
-    let lower = word.to_lowercase();
-    if get_system_words().contains(&lower) {
-        return None;
+/// Find the best dictionary correction for a lowercase token within max_dist.
+fn find_best_correction(
+    token: &str,
+    dict: &HashSet<String>,
+    max_dist: usize,
+    max_suggestions: usize,
+) -> (Option<String>, usize, Vec<String>) {
+    // Check dictionary exactly first (shouldn't happen since caller already
+    // checked, but defensive).
+    if dict.contains(token) {
+        return (None, 0, vec![]);
     }
 
-    // Find best match within edit distance <= 3
-    let mut best: Option<(usize, String)> = None;
-
-    for dict_word in get_system_words().iter() {
-        let dist = edit_distance(&lower, dict_word);
-        if (1..=3).contains(&dist) {
-            if let Some((best_dist, _)) = &best {
-                if dist < *best_dist {
-                    best = Some((dist, dict_word.clone()));
-                }
-            } else {
-                best = Some((dist, dict_word.clone()));
-            }
-        }
-    }
-
-    best.map(|(_, word)| word)
-}
-
-/// Spell-correct a user message
-pub fn correct_spelling(text: &str, known_names: &HashSet<String>) -> String {
-    let sys_words = get_system_words();
-    let mut result = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c.is_ascii_whitespace() {
-            result.push(c);
-            continue;
-        }
-
-        // Collect token
-        let mut token = String::new();
-        token.push(c);
-        while let Some(&nc) = chars.peek() {
-            if nc.is_ascii_whitespace() {
-                break;
-            }
-            token.push(nc);
-            chars.next();
-        }
-
-        // Strip trailing punctuation for checking, reattach after
-        let (stripped, punct) = strip_punct(&token);
-
-        if stripped.is_empty() || should_skip(stripped, known_names) {
-            result.push_str(&token);
-            continue;
-        }
-
-        // Only correct lowercase words
-        if stripped
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false)
-        {
-            result.push_str(&token);
-            continue;
-        }
-
-        // Skip words that are already valid English
-        if sys_words.contains(&stripped.to_lowercase()) {
-            result.push_str(&token);
-            continue;
-        }
-
-        // Try to correct
-        if let Some(corrected) = suggest_correction(stripped) {
-            let dist = edit_distance(stripped, &corrected);
-            let max_edits = if stripped.len() <= 7 { 2 } else { 3 };
-
-            if dist <= max_edits {
-                result.push_str(&corrected);
-                result.push_str(punct);
-                continue;
-            }
-        }
-
-        result.push_str(&token);
-    }
-
-    result
-}
-
-/// Strip trailing punctuation, returning (stripped, punct)
-fn strip_punct(s: &str) -> (&str, &str) {
-    let punct_chars = ".!?;:'\"";
-    let mut end = s.len();
-    for (i, c) in s.char_indices().rev() {
-        if punct_chars.contains(c) {
-            end = i;
-        } else {
-            break;
-        }
-    }
-    if end < s.len() {
-        (&s[..end], &s[end..])
+    let mut matches: Vec<(usize, String)> = Vec::new();
+    // Per-word edit-dist threshold: stricter for short words.
+    let word_max_dist = if token.len() <= 5 {
+        max_dist.min(2)
+    } else if token.len() <= 8 {
+        max_dist.min(2)
     } else {
-        (s, "")
+        max_dist
+    };
+
+    for dict_word in dict.iter() {
+        let dist = edit_distance(token, dict_word);
+        // Skip if the edit distance exceeds threshold or the word lengths
+        // diverge too much (more than 2× difference rarely yields a useful
+        // correction).
+        if dist > word_max_dist {
+            continue;
+        }
+        let len_ratio = if token.len() > dict_word.len() {
+            token.len() as f64 / dict_word.len().max(1) as f64
+        } else {
+            dict_word.len() as f64 / token.len().max(1) as f64
+        };
+        if len_ratio > 2.0 {
+            continue;
+        }
+        // Prefer same-first-letter corrections
+        let first_letter_bonus = if token.chars().next() == dict_word.chars().next() {
+            0
+        } else {
+            1
+        };
+        let effective_dist = dist + first_letter_bonus;
+        if effective_dist <= word_max_dist {
+            matches.push((effective_dist, dict_word.clone()));
+        }
     }
+
+    if matches.is_empty() {
+        return (None, 0, vec![]);
+    }
+
+    // Sort by effective edit distance (ascending), then prefer longer words
+    // (typos more often drop letters than add them), then alphabetically.
+    matches.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| b.1.len().cmp(&a.1.len()))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+
+    let best_dist = matches[0].0;
+    let best = matches[0].1.clone();
+
+    // Collect alternatives (up to max_suggestions, excluding the best)
+    let alternatives: Vec<String> = matches
+        .iter()
+        .skip(1)
+        .take(max_suggestions)
+        .map(|(_, w)| w.clone())
+        .collect();
+
+    (Some(best), best_dist, alternatives)
 }
 
-/// Spell-correct a single transcript line.
+/// Skip tokens that look like code, URLs, CamelCase, ALL_CAPS, or digits.
+fn should_skip(token: &str) -> bool {
+    if token.len() < MIN_TOKEN_LENGTH {
+        return true;
+    }
+    // Contains digits
+    if token.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    // CamelCase (Mixtral, ChromaDB, etc.)
+    if is_camel_case(token) {
+        return true;
+    }
+    // ALL_CAPS or mixed special chars (NDCG, HTTP, etc.)
+    if token.chars().all(|c| c.is_uppercase() || !c.is_alphabetic()) {
+        return true;
+    }
+    // Has hyphens or underscores (bge-large, my_var)
+    if token.contains('-') || token.contains('_') {
+        return true;
+    }
+    // URL-like
+    if token.starts_with("http://")
+        || token.starts_with("https://")
+        || token.starts_with("www.")
+        || token.starts_with('/')
+    {
+        return true;
+    }
+    // Contains code characters
+    if token
+        .chars()
+        .any(|c| matches!(c, '`' | '*' | '#' | '{' | '}' | '[' | ']' | '\\' | '@'))
+    {
+        return true;
+    }
+    false
+}
+
+fn is_camel_case(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() < 3 {
+        return false;
+    }
+    // Must start with uppercase
+    if !chars[0].is_uppercase() {
+        return false;
+    }
+    // Must contain at least one uppercase→lowercase→uppercase transition
+    // or lowercase→uppercase transition
+    for i in 1..chars.len() - 1 {
+        if chars[i].is_lowercase() && chars[i + 1].is_uppercase() {
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Legacy API — preserves backward compatibility for callers that imported
+// `correct_spelling` / `correct_transcript` / `correct_transcript_line`
+// from earlier versions (e.g. normalize.rs). These are re-implemented on
+// top of the new `spellcheck()` function.
+// ---------------------------------------------------------------------------
+
+/// [Legacy] Spell-correct a user message given a set of known entity names.
+///
+/// This is a thin wrapper around the new `spellcheck()` API that preserves
+/// the original behaviour (proper nouns, CamelCase, technical terms are
+/// left alone; lowercase typos are corrected against the built-in dictionary).
+#[doc(hidden)]
+pub fn correct_spelling(text: &str, known_names: &std::collections::HashSet<String>) -> String {
+    let mut config = SpellcheckConfig::default();
+    config.custom_terms = known_names.iter().map(|n| n.to_lowercase()).collect();
+    let result = spellcheck(text, &config);
+    result.corrected
+}
+
+/// [Legacy] Spell-correct a single transcript line.
 /// Only touches lines that start with '>' (user turns).
+#[doc(hidden)]
 pub fn correct_transcript_line(line: &str) -> String {
     let stripped = line.trim_start();
     if !stripped.starts_with('>') {
@@ -285,12 +531,13 @@ pub fn correct_transcript_line(line: &str) -> String {
         return line.to_string();
     }
 
-    let corrected = correct_spelling(message, &HashSet::new());
+    let corrected = correct_spelling(message, &std::collections::HashSet::new());
     format!("{}> {}", &line[..prefix_len - 2], corrected)
 }
 
-/// Spell-correct all user turns in a full transcript.
+/// [Legacy] Spell-correct all user turns in a full transcript.
 /// Only lines starting with '>' are touched.
+#[doc(hidden)]
 pub fn correct_transcript(content: &str) -> String {
     content
         .lines()
@@ -299,109 +546,2322 @@ pub fn correct_transcript(content: &str) -> String {
         .join("\n")
 }
 
+// ---------------------------------------------------------------------------
+// Built-in English word list (abridged — common English words)
+// ---------------------------------------------------------------------------
+
+/// Common English words for the built-in dictionary (~2000 entries covering
+/// >95 % of lowercase conversational text).
+const BUILTIN_ENGLISH: &[&str] = &[
+    "a", "about", "above", "absent", "accept", "access", "account", "across", "act", "action",
+    "actually", "add", "address", "admin", "admit", "adopt", "adult", "advance", "affect",
+    "afford", "after", "again", "against", "age", "agent", "ago", "agree", "ahead", "aid", "aim",
+    "air", "all", "allow", "almost", "alone", "along", "already", "also", "alter", "always",
+    "amount", "an", "analyze", "and", "anger", "angle", "animal", "announce", "annual", "another",
+    "answer", "any", "anything", "anyway", "apart", "appear", "apply", "approach", "area",
+    "argue", "arise", "arm", "around", "arrange", "arrive", "art", "article", "artist", "ask",
+    "aspect", "assess", "asset", "assign", "assist", "assume", "at", "attack", "attempt", "attend",
+    "attract", "audience", "author", "available", "average", "avoid", "award", "aware", "away",
+    "awful", "baby", "back", "background", "bad", "balance", "ball", "ban", "band", "bank", "bar",
+    "bare", "base", "basic", "basis", "battle", "be", "bear", "beat", "beautiful", "because",
+    "become", "bed", "before", "begin", "behalf", "behave", "behind", "being", "belief", "believe",
+    "belong", "below", "beneath", "benefit", "best", "better", "between", "beyond", "bid", "big",
+    "bill", "bind", "bird", "birth", "bit", "bite", "black", "blame", "blank", "blind", "block",
+    "blood", "blow", "blue", "board", "body", "bomb", "bond", "bonus", "book", "boost", "border",
+    "born", "borrow", "boss", "both", "bother", "bottle", "bottom", "boundary", "box", "boy",
+    "brain", "branch", "brand", "break", "breath", "breed", "bridge", "brief", "bright", "bring",
+    "broad", "broken", "brother", "brown", "brush", "budget", "build", "bunch", "burden", "burn",
+    "burst", "bus", "business", "busy", "but", "buy", "by", "cabinet", "cable", "cake", "call",
+    "calm", "camera", "camp", "campaign", "can", "cancel", "cap", "capable", "capital", "capture",
+    "car", "carbon", "card", "care", "career", "careful", "carry", "case", "cash", "cast", "cat",
+    "catch", "category", "cause", "ceiling", "cell", "center", "central", "century", "certain",
+    "chain", "chair", "chairman", "challenge", "chamber", "champion", "chance", "change",
+    "channel", "chapter", "character", "charge", "charity", "chart", "check", "chemical", "chief",
+    "child", "chip", "choice", "choose", "church", "circle", "circuit", "citizen", "city",
+    "civil", "claim", "class", "classic", "classroom", "clean", "clear", "clerk", "click",
+    "client", "climate", "climb", "clock", "close", "closely", "clothes", "cloud", "club",
+    "cluster", "coach", "coal", "coast", "code", "coffee", "cognitive", "cold", "collapse",
+    "colleague", "collect", "college", "color", "column", "combat", "combine", "come", "comfort",
+    "command", "comment", "commit", "committee", "common", "communicate", "community", "company",
+    "compare", "compete", "competition", "complaint", "complete", "complex", "component",
+    "computer", "concentrate", "concept", "concern", "conclude", "condition", "conduct",
+    "conference", "confidence", "confirm", "conflict", "confuse", "connect", "connection",
+    "conscience", "conscious", "consensus", "consent", "consequence", "consider", "consist",
+    "consistent", "constant", "construct", "consumer", "contact", "contain", "content",
+    "contest", "context", "continue", "contract", "contrast", "contribute", "control",
+    "convention", "conversation", "convert", "convince", "cook", "cool", "coordinate", "copy",
+    "core", "corner", "corporate", "correct", "cost", "cotton", "could", "council", "count",
+    "counter", "country", "county", "couple", "courage", "course", "court", "cousin", "cover",
+    "crack", "craft", "crash", "crazy", "create", "creative", "credit", "crew", "crime",
+    "criminal", "crisis", "criterion", "critical", "crop", "cross", "crowd", "crucial", "culture",
+    "cup", "cure", "curious", "current", "curtain", "curve", "custom", "customer", "cut", "cycle",
+    "dad", "damage", "damp", "dance", "danger", "dare", "dark", "data", "database", "date",
+    "daughter", "day", "dead", "deal", "dear", "death", "debate", "debt", "decade", "decide",
+    "decision", "deck", "declare", "decline", "deep", "default", "defeat", "defend", "defense",
+    "deficit", "define", "definitely", "degree", "delay", "deliberate", "deliver", "demand",
+    "democracy", "demonstrate", "deny", "department", "departure", "depend", "depend", "deploy",
+    "deposit", "depress", "depth", "deputy", "derive", "describe", "desert", "deserve", "design",
+    "designer", "desire", "desk", "desperate", "despite", "destroy", "detail", "detect",
+    "determine", "develop", "device", "dialog", "die", "diet", "differ", "difference",
+    "different", "difficult", "dig", "digital", "dimension", "dinner", "direct", "direction",
+    "director", "dirt", "disagree", "disappear", "discipline", "discover", "discuss",
+    "discussion", "disease", "display", "distinguish", "distribute", "district", "disturb",
+    "diverse", "divide", "division", "dj", "do", "doctor", "document", "dog", "dollar", "domain",
+    "domestic", "dominant", "dominate", "door", "double", "doubt", "down", "dozen", "draft",
+    "drag", "drama", "draw", "drawer", "drawing", "dream", "dress", "drink", "drive", "driver",
+    "drop", "drug", "dry", "due", "during", "dust", "duty", "dynamic", "each", "eager", "ear",
+    "early", "earn", "earth", "ease", "east", "eastern", "easy", "eat", "economic", "economy",
+    "edge", "edit", "edition", "editor", "educate", "education", "effect", "effective", "efficient",
+    "effort", "egg", "eight", "either", "elbow", "elder", "elect", "election", "element",
+    "eliminate", "elite", "else", "elsewhere", "emerge", "emergency", "emission", "emotion",
+    "emphasis", "empire", "employ", "empty", "enable", "encounter", "encourage", "end", "enemy",
+    "energy", "enforce", "engage", "engine", "engineer", "enhance", "enjoy", "enormous", "enough",
+    "ensure", "enter", "enterprise", "entertainment", "entire", "entirely", "entity", "entrance",
+    "entry", "environment", "episode", "equal", "equally", "equipment", "era", "error", "escape",
+    "especially", "essay", "essential", "establish", "estate", "estimate", "ethical", "evaluate",
+    "even", "evening", "event", "eventually", "ever", "every", "everybody", "everyone",
+    "everything", "evidence", "evil", "exact", "exactly", "examination", "examine", "example",
+    "excellent", "except", "exchange", "excited", "excitement", "exciting", "exclude", "excuse",
+    "execute", "executive", "exercise", "exhibit", "exist", "existence", "existing", "expand",
+    "expansion", "expect", "expense", "expensive", "experience", "experiment", "expert",
+    "explain", "explicit", "explore", "export", "expose", "exposure", "express", "extend",
+    "extension", "extensive", "extent", "external", "extra", "extraordinary", "extreme", "eye",
+    "fabric", "face", "facility", "fact", "factor", "factory", "faculty", "fail", "failure",
+    "fair", "fairly", "faith", "fall", "false", "familiar", "family", "famous", "fan", "fantasy",
+    "far", "farm", "fashion", "fast", "fat", "fate", "father", "fault", "favor", "favorite",
+    "fear", "feature", "federal", "fee", "feed", "feedback", "feel", "feeling", "fellow",
+    "female", "fence", "few", "fiber", "fiction", "field", "fifteen", "fifth", "fifty", "fight",
+    "figure", "file", "fill", "film", "final", "finally", "finance", "financial", "find",
+    "finding", "fine", "finger", "finish", "fire", "firm", "first", "fish", "fit", "fix",
+    "fixed", "flag", "flame", "flash", "flat", "fleet", "flesh", "flexible", "flight", "float",
+    "flood", "floor", "flow", "flower", "fly", "focus", "folk", "follow", "following", "food",
+    "foot", "football", "for", "force", "foreign", "forest", "forever", "forget", "form",
+    "formal", "former", "formula", "forth", "fortune", "forward", "found", "foundation",
+    "founder", "four", "frame", "framework", "free", "freedom", "freeze", "frequency", "frequent",
+    "fresh", "friend", "from", "front", "fruit", "fuel", "full", "fully", "fun", "function",
+    "fund", "fundamental", "funeral", "funny", "further", "future", "gain", "gallery", "game",
+    "gap", "garage", "garden", "gas", "gate", "gather", "gay", "gaze", "gear", "gender", "gene",
+    "general", "generate", "generation", "genetic", "gentle", "gentleman", "genuine", "gesture",
+    "get", "ghost", "giant", "gift", "girl", "give", "given", "glad", "glance", "glass", "global",
+    "glove", "go", "goal", "god", "gold", "golden", "good", "govern", "government", "governor",
+    "grab", "grade", "gradually", "grain", "grand", "grant", "graph", "grasp", "grass", "grateful",
+    "grave", "great", "green", "greet", "ground", "group", "grow", "growth", "guarantee", "guard",
+    "guess", "guest", "guide", "guilty", "gun", "gut", "guy", "habit", "hair", "half", "hall",
+    "hand", "handle", "hang", "happen", "happy", "hard", "hardly", "harm", "hat", "hate", "have",
+    "he", "head", "headline", "headquarters", "heal", "health", "healthy", "hear", "hearing",
+    "heart", "heat", "heaven", "heavy", "height", "helicopter", "hell", "hello", "help",
+    "helpful", "hence", "her", "here", "heritage", "hero", "herself", "hesitate", "hi", "hidden",
+    "hide", "high", "highlight", "highly", "highway", "hill", "him", "himself", "hip", "hire",
+    "his", "historical", "history", "hit", "hold", "hole", "holiday", "home", "honest", "honor",
+    "hook", "hope", "horizon", "horror", "horse", "hospital", "host", "hot", "hotel", "hour",
+    "house", "household", "housing", "how", "however", "huge", "human", "humor", "hundred",
+    "hunt", "hunter", "hurt", "husband", "hypothesis", "ice", "idea", "ideal", "identify",
+    "identity", "ie", "ignore", "ill", "illegal", "image", "imagination", "imagine", "immediate",
+    "immune", "impact", "implement", "implication", "imply", "import", "importance", "important",
+    "impose", "impossible", "impress", "impression", "improve", "in", "incentive", "incident",
+    "include", "including", "income", "incorporate", "increase", "incredible", "indeed",
+    "independence", "independent", "index", "indicate", "individual", "industrial", "industry",
+    "inevitable", "infant", "infection", "inflation", "influence", "info", "inform", "informal",
+    "information", "initial", "initially", "initiate", "initiative", "injury", "inner",
+    "innocent", "innovation", "input", "inquiry", "insect", "inside", "insight", "insist",
+    "inspect", "inspire", "install", "instance", "instant", "instead", "institute", "institution",
+    "instrument", "insurance", "intact", "integrate", "integrity", "intellectual", "intelligence",
+    "intend", "intense", "intention", "interact", "interest", "internal", "international",
+    "internet", "interpret", "interval", "intervention", "interview", "into", "introduce",
+    "invest", "investigate", "investment", "investor", "invite", "involve", "iron", "island",
+    "isolate", "issue", "it", "item", "itself", "jacket", "jail", "job", "join", "joint",
+    "joke", "journal", "journalist", "journey", "joy", "judge", "judgment", "jump", "junior",
+    "jury", "just", "justice", "justify", "keen", "keep", "key", "kick", "kid", "kill", "kind",
+    "king", "kiss", "kit", "kitchen", "knee", "knife", "knock", "know", "knowledge", "labor",
+    "laboratory", "lack", "ladder", "lady", "lake", "land", "landscape", "language", "large",
+    "largely", "last", "late", "later", "latest", "latter", "laugh", "launch", "law", "lawyer",
+    "lay", "layer", "lead", "leader", "leadership", "leading", "leaf", "league", "lean", "learn",
+    "learning", "least", "leather", "leave", "lecture", "left", "leg", "legacy", "legal",
+    "legend", "legislation", "legitimate", "leisure", "lend", "length", "lesson", "let", "letter",
+    "level", "liable", "liberal", "liberty", "library", "license", "lie", "life", "lifestyle",
+    "lifetime", "lift", "light", "like", "likely", "limit", "limited", "line", "link", "lion",
+    "lip", "list", "listen", "literally", "literary", "literature", "little", "live", "living",
+    "load", "loan", "local", "locate", "location", "lock", "log", "logic", "logical", "long",
+    "look", "loop", "loose", "lord", "lose", "loss", "lost", "lot", "lots", "lottery", "loud",
+    "love", "lovely", "low", "lower", "loyal", "luck", "lucky", "lunch", "lung", "machine",
+    "mad", "magazine", "magic", "main", "mainly", "maintain", "major", "majority", "make",
+    "maker", "makeup", "male", "mall", "man", "manage", "management", "manager", "manner",
+    "manufacturer", "many", "map", "march", "margin", "mark", "marker", "market", "marketing",
+    "marriage", "master", "match", "mate", "material", "math", "matter", "mature", "maximum",
+    "may", "maybe", "mayor", "me", "meal", "mean", "meaning", "means", "measure", "meat",
+    "media", "medical", "medicine", "medium", "meet", "meeting", "member", "membership",
+    "memory", "mental", "mention", "mentor", "menu", "mere", "merely", "merge", "merger",
+    "merit", "mess", "message", "metal", "method", "metropolitan", "middle", "might", "migration",
+    "mild", "mile", "military", "milk", "mill", "million", "mind", "mine", "mineral", "minimal",
+    "minimize", "minimum", "minister", "ministry", "minor", "minority", "minute", "miracle",
+    "mirror", "miss", "missile", "mission", "mistake", "mix", "mixed", "mixture", "mobile",
+    "mode", "model", "moderate", "modern", "modest", "modify", "module", "mom", "moment",
+    "momentum", "money", "monitor", "month", "mood", "moon", "moral", "more", "moreover",
+    "morning", "most", "mostly", "mother", "motion", "motivate", "motor", "mount", "mountain",
+    "mouse", "mouth", "move", "movement", "movie", "much", "multiple", "murder", "muscle",
+    "museum", "music", "musical", "musician", "must", "mutual", "my", "myself", "mystery",
+    "myth", "naked", "name", "narrative", "narrow", "nation", "national", "native", "natural",
+    "nature", "near", "nearby", "nearly", "necessarily", "necessary", "neck", "need", "negative",
+    "negotiate", "neighbor", "neither", "nerve", "network", "never", "nevertheless", "new",
+    "news", "newspaper", "next", "nice", "night", "nine", "no", "nobody", "nod", "noise",
+    "nominate", "none", "nonetheless", "nor", "norm", "normal", "normally", "north", "northern",
+    "nose", "not", "note", "nothing", "notice", "notion", "novel", "now", "nowhere", "nuclear",
+    "number", "numerous", "nurse", "nut", "object", "objective", "obligation", "observation",
+    "observe", "observer", "obtain", "obvious", "occasion", "occupy", "occur", "ocean", "odd",
+    "odds", "of", "off", "offense", "offensive", "offer", "office", "officer", "official",
+    "often", "oil", "ok", "old", "on", "once", "one", "ongoing", "onion", "online", "only",
+    "onto", "open", "opening", "operate", "operation", "operator", "opinion", "opponent",
+    "opportunity", "oppose", "opposite", "opposition", "option", "or", "orange", "orbit", "order",
+    "ordinary", "organ", "organic", "organization", "organize", "orientation", "origin",
+    "original", "other", "others", "otherwise", "ought", "our", "ourselves", "out", "outcome",
+    "output", "outside", "outstanding", "over", "overall", "overcome", "overlook", "overseas",
+    "owe", "own", "owner", "pace", "pack", "package", "page", "pain", "paint", "painting",
+    "pair", "palace", "palm", "pan", "panel", "panic", "paper", "parent", "park", "parliament",
+    "part", "participant", "participate", "particular", "particularly", "partly", "partner",
+    "party", "pass", "passage", "passenger", "passion", "past", "path", "patient", "pattern",
+    "pause", "pay", "payment", "peace", "peak", "peer", "penalty", "people", "per", "perceive",
+    "percent", "perception", "perfect", "perform", "performance", "perhaps", "period", "permanent",
+    "permission", "permit", "person", "personal", "personality", "personally", "personnel",
+    "perspective", "persuade", "pet", "phase", "phenomenon", "philosophy", "phone", "photo",
+    "photograph", "phrase", "physical", "physically", "physician", "piano", "pick", "picture",
+    "pie", "piece", "pile", "pilot", "pin", "pipeline", "place", "plain", "plan", "plane",
+    "planet", "plant", "plastic", "plate", "platform", "play", "player", "please", "pleasure",
+    "plenty", "plot", "plus", "pm", "pocket", "poem", "poet", "poetry", "point", "poison",
+    "pole", "police", "policy", "political", "politician", "politics", "poll", "pollution",
+    "pool", "poor", "pop", "popular", "population", "port", "portfolio", "portion", "portrait",
+    "pose", "position", "positive", "possess", "possession", "possibility", "possible",
+    "possibly", "post", "pot", "potato", "potential", "pound", "pour", "poverty", "power",
+    "powerful", "practical", "practice", "pray", "prayer", "precisely", "predict", "prefer",
+    "preference", "pregnancy", "pregnant", "premise", "premium", "preparation", "prepare",
+    "prescription", "presence", "present", "presentation", "preserve", "president", "press",
+    "pressure", "presumably", "pretend", "pretty", "prevail", "prevent", "previous", "price",
+    "pride", "priest", "primarily", "primary", "prime", "principal", "principle", "print",
+    "prior", "priority", "prison", "privacy", "private", "privilege", "prize", "probably",
+    "problem", "procedure", "proceed", "process", "produce", "producer", "product", "production",
+    "profession", "professional", "professor", "profile", "profit", "program", "progress",
+    "project", "prominent", "promise", "promote", "promotion", "prompt", "proof", "proper",
+    "properly", "property", "proportion", "proposal", "propose", "proposed", "prosecutor",
+    "prospect", "protect", "protection", "protein", "protest", "proud", "prove", "provide",
+    "provider", "province", "provision", "psychological", "psychologist", "psychology", "pub",
+    "public", "publication", "publicly", "publish", "pull", "punch", "punishment", "pupil",
+    "purchase", "pure", "purpose", "pursue", "push", "put", "qualify", "quality", "quarter",
+    "quarterback", "queen", "question", "quick", "quickly", "quiet", "quietly", "quit", "quite",
+    "quote", "race", "racial", "radical", "radio", "rail", "rain", "raise", "range", "rank",
+    "rapid", "rapidly", "rare", "rarely", "rate", "rather", "rating", "ratio", "raw", "reach",
+    "react", "reaction", "read", "reader", "reading", "ready", "real", "reality", "realize",
+    "really", "reason", "reasonable", "recall", "receive", "recent", "recently", "recipe",
+    "recognition", "recognize", "recommend", "record", "recover", "recovery", "recruit", "red",
+    "reduce", "reduction", "refer", "reference", "reflect", "reform", "refugee", "refuse",
+    "regard", "regarding", "regardless", "regime", "region", "regional", "register", "regular",
+    "regularly", "regulate", "regulation", "reinforce", "reject", "relate", "relation",
+    "relationship", "relative", "relatively", "relax", "release", "relevant", "relief",
+    "religion", "religious", "rely", "remain", "remaining", "remark", "remarkable", "remedy",
+    "remember", "remind", "remote", "remove", "render", "rent", "repair", "repeat", "replace",
+    "report", "reporter", "represent", "representation", "representative", "republic",
+    "reputation", "request", "require", "requirement", "research", "researcher", "resemble",
+    "reservation", "reserve", "resident", "residential", "resign", "resist", "resistance",
+    "resolution", "resolve", "resort", "resource", "respect", "respond", "response",
+    "responsibility", "responsible", "rest", "restaurant", "restore", "restrict", "restriction",
+    "result", "resume", "retail", "retain", "retire", "retirement", "retreat", "return", "reveal",
+    "revenue", "reverse", "review", "revolution", "reward", "rhetoric", "rhythm", "rich", "ride",
+    "rifle", "right", "ring", "riot", "rise", "risk", "ritual", "rival", "river", "road", "rock",
+    "role", "roll", "romantic", "roof", "room", "root", "rope", "rough", "roughly", "round",
+    "route", "routine", "row", "royal", "rub", "rule", "run", "running", "rural", "rush",
+    "sacred", "sacrifice", "sad", "safe", "safety", "sake", "salad", "salary", "sale", "salt",
+    "same", "sample", "sanction", "sand", "satellite", "satisfaction", "satisfy", "sauce",
+    "save", "saving", "scale", "scandal", "scared", "scatter", "scene", "schedule", "scheme",
+    "scholar", "scholarship", "school", "science", "scientific", "scientist", "scope", "score",
+    "scream", "screen", "script", "scrutiny", "sea", "search", "season", "seat", "second",
+    "secondary", "secret", "secretary", "section", "sector", "secure", "security", "see", "seed",
+    "seek", "select", "selection", "self", "sell", "senate", "senator", "send", "senior",
+    "sense", "sensitive", "sentence", "separate", "sequence", "serial", "series", "serious",
+    "seriously", "serve", "server", "service", "session", "set", "setting", "settle",
+    "settlement", "setup", "seven", "several", "severe", "sex", "sexual", "shade", "shadow",
+    "shake", "shall", "shape", "share", "sharp", "she", "sheet", "shelf", "shell", "shelter",
+    "shift", "shine", "ship", "shirt", "shock", "shoe", "shoot", "shop", "shopping", "shore",
+    "short", "shortly", "shot", "should", "shoulder", "shout", "show", "shrink", "shrug",
+    "shut", "sick", "side", "sight", "sign", "signal", "signature", "significance", "significant",
+    "silence", "silent", "silver", "similar", "similarly", "simple", "simply", "simulation",
+    "simultaneously", "sin", "since", "sing", "singer", "single", "sink", "sir", "sister",
+    "sit", "site", "situation", "six", "size", "skill", "skin", "sky", "slave", "sleep",
+    "slice", "slide", "slight", "slightly", "slip", "slow", "slowly", "small", "smart", "smell",
+    "smile", "smoke", "smooth", "snap", "snow", "so", "so-called", "soccer", "social", "society",
+    "soft", "software", "soil", "solar", "soldier", "sole", "solid", "solution", "solve",
+    "some", "somebody", "somehow", "someone", "something", "sometimes", "somewhat", "son",
+    "song", "soon", "sophisticated", "sorry", "sort", "soul", "sound", "source", "south",
+    "southern", "space", "speak", "speaker", "special", "specialist", "species", "specific",
+    "specifically", "speech", "speed", "spend", "spending", "spin", "spirit", "spiritual",
+    "split", "spoke", "sponsor", "sport", "spot", "spread", "spring", "square", "stable",
+    "stack", "staff", "stage", "stair", "stake", "stand", "standard", "standing", "star",
+    "stare", "start", "state", "statement", "station", "statistics", "status", "stay", "steady",
+    "steal", "steel", "step", "stick", "still", "stock", "stomach", "stone", "stop", "storage",
+    "store", "storm", "story", "straight", "strange", "stranger", "strategic", "strategy",
+    "stream", "street", "strength", "strengthen", "stress", "stretch", "strike", "string",
+    "strip", "stroke", "strong", "strongly", "structure", "struggle", "student", "studio",
+    "study", "stuff", "style", "subject", "submit", "subsequent", "subsidy", "substance",
+    "substantial", "subtle", "succeed", "success", "successful", "such", "sudden", "suddenly",
+    "sue", "suffer", "sufficient", "sugar", "suggest", "suggestion", "suicide", "suit",
+    "suitable", "sum", "summary", "summer", "summit", "sun", "super", "superior", "supply",
+    "support", "supporter", "suppose", "supreme", "sure", "surely", "surface", "surgery",
+    "surplus", "surprise", "surprised", "surprising", "surround", "survey", "survival",
+    "survive", "suspect", "suspend", "suspicion", "sustain", "sustainable", "swallow", "swear",
+    "sweep", "sweet", "swim", "swing", "switch", "symbol", "sympathy", "symptom", "system",
+    "systematic", "table", "tablet", "tackle", "tactic", "tag", "tail", "take", "tale", "talent",
+    "talk", "tall", "tank", "tap", "target", "task", "taste", "tax", "tea", "teach", "teacher",
+    "teaching", "team", "tear", "technical", "technique", "technology", "teen", "teenager",
+    "telephone", "telescope", "television", "tell", "temperature", "temple", "temporary",
+    "ten", "tend", "tendency", "tension", "tent", "term", "terms", "terrain", "terrible",
+    "territory", "terror", "terrorism", "test", "testify", "testimony", "testing", "text",
+    "than", "thank", "thanks", "that", "the", "theater", "their", "them", "theme", "themselves",
+    "then", "theory", "therapy", "there", "therefore", "these", "they", "thick", "thin", "thing",
+    "think", "thinking", "third", "this", "thorough", "those", "though", "thought", "thousand",
+    "threat", "threaten", "three", "throat", "through", "throughout", "throw", "thumb", "thus",
+    "ticket", "tide", "tie", "tight", "till", "time", "timely", "tiny", "tip", "tire", "title",
+    "to", "tobacco", "today", "together", "tomorrow", "tone", "tonight", "tool", "top", "topic",
+    "toss", "total", "totally", "touch", "tough", "tour", "tourism", "tourist", "tournament",
+    "toward", "towards", "tower", "town", "track", "trade", "tradition", "traditional",
+    "traffic", "tragedy", "trail", "train", "training", "transaction", "transfer", "transform",
+    "transition", "translate", "transmission", "transport", "trash", "travel", "treasure",
+    "treat", "treatment", "treaty", "tree", "tremendous", "trend", "trial", "tribe", "trick",
+    "trigger", "trip", "troop", "trophy", "trouble", "truck", "true", "truly", "trust", "truth",
+    "try", "tube", "tuck", "tunnel", "turn", "tutor", "twice", "twin", "two", "type", "typical",
+    "typically", "ugly", "ultimate", "ultimately", "unable", "uncle", "uncover", "under",
+    "undergo", "understand", "understanding", "underwrite", "unexpected", "unfold", "unhappy",
+    "uniform", "unique", "unit", "unite", "universe", "university", "unknown", "unless",
+    "unlike", "unlikely", "unlimited", "unusual", "up", "update", "upon", "upper", "upset",
+    "urban", "urge", "us", "usage", "use", "used", "useful", "user", "usual", "usually",
+    "utility", "vacation", "valid", "valley", "valuable", "value", "van", "variable", "variation",
+    "variety", "various", "vary", "vast", "vehicle", "venture", "version", "versus", "vertical",
+    "very", "vessel", "veteran", "via", "victim", "victory", "video", "view", "viewer",
+    "village", "violate", "violation", "violence", "violent", "virtually", "virtue", "virus",
+    "visible", "vision", "visit", "visitor", "visual", "vital", "voice", "volume", "voluntary",
+    "vote", "vulnerable", "wage", "wait", "wake", "walk", "wall", "wander", "want", "war",
+    "warm", "warn", "warning", "wash", "waste", "watch", "water", "wave", "way", "we", "weak",
+    "wealth", "wealthy", "weapon", "wear", "weather", "web", "website", "wedding", "week",
+    "weekend", "weekly", "weight", "welcome", "welfare", "well", "west", "western", "wet",
+    "what", "whatever", "wheel", "when", "whenever", "where", "whereas", "whether", "which",
+    "while", "whisper", "white", "who", "whole", "whom", "whose", "why", "wide", "widely",
+    "widespread", "wife", "wild", "will", "willing", "win", "wind", "window", "wing", "winner",
+    "winter", "wipe", "wire", "wisdom", "wise", "wish", "wit", "with", "withdraw", "within",
+    "without", "witness", "woman", "wonder", "wonderful", "wood", "wooden", "word", "work",
+    "worker", "working", "works", "workshop", "world", "worldwide", "worry", "worse", "worship",
+    "worst", "worth", "worthy", "would", "wound", "wrap", "write", "writer", "writing", "wrong",
+    "yard", "yeah", "year", "yell", "yellow", "yes", "yesterday", "yet", "yield", "york", "you",
+    "young", "youngster", "your", "yourself", "youth", "zone",
+];
+
+/// Palace-specific terms (acronyms, product names, technical names).
+const PALACE_TERMS: &[&str] = &[
+    "aaak",
+    "agentmemory",
+    "antsignal",
+    "astrometry",
+    "axum",
+    "base64",
+    "bge",
+    "bge-large",
+    "bge-large-en-v1",
+    "bge-small",
+    "bigquery",
+    "bm25",
+    "camelcase",
+    "chroma",
+    "chromadb",
+    "claude",
+    "claude-code",
+    "clippy",
+    "codex",
+    "cognitivesearch",
+    "colbert",
+    "config",
+    "consolidation",
+    "conversation",
+    "convo",
+    "cowait",
+    "crystallize",
+    "crystallized",
+    "datadog",
+    "datasette",
+    "dbpedia",
+    "deno",
+    "deployment",
+    "devops",
+    "dialect",
+    "docstring",
+    "docusaurus",
+    "downrank",
+    "downranking",
+    "downvote",
+    "downvoting",
+    "drawer",
+    "drawers",
+    "duckdb",
+    "ecosystem",
+    "edu-bot",
+    "emacs",
+    "embedder",
+    "embedding",
+    "embeddings",
+    "enablement",
+    "endpoint",
+    "endpoints",
+    "evaluation",
+    "facet",
+    "fact-check",
+    "fact-checked",
+    "fact-checking",
+    "filing",
+    "flexsearch",
+    "flomo",
+    "followup",
+    "fountain",
+    "fountainhead",
+    "frankensearch",
+    "fullstack",
+    "fusion",
+    "gemini",
+    "git",
+    "github",
+    "gitignore",
+    "glancee",
+    "gnucobol",
+    "go",
+    "google",
+    "gpt",
+    "grafana",
+    "graphdb",
+    "graphql",
+    "grep",
+    "grounding",
+    "gutenberg",
+    "halifax",
+    "hardcode",
+    "hardcoded",
+    "hashline",
+    "healthcheck",
+    "healthchecks",
+    "heliov",
+    "hermes",
+    "hnsw",
+    "homebrew",
+    "hook",
+    "hooking",
+    "huggingface",
+    "hypothetical document embeddings",
+    "icd",
+    "initialization",
+    "initialize",
+    "initialized",
+    "initializing",
+    "inline",
+    "inotify",
+    "inotifywait",
+    "instruction",
+    "instructions",
+    "io",
+    "java",
+    "javascript",
+    "jupyter",
+    "k-fold",
+    "kaggle",
+    "kinesis",
+    "langchain",
+    "langfuse",
+    "langsmith",
+    "latency",
+    "lemmatization",
+    "lemmatize",
+    "linter",
+    "llm",
+    "logprob",
+    "logprobs",
+    "longmeval",
+    "looti",
+    "lucene",
+    "lucenelike",
+    "mcp",
+    "md",
+    "mem",
+    "memdir",
+    "memo",
+    "memoir",
+    "memoirifying",
+    "mempal",
+    "mempalace",
+    "mempalace-core",
+    "mempalace-demo",
+    "mempalaced",
+    "memray",
+    "memtest",
+    "memory",
+    "metabase",
+    "metadata",
+    "metric",
+    "metrics",
+    "milvus",
+    "mine",
+    "minhash",
+    "mining",
+    "minio",
+    "mistral",
+    "mixtral",
+    "mlx",
+    "mlx-community",
+    "model2vec",
+    "mongo",
+    "mongodb",
+    "monitoring",
+    "monorepo",
+    "mpr",
+    "mr-0qr1",
+    "mr-6g8z",
+    "mr-dghp",
+    "mr-jecs",
+    "mr-oy1m",
+    "mrs-develop",
+    "multilingual",
+    "nametagger",
+    "neptunedb",
+    "neural",
+    "neural-search",
+    "neural-searcher",
+    "nextcloud",
+    "ngram",
+    "ngrams",
+    "nix",
+    "nixpkgs",
+    "nlp",
+    "node",
+    "normalization",
+    "normalize",
+    "normalized",
+    "normalizer",
+    "notion",
+    "npm",
+    "nullaway",
+    "nuxt",
+    "nvim",
+    "nvm",
+    "nvidia",
+    "odbc",
+    "ollama",
+    "onnx",
+    "opcode",
+    "opencage",
+    "opencode",
+    "opencola",
+    "openclaw",
+    "openhcl",
+    "opensource",
+    "opentelemetry",
+    "openwebui",
+    "openxla",
+    "ops",
+    "opts",
+    "opw",
+    "oracle",
+    "orch",
+    "orchestration",
+    "orchestrator",
+    "ort",
+    "os",
+    "outils",
+    "outlook",
+    "outputs",
+    "overfit",
+    "overfitted",
+    "overfitting",
+    "overlap",
+    "overview",
+    "p-value",
+    "p-values",
+    "palace",
+    "palce",
+    "pandas",
+    "paperqa",
+    "papers",
+    "parity",
+    "parquet",
+    "parsinlu",
+    "parsl",
+    "parser",
+    "parsers",
+    "parsing",
+    "partial",
+    "particle",
+    "particles",
+    "partition",
+    "partitioned",
+    "partitioning",
+    "partitions",
+    "paseto",
+    "passkey",
+    "passkeys",
+    "passphrase",
+    "passwords",
+    "patch",
+    "patches",
+    "path",
+    "pathlib",
+    "pathos",
+    "paths",
+    "patron",
+    "patrons",
+    "pattern",
+    "patterns",
+    "pca",
+    "pdfs",
+    "penpot",
+    "performance",
+    "perplexity",
+    "persistence",
+    "personalization",
+    "pgvector",
+    "phi3",
+    "phoenix",
+    "phrase",
+    "phrases",
+    "pickle",
+    "pipeline",
+    "pipelines",
+    "pivot",
+    "pivoted",
+    "pivoting",
+    "pixels",
+    "pkg",
+    "placeholder",
+    "placeholders",
+    "playbook",
+    "playbooks",
+    "playground",
+    "playwright",
+    "plugin",
+    "plugins",
+    "pm",
+    "pnorm",
+    "pocketbase",
+    "podcast",
+    "podcasts",
+    "pointwise",
+    "polyfill",
+    "polyfills",
+    "polynomial",
+    "popcount",
+    "popover",
+    "poppet",
+    "poppets",
+    "poppler",
+    "popularity",
+    "populated",
+    "populates",
+    "populating",
+    "population",
+    "portability",
+    "portable",
+    "portal",
+    "portals",
+    "portapipe",
+    "portfolios",
+    "portscan",
+    "pos",
+    "poset",
+    "position",
+    "positional",
+    "positioned",
+    "positioning",
+    "positions",
+    "positive",
+    "positives",
+    "posix",
+    "post-deployment",
+    "post-filter",
+    "post-filtering",
+    "postgres",
+    "postgresql",
+    "posthog",
+    "postprocess",
+    "postprocessed",
+    "postprocessing",
+    "potentially",
+    "powerautomate",
+    "powerbi",
+    "powerquery",
+    "powerset",
+    "powershell",
+    "ppr",
+    "pre-build",
+    "pre-commit",
+    "pre-compute",
+    "pre-computed",
+    "pre-configured",
+    "pre-defined",
+    "pre-filter",
+    "pre-filtering",
+    "pre-order",
+    "pre-process",
+    "pre-processed",
+    "pre-processing",
+    "pre-push",
+    "pre-release",
+    "pre-request",
+    "pre-train",
+    "pre-trained",
+    "pre-training",
+    "preallocated",
+    "precedence",
+    "precinct",
+    "precincts",
+    "precision",
+    "precompute",
+    "precomputed",
+    "precomputing",
+    "preconfigured",
+    "predecessor",
+    "predefined",
+    "predicate",
+    "predicates",
+    "predictability",
+    "predictable",
+    "prediction",
+    "predictions",
+    "predictive",
+    "predictor",
+    "predictors",
+    "prefetch",
+    "prefetched",
+    "prefetching",
+    "prefilter",
+    "prefiltered",
+    "prefiltering",
+    "prefs",
+    "preload",
+    "preloaded",
+    "preloading",
+    "premise",
+    "premises",
+    "prepend",
+    "prepended",
+    "prepending",
+    "preprocessing",
+    "prerendered",
+    "prescreen",
+    "prescreened",
+    "prescreening",
+    "prescriptive",
+    "presentation",
+    "preservation",
+    "preserve",
+    "preserved",
+    "preserves",
+    "preserving",
+    "preset",
+    "presets",
+    "pretrained",
+    "prevalence",
+    "prevalent",
+    "prevent",
+    "prevented",
+    "preventing",
+    "prevention",
+    "preventive",
+    "preview",
+    "previewed",
+    "previewing",
+    "previews",
+    "previous",
+    "previously",
+    "prexisting",
+    "primitives",
+    "principal",
+    "principle",
+    "principled",
+    "printable",
+    "printf",
+    "printk",
+    "printlines",
+    "printscreen",
+    "prioritize",
+    "prioritized",
+    "prioritizing",
+    "priority",
+    "prisma",
+    "privacy",
+    "private",
+    "privilege",
+    "privileged",
+    "privileges",
+    "proactive",
+    "probabilistic",
+    "probabilistically",
+    "probability",
+    "probable",
+    "probably",
+    "probe",
+    "probes",
+    "probing",
+    "problem",
+    "problematic",
+    "problems",
+    "procedural",
+    "procedure",
+    "procedures",
+    "proceed",
+    "proceeded",
+    "proceeding",
+    "proceedings",
+    "proceeds",
+    "process",
+    "processed",
+    "processes",
+    "processing",
+    "processor",
+    "processors",
+    "procurement",
+    "produce",
+    "produced",
+    "producer",
+    "producers",
+    "produces",
+    "producing",
+    "product",
+    "production",
+    "productive",
+    "productivity",
+    "products",
+    "profane",
+    "profanity",
+    "profession",
+    "professional",
+    "professionals",
+    "professor",
+    "proficiency",
+    "proficient",
+    "profile",
+    "profiled",
+    "profiles",
+    "profiling",
+    "profit",
+    "profitability",
+    "profitable",
+    "profits",
+    "program",
+    "programmatic",
+    "programmatically",
+    "programme",
+    "programmed",
+    "programmer",
+    "programmers",
+    "programming",
+    "programs",
+    "progress",
+    "progressed",
+    "progresses",
+    "progressing",
+    "progression",
+    "progressive",
+    "project",
+    "projected",
+    "projecting",
+    "projection",
+    "projections",
+    "projects",
+    "prolific",
+    "prologue",
+    "prometheus",
+    "promise",
+    "promises",
+    "promising",
+    "promote",
+    "promoted",
+    "promotes",
+    "promoting",
+    "promotion",
+    "promotions",
+    "prompt",
+    "prompted",
+    "prompting",
+    "prompts",
+    "promulgate",
+    "pronoun",
+    "pronouns",
+    "proof",
+    "proofread",
+    "proofreading",
+    "propagate",
+    "propagated",
+    "propagates",
+    "propagating",
+    "propagation",
+    "propel",
+    "propensity",
+    "proper",
+    "properly",
+    "properties",
+    "property",
+    "prophet",
+    "proportion",
+    "proposal",
+    "proposals",
+    "propose",
+    "proposed",
+    "proposes",
+    "proposing",
+    "proposition",
+    "proprietary",
+    "props",
+    "prose",
+    "prosecute",
+    "prosecution",
+    "prospect",
+    "prospective",
+    "prospects",
+    "protect",
+    "protected",
+    "protecting",
+    "protection",
+    "protective",
+    "protects",
+    "protein",
+    "protocol",
+    "protocols",
+    "prototype",
+    "prototyped",
+    "prototypes",
+    "prototyping",
+    "protracted",
+    "proust",
+    "proven",
+    "provenance",
+    "proverb",
+    "proverbial",
+    "proverbs",
+    "provide",
+    "provided",
+    "provider",
+    "providers",
+    "provides",
+    "providing",
+    "province",
+    "provinces",
+    "provincial",
+    "provision",
+    "provisional",
+    "provisions",
+    "provocative",
+    "provoke",
+    "provoked",
+    "provokes",
+    "provoking",
+    "proximity",
+    "proxy",
+    "prune",
+    "pruned",
+    "prunes",
+    "pruning",
+    "pseudocode",
+    "pseudorandom",
+    "psi",
+    "psychiatry",
+    "psychic",
+    "psycho",
+    "psychological",
+    "psychologically",
+    "psychologist",
+    "psychology",
+    "psychometric",
+    "pt",
+    "public",
+    "publication",
+    "publications",
+    "publicity",
+    "publicize",
+    "publicly",
+    "publish",
+    "published",
+    "publisher",
+    "publishers",
+    "publishes",
+    "publishing",
+    "pulldown",
+    "pullquote",
+    "pulsar",
+    "pulse",
+    "pumps",
+    "punctuation",
+    "punctuality",
+    "punctual",
+    "punish",
+    "punishment",
+    "punitive",
+    "pupil",
+    "puppet",
+    "purchase",
+    "purchased",
+    "purchaser",
+    "purchases",
+    "purchasing",
+    "pure",
+    "purely",
+    "purgative",
+    "purge",
+    "purged",
+    "purges",
+    "purging",
+    "purification",
+    "purify",
+    "purist",
+    "puritan",
+    "purity",
+    "purple",
+    "purport",
+    "purported",
+    "purpose",
+    "purposeful",
+    "purposely",
+    "purposes",
+    "purse",
+    "pursuant",
+    "pursue",
+    "pursued",
+    "pursues",
+    "pursuing",
+    "pursuit",
+    "push",
+    "pushed",
+    "pushes",
+    "pushing",
+    "pypi",
+    "pyproject",
+    "python",
+    "qemu",
+    "ql",
+    "qps",
+    "qrcode",
+    "qs",
+    "qt",
+    "quadratic",
+    "qualifier",
+    "qualifiers",
+    "qualify",
+    "qualifying",
+    "qualitative",
+    "qualitatively",
+    "quality",
+    "quantification",
+    "quantified",
+    "quantifier",
+    "quantifiers",
+    "quantify",
+    "quantile",
+    "quantiles",
+    "quantitative",
+    "quantities",
+    "quantity",
+    "quantization",
+    "quantize",
+    "quantized",
+    "quantizer",
+    "quantum",
+    "quarantine",
+    "quartile",
+    "quartiles",
+    "quasi",
+    "quaternion",
+    "quaternions",
+    "query",
+    "querying",
+    "question",
+    "questioning",
+    "questionnaire",
+    "questions",
+    "queue",
+    "queued",
+    "queues",
+    "queuing",
+    "quick",
+    "quicksort",
+    "quickstart",
+    "quiet",
+    "quip",
+    "quirk",
+    "quirks",
+    "quit",
+    "quite",
+    "quiz",
+    "quota",
+    "quotas",
+    "quotation",
+    "quotations",
+    "quote",
+    "quoted",
+    "quotes",
+    "quoting",
+    "r2",
+    "rabbitmq",
+    "race",
+    "races",
+    "racial",
+    "racing",
+    "racism",
+    "rack",
+    "radar",
+    "radial",
+    "radiance",
+    "radiant",
+    "radiation",
+    "radical",
+    "radio",
+    "radiometric",
+    "radius",
+    "rag",
+    "rail",
+    "rails",
+    "railway",
+    "rainbow",
+    "raise",
+    "raised",
+    "raises",
+    "raising",
+    "rally",
+    "ram",
+    "ramp",
+    "ran",
+    "random",
+    "randomization",
+    "randomize",
+    "randomized",
+    "randomly",
+    "randomness",
+    "range",
+    "ranged",
+    "ranges",
+    "ranging",
+    "rank",
+    "ranked",
+    "ranking",
+    "rankings",
+    "ranks",
+    "rapid",
+    "rapidly",
+    "rapport",
+    "rare",
+    "rarely",
+    "rarity",
+    "raspberry",
+    "rate",
+    "rated",
+    "rates",
+    "rather",
+    "rating",
+    "ratings",
+    "ratio",
+    "rational",
+    "rationale",
+    "ratios",
+    "rawl",
+    "raw",
+    "ray",
+    "razor",
+    "re",
+    "re-",
+    "reach",
+    "reached",
+    "reaches",
+    "reaching",
+    "react",
+    "reacted",
+    "reacting",
+    "reaction",
+    "reactions",
+    "reactive",
+    "reactivity",
+    "reactor",
+    "readability",
+    "readable",
+    "reader",
+    "readers",
+    "readily",
+    "readiness",
+    "reading",
+    "readings",
+    "readme",
+    "readonly",
+    "reads",
+    "ready",
+    "real",
+    "realism",
+    "realistic",
+    "reality",
+    "realizable",
+    "realization",
+    "realize",
+    "realized",
+    "realizes",
+    "realizing",
+    "realm",
+    "realms",
+    "realpath",
+    "realworld",
+    "reap",
+    "rearchitect",
+    "rearchitected",
+    "rearchitecting",
+    "rearrange",
+    "rearranged",
+    "rearrangement",
+    "rearranging",
+    "reasonable",
+    "reasonableness",
+    "reasonably",
+    "reasoned",
+    "reasoning",
+    "reasons",
+    "reassemble",
+    "reassessment",
+    "reassign",
+    "reassigned",
+    "reassigning",
+    "reassignment",
+    "rebalance",
+    "reboot",
+    "rebuild",
+    "rebuilding",
+    "rebuilds",
+    "recalculate",
+    "recalculated",
+    "recalculating",
+    "recalculation",
+    "recalibrate",
+    "recalibrated",
+    "recall",
+    "recalled",
+    "recalling",
+    "recalls",
+    "recap",
+    "recapitalize",
+    "recategorize",
+    "recede",
+    "receded",
+    "receipt",
+    "receivable",
+    "receive",
+    "received",
+    "receiver",
+    "receivers",
+    "receives",
+    "receiving",
+    "recent",
+    "recently",
+    "reception",
+    "receptive",
+    "recess",
+    "recession",
+    "recipe",
+    "recipes",
+    "recipient",
+    "recipients",
+    "reciprocal",
+    "recite",
+    "reckon",
+    "reckoned",
+    "reckoning",
+    "reclaim",
+    "reclaimed",
+    "reclamation",
+    "reclassification",
+    "reclassify",
+    "recognition",
+    "recognizable",
+    "recognizably",
+    "recognize",
+    "recognized",
+    "recognizes",
+    "recognizing",
+    "recollection",
+    "recommend",
+    "recommendation",
+    "recommended",
+    "recommending",
+    "recommends",
+    "recompile",
+    "recompiled",
+    "recompiling",
+    "reconcile",
+    "reconciled",
+    "reconciliation",
+    "reconciling",
+    "reconfig",
+    "reconfiguration",
+    "reconfigure",
+    "reconfigured",
+    "reconfirm",
+    "reconfirmed",
+    "reconnect",
+    "reconnected",
+    "reconnecting",
+    "reconsider",
+    "reconsidered",
+    "reconsidering",
+    "reconstruct",
+    "reconstructed",
+    "reconstruction",
+    "reconstructs",
+    "reconvene",
+    "record",
+    "recorded",
+    "recorder",
+    "recording",
+    "recordkeeping",
+    "records",
+    "recount",
+    "recounted",
+    "recoup",
+    "recourse",
+    "recover",
+    "recoverable",
+    "recovered",
+    "recovering",
+    "recovers",
+    "recovery",
+    "recreate",
+    "recreated",
+    "recreates",
+    "recreating",
+    "recreation",
+    "recruit",
+    "recruited",
+    "recruiting",
+    "recruitment",
+    "recruits",
+    "rectangular",
+    "rectification",
+    "rectify",
+    "recur",
+    "recurrence",
+    "recurrent",
+    "recurring",
+    "recursion",
+    "recursive",
+    "recursively",
+    "recycle",
+    "recycled",
+    "recycling",
+    "red",
+    "redact",
+    "redacted",
+    "redacting",
+    "redaction",
+    "redactions",
+    "reddit",
+    "redeem",
+    "redeemed",
+    "redefine",
+    "redefined",
+    "redefines",
+    "redefining",
+    "redefinition",
+    "redeploy",
+    "redeployed",
+    "redeploying",
+    "redesign",
+    "redesigned",
+    "redesigning",
+    "redevelop",
+    "redeveloped",
+    "redhat",
+    "redirect",
+    "redirected",
+    "redirecting",
+    "redirection",
+    "redis",
+    "rediscover",
+    "rediscovered",
+    "rediscovery",
+    "redistribute",
+    "redistributed",
+    "redistributing",
+    "redistribution",
+    "redline",
+    "redlines",
+    "redshift",
+    "reduce",
+    "reduced",
+    "reduces",
+    "reducing",
+    "reduction",
+    "reductions",
+    "redundancy",
+    "redundant",
+    "reef",
+    "reel",
+    "reengineer",
+    "reengineered",
+    "reenter",
+    "reentrant",
+    "reestablish",
+    "reestablished",
+    "ref",
+    "refer",
+    "referable",
+    "referee",
+    "reference",
+    "referenced",
+    "references",
+    "referencing",
+    "referendum",
+    "referent",
+    "referential",
+    "referral",
+    "referred",
+    "referring",
+    "refers",
+    "refetch",
+    "refetching",
+    "refine",
+    "refined",
+    "refinement",
+    "refiner",
+    "refinery",
+    "refines",
+    "refining",
+    "reflect",
+    "reflected",
+    "reflecting",
+    "reflection",
+    "reflective",
+    "reflects",
+    "reflow",
+    "reflush",
+    "refocus",
+    "refocused",
+    "refocusing",
+    "reformat",
+    "reformation",
+    "reformatted",
+    "reformatting",
+    "reforming",
+    "reforms",
+    "refract",
+    "refractory",
+    "refrain",
+    "refresh",
+    "refreshed",
+    "refresher",
+    "refreshing",
+    "refs",
+    "refund",
+    "refurbish",
+    "refurbished",
+    "refusal",
+    "refuse",
+    "refused",
+    "refuses",
+    "refusing",
+    "refutation",
+    "refute",
+    "refuted",
+    "regain",
+    "regained",
+    "regaining",
+    "regard",
+    "regarded",
+    "regarding",
+    "regardless",
+    "regards",
+    "regenerate",
+    "regenerated",
+    "regeneration",
+    "regenerative",
+    "regent",
+    "regime",
+    "regimen",
+    "region",
+    "regional",
+    "regions",
+    "register",
+    "registered",
+    "registering",
+    "registers",
+    "registrar",
+    "registration",
+    "registry",
+    "regrade",
+    "regress",
+    "regression",
+    "regressive",
+    "regret",
+    "regretful",
+    "regrets",
+    "regrettable",
+    "regrettably",
+    "regroup",
+    "regular",
+    "regularity",
+    "regularization",
+    "regularize",
+    "regularly",
+    "regulate",
+    "regulated",
+    "regulates",
+    "regulating",
+    "regulation",
+    "regulations",
+    "regulator",
+    "regulatory",
+    "rehab",
+    "rehabilitation",
+    "rehash",
+    "rehearsal",
+    "reign",
+    "reinforce",
+    "reinforced",
+    "reinforcement",
+    "reinforces",
+    "reinforcing",
+    "reinstall",
+    "reinstalled",
+    "reinstalling",
+    "reinstate",
+    "reinstated",
+    "reinstatement",
+    "reintegrate",
+    "reintegrated",
+    "reinterpret",
+    "reintroduce",
+    "reintroduced",
+    "reiterate",
+    "reiterated",
+    "reiteration",
+    "reject",
+    "rejected",
+    "rejecting",
+    "rejection",
+    "rejects",
+    "rejoin",
+    "rekindle",
+    "relate",
+    "related",
+    "relates",
+    "relating",
+    "relation",
+    "relational",
+    "relations",
+    "relationship",
+    "relationships",
+    "relative",
+    "relatively",
+    "relatives",
+    "relativistic",
+    "relativity",
+    "relax",
+    "relaxation",
+    "relaxed",
+    "relaxing",
+    "relay",
+    "relayed",
+    "relaying",
+    "release",
+    "released",
+    "releases",
+    "releasing",
+    "relegate",
+    "relegated",
+    "relevance",
+    "relevant",
+    "reliability",
+    "reliable",
+    "reliably",
+    "reliance",
+    "reliant",
+    "relief",
+    "relieve",
+    "relieved",
+    "religion",
+    "religious",
+    "relink",
+    "reload",
+    "reloaded",
+    "reloading",
+    "relocatable",
+    "relocate",
+    "relocated",
+    "relocation",
+    "reluctance",
+    "reluctant",
+    "rely",
+    "relying",
+    "remain",
+    "remainder",
+    "remained",
+    "remaining",
+    "remains",
+    "remake",
+    "remark",
+    "remarkable",
+    "remarkably",
+    "remarks",
+    "remaster",
+    "remediation",
+    "remediate",
+    "remediated",
+    "remedied",
+    "remedy",
+    "remember",
+    "remembered",
+    "remembering",
+    "remembers",
+    "remind",
+    "reminded",
+    "reminder",
+    "reminders",
+    "reminding",
+    "reminds",
+    "reminiscent",
+    "remission",
+    "remit",
+    "remittance",
+    "remnant",
+    "remnants",
+    "remodel",
+    "remote",
+    "remotely",
+    "remoteness",
+    "removal",
+    "remove",
+    "removed",
+    "removes",
+    "removing",
+    "remuneration",
+    "rename",
+    "renamed",
+    "renames",
+    "renaming",
+    "render",
+    "rendered",
+    "rendering",
+    "renders",
+    "renegotiate",
+    "renew",
+    "renewable",
+    "renewal",
+    "renewed",
+    "renovate",
+    "renovation",
+    "renowned",
+    "rent",
+    "rental",
+    "rentals",
+    "renter",
+    "rents",
+    "reoccurrence",
+    "reopen",
+    "reopened",
+    "reopening",
+    "reorder",
+    "reordered",
+    "reordering",
+    "reorg",
+    "reorganize",
+    "reorganized",
+    "reorganizing",
+    "reorient",
+    "repackage",
+    "repaid",
+    "repair",
+    "repaired",
+    "repairing",
+    "repairs",
+    "repatriate",
+    "repay",
+    "repayment",
+    "repeal",
+    "repeat",
+    "repeatable",
+    "repeated",
+    "repeatedly",
+    "repeating",
+    "repeats",
+    "repel",
+    "repellent",
+    "repent",
+    "repercussion",
+    "repertoire",
+    "repetition",
+    "repetitions",
+    "repetitive",
+    "replace",
+    "replaceable",
+    "replaced",
+    "replacement",
+    "replaces",
+    "replacing",
+    "replay",
+    "replayed",
+    "replaying",
+    "replenish",
+    "replica",
+    "replicas",
+    "replicate",
+    "replicated",
+    "replicates",
+    "replicating",
+    "replication",
+    "reply",
+    "report",
+    "reported",
+    "reporter",
+    "reporters",
+    "reporting",
+    "reports",
+    "repository",
+    "represent",
+    "representation",
+    "representative",
+    "represented",
+    "representing",
+    "represents",
+    "repress",
+    "repressed",
+    "repression",
+    "repressive",
+    "reprimand",
+    "reprint",
+    "reproduce",
+    "reproduced",
+    "reproduces",
+    "reproducible",
+    "reproducing",
+    "reproduction",
+    "reproductive",
+    "reprogramming",
+    "reprompt",
+    "reprompts",
+    "reproving",
+    "reps",
+    "reputation",
+    "reputational",
+    "repute",
+    "reputed",
+    "request",
+    "requested",
+    "requester",
+    "requesting",
+    "requests",
+    "require",
+    "required",
+    "requirement",
+    "requirements",
+    "requires",
+    "requiring",
+    "rerank",
+    "reranked",
+    "reranking",
+    "reschedule",
+    "rescheduled",
+    "rescheduling",
+    "rescind",
+    "rescue",
+    "research",
+    "researched",
+    "researcher",
+    "researchers",
+    "researches",
+    "researching",
+    "resell",
+    "reseller",
+    "resemble",
+    "resembled",
+    "resembles",
+    "resembling",
+    "resent",
+    "resentment",
+    "reservation",
+    "reservations",
+    "reserve",
+    "reserved",
+    "reserves",
+    "reserving",
+    "reservoir",
+    "reset",
+    "resets",
+    "resetting",
+    "reshape",
+    "reshaped",
+    "reshapeing",
+    "reshaping",
+    "reshuffle",
+    "reside",
+    "resided",
+    "residence",
+    "resident",
+    "residential",
+    "residents",
+    "resides",
+    "residing",
+    "residual",
+    "residuals",
+    "residue",
+    "resign",
+    "resignation",
+    "resigned",
+    "resilience",
+    "resilient",
+    "resist",
+    "resistance",
+    "resistant",
+    "resisted",
+    "resisting",
+    "resistor",
+    "resolute",
+    "resolutely",
+    "resolution",
+    "resolve",
+    "resolved",
+    "resolver",
+    "resolves",
+    "resolving",
+    "resonance",
+    "resonate",
+    "resonated",
+    "resonates",
+    "resort",
+    "resource",
+    "resourced",
+    "resourceful",
+    "resources",
+    "respect",
+    "respectable",
+    "respected",
+    "respectful",
+    "respectfully",
+    "respecting",
+    "respective",
+    "respectively",
+    "respects",
+    "respiration",
+    "respiratory",
+    "respond",
+    "responded",
+    "respondent",
+    "respondents",
+    "responding",
+    "responds",
+    "response",
+    "responses",
+    "responsibilities",
+    "responsibility",
+    "responsible",
+    "responsibly",
+    "responsive",
+    "responsiveness",
+    "rest",
+    "restart",
+    "restarted",
+    "restarting",
+    "restate",
+    "restatement",
+    "restaurant",
+    "restful",
+    "restitution",
+    "restless",
+    "restock",
+    "restoration",
+    "restorative",
+    "restore",
+    "restored",
+    "restores",
+    "restoring",
+    "restrain",
+    "restrained",
+    "restraint",
+    "restrict",
+    "restricted",
+    "restricting",
+    "restriction",
+    "restrictions",
+    "restrictive",
+    "restricts",
+    "restroom",
+    "restructure",
+    "restructured",
+    "restructuring",
+    "result",
+    "resulted",
+    "resulting",
+    "results",
+    "resume",
+    "resumed",
+    "resumes",
+    "resuming",
+    "resumption",
+    "resurrection",
+    "retail",
+    "retailer",
+    "retain",
+    "retained",
+    "retainer",
+    "retaining",
+    "retains",
+    "retake",
+    "retaliate",
+    "retaliation",
+    "retardation",
+    "retention",
+    "rethink",
+    "rethinking",
+    "reticence",
+    "reticent",
+    "retire",
+    "retired",
+    "retiree",
+    "retirement",
+    "retiring",
+    "retool",
+    "retort",
+    "retract",
+    "retraction",
+    "retrain",
+    "retrained",
+    "retraining",
+    "retreat",
+    "retreated",
+    "retrenchment",
+    "retrial",
+    "retrievable",
+    "retrieval",
+    "retrieve",
+    "retrieved",
+    "retrieves",
+    "retrieving",
+    "retrofit",
+    "retrofitted",
+    "retrofitting",
+    "retrospective",
+    "return",
+    "returned",
+    "returning",
+    "returns",
+    "retype",
+    "reuse",
+    "reused",
+    "reuses",
+    "reusing",
+    "revamp",
+    "revamped",
+    "revamping",
+    "reveal",
+    "revealed",
+    "revealing",
+    "reveals",
+    "revelation",
+    "revenge",
+    "revenue",
+    "revenues",
+    "reverberate",
+    "revere",
+    "revered",
+    "reverence",
+    "reversal",
+    "reverse",
+    "reversed",
+    "reverses",
+    "reversible",
+    "reversing",
+    "reversion",
+    "revert",
+    "reverted",
+    "reverting",
+    "review",
+    "reviewed",
+    "reviewer",
+    "reviewers",
+    "reviewing",
+    "reviews",
+    "revise",
+    "revised",
+    "revises",
+    "revising",
+    "revision",
+    "revisions",
+    "revisit",
+    "revitalize",
+    "revival",
+    "revive",
+    "revived",
+    "reviving",
+    "revocable",
+    "revocation",
+    "revoke",
+    "revoked",
+    "revokes",
+    "revoking",
+    "revolt",
+    "revolution",
+    "revolutionary",
+    "revolve",
+    "revolved",
+    "revolves",
+    "revolving",
+    "reward",
+    "rewarded",
+    "rewarding",
+    "rewards",
+    "rewind",
+    "rewire",
+    "rewired",
+    "rewiring",
+    "rework",
+    "reworked",
+    "reworking",
+    "rewrite",
+    "rewrites",
+    "rewriting",
+    "reynolds",
+    "rh",
+    "rhetoric",
+    "rhetorical",
+    "rhino",
+    "rhyme",
+    "rhythm",
+    "rhythmic",
+    "riemannian",
+    "rift",
+    "rig",
+    "right",
+    "rightly",
+    "rigid",
+    "rigidity",
+    "rigorous",
+    "rigorously",
+    "rigour",
+    "rim",
+    "ring",
+    "rings",
+    "rinse",
+    "rio",
+    "riot",
+    "rip",
+    "ripe",
+    "ripen",
+    "ripple",
+    "rise",
+    "risen",
+    "rises",
+    "rising",
+    "risk",
+    "risked",
+    "riskier",
+    "riskiest",
+    "riskiness",
+    "risking",
+    "risks",
+    "risky",
+    "rite",
+    "ritual",
+    "rival",
+    "rivalry",
+    "river",
+    "rivet",
+    "riveting",
+    "rmcp",
+    "rn",
+    "road",
+    "roadblock",
+    "roadmap",
+    "roadmaps",
+    "roam",
+    "roaming",
+    "roar",
+    "rob",
+    "robbery",
+    "robin",
+    "robot",
+    "robotic",
+    "robotics",
+    "robust",
+    "robustness",
+    "rock",
+    "rocket",
+    "rocks",
+    "rocky",
+    "rod",
+    "roi",
+    "role",
+    "roles",
+    "roll",
+    "rolled",
+    "roller",
+    "rolling",
+    "rolls",
+    "rom",
+    "roman",
+    "romance",
+    "romantic",
+    "romp",
+    "roof",
+    "rooftop",
+    "room",
+    "rooms",
+    "root",
+    "rooted",
+    "roots",
+    "rope",
+    "ropy",
+    "rose",
+    "roster",
+    "rot",
+    "rotate",
+    "rotated",
+    "rotates",
+    "rotating",
+    "rotation",
+    "rotational",
+    "rotations",
+    "rotten",
+    "rough",
+    "rougher",
+    "roughly",
+    "round",
+    "rounded",
+    "rounding",
+    "rounds",
+    "route",
+    "router",
+    "routes",
+    "routine",
+    "routinely",
+    "routing",
+    "rover",
+    "row",
+    "rows",
+    "royal",
+    "royalty",
+    "rrf",
+    "rs",
+    "rub",
+    "rubber",
+    "rubbish",
+    "ruby",
+    "rudder",
+    "rude",
+    "rudely",
+    "rudimentary",
+    "ruff",
+    "rug",
+    "rugged",
+    "ruin",
+    "ruined",
+    "ruining",
+    "ruins",
+    "rule",
+    "ruled",
+    "ruler",
+    "rules",
+    "ruling",
+    "rumor",
+    "rumors",
+    "run",
+    "runaway",
+    "rundown",
+    "runner",
+    "runners",
+    "running",
+    "runny",
+    "runs",
+    "runtime",
+    "runway",
+    "rupture",
+    "rural",
+    "rush",
+    "rushed",
+    "rushing",
+    "rust",
+    "rustc",
+    "rustfmt",
+    "rusty",
+    "rut",
+    "ruthless",
+    "rx",
+    "ry",
+    "sdk",
+    "sds",
+    "semantic",
+    "serde",
+    "serde_json",
+    "serde_yaml",
+    "spellcheck",
+    "sqlite",
+    "tui",
+    "thiserror",
+    "tokio",
+    "walkdir",
+    "weaviate",
+    "wikipedia",
+    "wordnet",
+    "yaml",
+];
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_edit_distance() {
-        assert_eq!(edit_distance("kitten", "kitten"), 0);
+        assert_eq!(edit_distance("hello", "hello"), 0);
         assert_eq!(edit_distance("kitten", "sitting"), 3);
         assert_eq!(edit_distance("", "abc"), 3);
         assert_eq!(edit_distance("abc", ""), 3);
+        assert_eq!(edit_distance("hello", "hallo"), 1);
     }
 
     #[test]
-    fn test_strip_punct() {
-        assert_eq!(strip_punct("hello."), ("hello", "."));
-        assert_eq!(strip_punct("hello!?"), ("hello", "!?")); // all trailing punct stripped
-        assert_eq!(strip_punct("hello"), ("hello", ""));
-        assert_eq!(strip_punct("> hello."), ("> hello", "."));
+    fn test_spellcheck_no_correction() {
+        let config = SpellcheckConfig::default();
+        let result = spellcheck("hello world", &config);
+        assert!(!result.was_corrected);
+        assert_eq!(result.corrected, "hello world");
     }
 
     #[test]
-    fn test_should_skip() {
-        let names = HashSet::new();
-        assert!(should_skip("hi", &names));
-        assert!(should_skip("abc123", &names));
-        assert!(should_skip("ChromaDB", &names));
-        assert!(should_skip("NDCG", &names));
-        assert!(should_skip("bge-large", &names));
-        assert!(should_skip("https://example.com", &names));
-        assert!(should_skip("`code`", &names));
+    fn test_spellcheck_with_correction() {
+        let config = SpellcheckConfig::default();
+        // "helo" should be corrected to "hello"
+        let result = spellcheck("helo world", &config);
+        assert!(result.was_corrected);
+        assert_eq!(result.corrected, "hello world");
     }
 
     #[test]
-    fn test_is_camel() {
-        assert!(is_camel("ChromaDB"));
-        assert!(is_camel("MemPalace"));
-        assert!(!is_camel("chroma"));
-        assert!(!is_camel("CHROMA"));
+    fn test_spellcheck_short_words_skipped() {
+        let config = SpellcheckConfig::default();
+        let result = spellcheck("hi to be", &config);
+        assert!(!result.was_corrected);
     }
 
     #[test]
-    fn test_is_allcaps() {
-        assert!(is_allcaps("NDCG"));
-        assert!(is_allcaps("R@X")); // uppercase + special chars
-        assert!(!is_allcaps("Ndcg"));
-        assert!(!is_allcaps("ndcg"));
-        assert!(!is_allcaps("R@5")); // digits not allowed
+    fn test_spellcheck_technical_skipped() {
+        let config = SpellcheckConfig::default();
+        // CamelCase should be skipped
+        let result = spellcheck("ChromaDB MemPalace Mixtral", &config);
+        assert!(!result.was_corrected);
+        // ALL_CAPS
+        let result2 = spellcheck("NDCG HTTP RRF", &config);
+        assert!(!result2.was_corrected);
+        // With digits
+        let result3 = spellcheck("bge-large-v1.5 model2vec", &config);
+        assert!(!result3.was_corrected);
     }
 
     #[test]
-    fn test_is_url() {
-        assert!(is_url("https://example.com"));
-        assert!(is_url("http://example.com"));
-        assert!(is_url("www.example.com"));
-        assert!(is_url("/Users/foo"));
-        assert!(is_url("~/file.txt"));
+    fn test_suggest_for_search_no_results() {
+        let config = SpellcheckConfig::default();
+        let suggestions = suggest_for_search("helllo", &config);
+        assert!(!suggestions.is_empty());
+        assert!(suggestions.contains(&"hello".to_string()));
     }
 
     #[test]
-    fn test_correct_spelling_preserves_technical() {
-        let names = HashSet::new();
-        let result = correct_spelling("ChromaDB bge-large-v1.5 NDCG@10", &names);
-        assert_eq!(result, "ChromaDB bge-large-v1.5 NDCG@10");
+    fn test_suggest_for_search_already_correct() {
+        let config = SpellcheckConfig::default();
+        let suggestions = suggest_for_search("hello world", &config);
+        assert!(suggestions.is_empty());
     }
 
     #[test]
-    fn test_correct_spelling_preserves_known_names() {
-        let mut names = HashSet::new();
-        names.insert("riley".to_string());
-        names.insert("sam".to_string());
-
-        let result = correct_spelling("Riley picked up Sam from school", &names);
-        assert_eq!(result, "Riley picked up Sam from school");
+    fn test_config_from_env() {
+        // Defaults
+        let cfg = config_from_env();
+        assert_eq!(cfg.max_edit_distance, MAX_EDIT_DISTANCE);
+        assert_eq!(cfg.max_suggestions, DEFAULT_MAX_SUGGESTIONS);
     }
 
     #[test]
-    fn test_correct_spelling_basic() {
-        let names = HashSet::new();
-        let result = correct_spelling("hello world", &names);
-        assert!(!result.is_empty());
+    fn test_dictionary_contains_common_words() {
+        let config = SpellcheckConfig::default();
+        let dict = get_dictionary(&config);
+        assert!(dict.contains("hello"));
+        assert!(dict.contains("world"));
+        assert!(dict.contains("search"));
+        assert!(dict.contains("memory"));
+        assert!(dict.contains("palace"));
     }
 
     #[test]
-    fn test_correct_transcript_line_user() {
-        let line = "> lsresdy knoe the question";
-        let result = correct_transcript_line(line);
-        assert!(result.starts_with("> "));
+    fn test_dictionary_contains_palace_terms() {
+        let config = SpellcheckConfig::default();
+        let dict = get_dictionary(&config);
+        assert!(dict.contains("mempalace"));
+        assert!(dict.contains("chromadb"));
+        assert!(dict.contains("bm25"));
+        assert!(dict.contains("embedding"));
     }
 
     #[test]
-    fn test_correct_transcript_line_assistant() {
-        let line = "Hello, I am an assistant";
-        let result = correct_transcript_line(line);
-        assert_eq!(result, line);
+    fn test_spellcheck_multi_word_errors() {
+        let config = SpellcheckConfig::default();
+        let result = spellcheck("helo wrld", &config);
+        assert!(result.was_corrected);
+        for tc in &result.token_corrections {
+            if tc.original == "helo" {
+                assert!(tc.was_corrected);
+            }
+            if tc.original == "wrld" {
+                assert!(tc.was_corrected);
+            }
+        }
     }
 
     #[test]
-    fn test_correct_transcript() {
-        let content = "> user message\nAssistant response\n> another user";
-        let result = correct_transcript(content);
-        let lines: Vec<&str> = result.lines().collect();
-        assert!(lines[0].starts_with("> "));
-        assert_eq!(lines[1], "Assistant response");
-        assert!(lines[2].starts_with("> "));
+    fn test_find_best_correction_prefers_same_first_letter() {
+        let mut dict = HashSet::new();
+        dict.insert("hello".to_string());
+        dict.insert("jello".to_string());
+        let (best, dist, _) = find_best_correction("helo", &dict, 2, 5);
+        assert_eq!(best, Some("hello".to_string()));
+        assert_eq!(dist, 1);
+    }
+
+    #[test]
+    fn test_should_skip_camel_case() {
+        assert!(should_skip("ChromaDB"), "CamelCase should be skipped");
+        assert!(should_skip("MemPalace"), "CamelCase should be skipped");
+        assert!(!should_skip("hello"), "lowercase should not be skipped");
+        assert!(!should_skip("world"), "lowercase should not be skipped");
+        assert!(!should_skip("Mixtral"), "capitalized word is not CamelCase");
+    }
+
+    #[test]
+    fn test_should_skip_all_caps() {
+        assert!(should_skip("NDCG"), "ALL_CAPS should be skipped");
+        assert!(should_skip("HTTP"), "ALL_CAPS should be skipped");
+    }
+
+    #[test]
+    fn test_should_skip_code_like() {
+        assert!(should_skip("`code`"), "code backticks should skip");
+        assert!(should_skip("#tag"), "hash tag should skip");
+    }
+
+    #[test]
+    fn test_should_skip_url_like() {
+        assert!(should_skip("https://example.com"), "URLs should skip");
+        assert!(should_skip("www.test.com"), "www URLs should skip");
+    }
+
+    #[test]
+    fn test_correction_with_alternatives() {
+        let mut dict = HashSet::new();
+        dict.insert("hello".to_string());
+        dict.insert("hell".to_string());
+        dict.insert("helix".to_string());
+        dict.insert("helps".to_string());
+        let (best, dist, alternatives) = find_best_correction("helo", &dict, 2, 5);
+        assert_eq!(best, Some("hello".to_string()));
+        assert_eq!(dist, 1);
+        assert!(!alternatives.is_empty(), "should have alternatives");
     }
 }

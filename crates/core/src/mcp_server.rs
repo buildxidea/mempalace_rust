@@ -461,6 +461,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "mempalace_delete_hallway" => tool_delete_hallway(&state, args),
                 // Smart features - context
                 "mempalace_context_build" => tool_context_build(&state, args),
+                "mempalace_context_inject" => tool_context_inject(&state, args),
                 // Smart features - flow compress
                 "mempalace_flow_compress" => tool_flow_compress(&state, args),
                 // Smart features - cascade
@@ -578,6 +579,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_consolidate" => tool_consolidate(&state, args),
                 "memory_snapshot_create" => tool_snapshot_create(&state, args),
                 "memory_file_history" => tool_file_history(&state, args),
+                "memory_context_inject" => tool_context_inject(&state, args),
                 // Claude bridge sync
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
@@ -1028,6 +1030,12 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Context Build",
             "Build a priority-ordered context from pinned memories, lessons, session summaries, and working memory within a token budget.",
             serde_json::json!({ "type": "object", "properties": { "token_budget": { "type": "integer", "description": "Max tokens (default: 8000)" }, "pinned_ids": { "type": "array", "items": { "type": "string" }, "description": "Pinned memory slot IDs (optional)" }, "session_ids": { "type": "array", "items": { "type": "string" }, "description": "Session IDs to include summaries from (optional)" }, "include_working_memory": { "type": "boolean", "description": "Include compressed working memory observations (default: true)" }, "output_format": { "type": "string", "description": "Output format: json or xml (default: json)" } } }),
+        ),
+        tool(
+            "mempalace_context_inject",
+            "Context Inject",
+            "Inject pinned slots, profile, lessons, and summaries into context for a tool invocation, filtered by touched file.",
+            serde_json::json!({ "type": "object", "properties": { "tool_name": { "type": "string", "description": "Name of the tool being invoked" }, "tool_params": { "type": "string", "description": "JSON string of tool parameters (used to extract file paths)" } }, "required": ["tool_name"] }),
         ),
         tool(
             "mempalace_enrich",
@@ -4946,6 +4954,35 @@ fn tool_context_build(state: &AppState, args: JsonObject) -> Result<CallToolResu
     }
 }
 
+fn tool_context_inject(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Input {
+        tool_name: String,
+        #[serde(default)]
+        tool_params: Option<String>,
+    }
+    let input: Input = match serde_json::from_value(serde_json::Value::Object(args)) {
+        Ok(i) => i,
+        Err(e) => {
+            return Err(ErrorData::invalid_params(
+                format!("Invalid args: {e}"),
+                None,
+            ))
+        }
+    };
+    let params = input.tool_params.unwrap_or_else(|| "{}".to_string());
+    match crate::mcp::context_inject::build_context_for_tool(state, &input.tool_name, &params) {
+        Ok(ctx) => ok_json(serde_json::json!({
+            "status": "ok",
+            "tool_name": input.tool_name,
+            "context": ctx,
+            "enabled": crate::mcp::context_inject::is_context_injection_enabled(),
+        })),
+        Err(e) => ok_json(serde_json::json!({"status": "error", "message": e})),
+    }
+}
+
 fn tool_flow_compress(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -7944,6 +7981,7 @@ mod tests {
             "mempalace_graph_search",
             "mempalace_graph_expand",
             "mempalace_context_build",
+            "mempalace_context_inject",
             "mempalace_enrich",
             "mempalace_retention_score",
             "mempalace_access_stats",

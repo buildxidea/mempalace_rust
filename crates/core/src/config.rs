@@ -533,6 +533,11 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+    /// Context injection on PreToolUse. When true, injects pinned slots,
+    /// profile, lessons, and session summaries into tool context within
+    /// a ~4000 char budget. Default: false (opt-in via env or config).
+    #[serde(default)]
+    pub inject_context_enabled: bool,
 }
 
 #[cfg(unix)]
@@ -639,6 +644,7 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            inject_context_enabled: false,
         }
     }
 }
@@ -992,6 +998,7 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
+            inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
         };
@@ -1055,6 +1062,7 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
+            inject_context_enabled: false,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
         };

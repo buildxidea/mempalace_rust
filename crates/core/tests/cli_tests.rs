@@ -329,6 +329,26 @@ fn test_cli_repair_migrate_vector_index() {
     assert!(Cli::try_parse_from(["mpr", "repair", "migrate-vector-index"]).is_ok());
 }
 
+#[test]
+fn test_cli_repair_rebuild_vector_index() {
+    assert!(Cli::try_parse_from(["mpr", "repair", "rebuild-vector-index"]).is_ok());
+}
+
+#[test]
+fn test_cli_repair_fix_poisoned_seq_id() {
+    assert!(Cli::try_parse_from(["mpr", "repair", "fix-poisoned-seq-id"]).is_ok());
+}
+
+#[test]
+fn test_cli_repair_rebuild_from_sqlite() {
+    assert!(Cli::try_parse_from(["mpr", "repair", "rebuild-from-sqlite"]).is_ok());
+}
+
+#[test]
+fn test_cli_repair_status() {
+    assert!(Cli::try_parse_from(["mpr", "repair", "status"]).is_ok());
+}
+
 // ---------------------------------------------------------------------------
 // Invalid invocations — should fail parsing
 // ---------------------------------------------------------------------------

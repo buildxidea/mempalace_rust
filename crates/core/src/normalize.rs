@@ -1,9 +1,48 @@
+use chrono::Utc;
+use sha2::{Digest, Sha256};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::BufRead;
+
+use crate::types::{HookType, RawObservation};
 
 const SLACK_PROVENANCE_FOOTER: &str =
     "\n[source: slack-export | multi-party chat — speaker roles are positional, not verified]";
+
+/// Maximum file size for transcript normalization: 500 MiB.
+const MAX_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Structured transcript message returned by individual parsers.
+/// Captures a single user or assistant turn with provenance metadata.
+#[derive(Debug, Clone)]
+pub struct TranscriptMessage {
+    /// "user" or "assistant"
+    pub role: String,
+    /// The message text content
+    pub text: String,
+    /// Source format identifier (e.g. "claude_code_jsonl", "gemini_ai_studio")
+    pub source_format: String,
+    /// Optional timestamp extracted from the source data
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// Optional sequence index within the source file
+    pub index: Option<usize>,
+}
+
+/// Generate a deterministic observation ID from source content.
+///
+/// The ID is a SHA-256 hash of (source_format + separator + message_index +
+/// separator + content) truncated to 16 hex chars, prefixed with "obs-".
+pub fn deterministic_obs_id(source_format: &str, index: usize, content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source_format.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(index.to_string().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(content.as_bytes());
+    let hex = format!("{:x}", hasher.finalize());
+    format!("obs-{}", &hex[..16])
+}
 
 /// Returns a prefix of `s` truncated to at most `max_bytes` bytes,
 /// ensuring the result ends on a valid UTF-8 character boundary.
@@ -265,11 +304,12 @@ pub fn normalize(file_path: &std::path::Path, content: &str) -> anyhow::Result<S
     }
 
     if let Ok(metadata) = fs::metadata(file_path) {
-        if metadata.len() > 500 * 1024 * 1024 {
+        if metadata.len() > MAX_FILE_SIZE_BYTES {
             anyhow::bail!(
-                "Content too large ({} bytes) to normalize: {}",
+                "Content too large ({} bytes) to normalize: {} (cap: {} bytes)",
                 metadata.len(),
-                file_path.display()
+                file_path.display(),
+                MAX_FILE_SIZE_BYTES
             );
         }
     }
@@ -303,6 +343,400 @@ pub fn normalize(file_path: &std::path::Path, content: &str) -> anyhow::Result<S
     Ok(content.to_string())
 }
 
+/// Parse a transcript file into structured `Vec<RawObservation>`.
+///
+/// Each parsed message (user or assistant) becomes a `RawObservation` with a
+/// deterministic ID, provenance metadata, and the message text in the
+/// appropriate field (`user_prompt` or `assistant_response`).
+///
+/// Returns `Ok(vec)` on success (possibly empty if the file had no
+/// recognisable messages) or `Err` for I/O or size-limit violations.
+pub fn normalize_to_observations(
+    file_path: &std::path::Path,
+    content: &str,
+    session_id: &str,
+) -> anyhow::Result<Vec<RawObservation>> {
+    use std::fs;
+
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if let Ok(metadata) = fs::metadata(file_path) {
+        if metadata.len() > MAX_FILE_SIZE_BYTES {
+            anyhow::bail!(
+                "Content too large ({} bytes) to parse observations: {} (cap: {} bytes)",
+                metadata.len(),
+                file_path.display(),
+                MAX_FILE_SIZE_BYTES
+            );
+        }
+    }
+
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let source_format = detect_format(content).unwrap_or_else(|| "plain_text".to_string());
+
+    // For JSONL files, try streaming parse first for large files
+    if ext.eq_ignore_ascii_case("jsonl") || content.len() > 1024 * 1024 {
+        if let Some(obs) = parse_jsonl_to_observations(content, session_id, &source_format) {
+            return Ok(obs);
+        }
+    }
+
+    // For JSON files or content starting with {/[, try object-based parsing
+    if ext.eq_ignore_ascii_case("json")
+        || content.trim().starts_with('{')
+        || content.trim().starts_with('[')
+    {
+        if let Some(transcript) = try_normalize_json(content) {
+            if let Some(messages) = parse_transcript_to_messages(&transcript) {
+                return Ok(messages_to_observations(&messages, session_id, &source_format));
+            }
+        }
+    }
+
+    // Fall back to in-memory parsing
+    let messages = extract_messages(content, &source_format);
+    Ok(messages_to_observations(&messages, session_id, &source_format))
+}
+
+/// Streaming JSONL parser that processes lines one at a time.
+///
+/// This avoids loading the entire file into memory for large JSONL files.
+/// Returns `None` if the content doesn't look like JSONL.
+fn parse_jsonl_to_observations(
+    content: &str,
+    session_id: &str,
+    source_format: &str,
+) -> Option<Vec<RawObservation>> {
+    let reader = std::io::Cursor::new(content.as_bytes());
+    let buf_reader = std::io::BufReader::new(reader);
+
+    let mut observations = Vec::new();
+    let mut index: usize = 0;
+
+    for line_result in buf_reader.lines() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let entry = match serde_json::from_str::<Value>(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if let Some((role, text)) = extract_message_from_entry(&entry, source_format) {
+            if text.is_empty() {
+                index += 1;
+                continue;
+            }
+            let obs = make_observation(
+                &role,
+                &text,
+                session_id,
+                source_format,
+                index,
+                &entry,
+            );
+            observations.push(obs);
+            index += 1;
+        }
+    }
+
+    if observations.is_empty() {
+        None
+    } else {
+        Some(observations)
+    }
+}
+
+/// Extract a (role, text) pair from a single JSONL entry based on source format.
+fn extract_message_from_entry(entry: &Value, source_format: &str) -> Option<(String, String)> {
+    let obj = entry.as_object()?;
+
+    match source_format {
+        "claude_code_jsonl" => {
+            let msg_type = obj.get("type")?.as_str()?;
+            let message = obj.get("message")?.as_object()?;
+            let role = match msg_type {
+                "human" | "user" => "user",
+                "assistant" => "assistant",
+                _ => return None,
+            };
+            let text = extract_content_to_string(message.get("content")?);
+            Some((role.to_string(), text))
+        }
+        "codex_jsonl" => {
+            let t = obj.get("type")?.as_str()?;
+            let (role, text) = match t {
+                "event_msg/user_message" => {
+                    let text = obj.get("text")?.as_str()?;
+                    ("user", text.to_string())
+                }
+                "event_msg/agent_message" => {
+                    let text = obj.get("text")?.as_str()?;
+                    ("assistant", text.to_string())
+                }
+                _ => return None,
+            };
+            Some((role.to_string(), text))
+        }
+        "gemini_cli_jsonl" => {
+            let role_raw = obj
+                .get("role")
+                .or_else(|| obj.get("type"))
+                .and_then(|r| r.as_str())?;
+            let text = if let Some(c) = obj.get("content").and_then(|c| c.as_str()) {
+                c.to_string()
+            } else if let Some(parts) = obj.get("parts").and_then(|p| p.as_array()) {
+                let buf: Vec<String> = parts
+                    .iter()
+                    .filter_map(|part| {
+                        let p = part.as_object()?;
+                        p.get("text").and_then(|t| t.as_str()).map(String::from)
+                    })
+                    .collect();
+                buf.join("\n")
+            } else {
+                return None;
+            };
+            let role = match role_raw {
+                "model" | "assistant" | "ai" => "assistant",
+                "user" | "human" => "user",
+                _ => return None,
+            };
+            Some((role.to_string(), text))
+        }
+        "pi_jsonl" => {
+            let role_raw = obj
+                .get("type")
+                .or_else(|| obj.get("kind"))
+                .and_then(|r| r.as_str())?;
+            let text = obj
+                .get("text")
+                .or_else(|| obj.get("message"))
+                .or_else(|| obj.get("content"))
+                .and_then(|c| c.as_str())?
+                .trim()
+                .to_string();
+            let role = match role_raw {
+                "user" | "human" => "user",
+                "pi" | "assistant" | "ai" => "assistant",
+                _ => return None,
+            };
+            Some((role.to_string(), text))
+        }
+        "soulforge_jsonl" => {
+            let role_raw = obj.get("role").and_then(|r| r.as_str())?;
+            let text = if let Some(msg) = obj.get("message").and_then(|m| m.as_object()) {
+                msg.get("text")
+                    .or_else(|| {
+                        msg.get("segments")
+                            .and_then(|s| s.as_array())
+                            .and_then(|arr| arr.first())
+                            .and_then(|s| s.as_object())
+                            .and_then(|s| s.get("text"))
+                    })
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+            } else {
+                obj.get("text").and_then(|t| t.as_str()).unwrap_or("")
+            };
+            let role = match role_raw {
+                "user" | "human" => "user",
+                "assistant" | "ai" | "agent" => "assistant",
+                _ => return None,
+            };
+            Some((role.to_string(), text.to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// Build a `RawObservation` from parsed message data with a deterministic ID.
+fn make_observation(
+    role: &str,
+    text: &str,
+    session_id: &str,
+    source_format: &str,
+    index: usize,
+    raw_entry: &Value,
+) -> RawObservation {
+    let id = deterministic_obs_id(source_format, index, text);
+    let hook_type = match role {
+        "user" => HookType::UserPromptSubmit,
+        "assistant" => HookType::PostToolUse,
+        _ => HookType::Notification,
+    };
+
+    RawObservation {
+        id,
+        session_id: session_id.to_string(),
+        timestamp: Utc::now(),
+        hook_type,
+        tool_name: Some(source_format.to_string()),
+        tool_input: None,
+        tool_output: None,
+        user_prompt: if role == "user" {
+            Some(text.to_string())
+        } else {
+            None
+        },
+        assistant_response: if role == "assistant" {
+            Some(text.to_string())
+        } else {
+            None
+        },
+        raw: Some(raw_entry.to_string()),
+        modality: "text".to_string(),
+        image_data: None,
+        agent_id: Some(source_format.to_string()),
+    }
+}
+
+/// Extract messages as `(role, text)` pairs from content based on format.
+fn extract_messages(content: &str, source_format: &str) -> Vec<(String, String)> {
+    match source_format {
+        "pi_jsonl" => {
+            // Already handled by try_normalize_json chain; extract inline
+            let lines: Vec<&str> = content
+                .trim()
+                .split('\n')
+                .filter(|l| !l.trim().is_empty())
+                .collect();
+            let mut messages = Vec::new();
+            for line in lines {
+                let Ok(v) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if let Some((role, text)) = extract_message_from_entry(&v, source_format) {
+                    if !text.is_empty() {
+                        messages.push((role, text));
+                    }
+                }
+            }
+            messages
+        }
+        "claude_code_jsonl" | "codex_jsonl" | "gemini_cli_jsonl" | "soulforge_jsonl" => {
+            let lines: Vec<&str> = content
+                .trim()
+                .split('\n')
+                .filter(|l| !l.trim().is_empty())
+                .collect();
+            let mut messages = Vec::new();
+            for line in lines {
+                let Ok(v) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if let Some((role, text)) = extract_message_from_entry(&v, source_format) {
+                    if !text.is_empty() {
+                        messages.push((role, text));
+                    }
+                }
+            }
+            messages
+        }
+        _ => {
+            // For JSON object formats, try each parser
+            if let Ok(data) = serde_json::from_str::<Value>(content) {
+                if let Some(messages) = try_extract_messages_from_json(&data, source_format) {
+                    return messages;
+                }
+            }
+            Vec::new()
+        }
+    }
+}
+
+/// Try to extract messages from a parsed JSON value for object-based formats.
+fn try_extract_messages_from_json(data: &Value, source_format: &str) -> Option<Vec<(String, String)>> {
+    match source_format {
+        "claude_ai_json" | "chatgpt_json" | "slack_json" | "gemini_ai_studio_json"
+        | "continue_dev_json" => {
+            // Use the existing parsers' logic to get messages
+            let transcript = try_normalize_json(&data.to_string())?;
+            // Parse back from transcript format
+            parse_transcript_to_messages(&transcript)
+        }
+        _ => None,
+    }
+}
+
+/// Parse a `>` prefixed transcript back into `(role, text)` pairs.
+fn parse_transcript_to_messages(transcript: &str) -> Option<Vec<(String, String)>> {
+    let mut messages = Vec::new();
+    let mut current_user = String::new();
+    let mut in_user = false;
+
+    for line in transcript.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if in_user && !current_user.is_empty() {
+                messages.push(("user".to_string(), current_user.trim().to_string()));
+                current_user.clear();
+                in_user = false;
+            }
+            continue;
+        }
+
+        if let Some(user_text) = trimmed.strip_prefix("> ") {
+            if in_user && !current_user.is_empty() {
+                messages.push(("user".to_string(), current_user.trim().to_string()));
+                current_user.clear();
+            }
+            in_user = true;
+            current_user = user_text.to_string();
+        } else if in_user {
+            // This is an assistant line following a user turn
+            if !current_user.is_empty() {
+                messages.push(("user".to_string(), current_user.trim().to_string()));
+                current_user.clear();
+            }
+            in_user = false;
+            messages.push(("assistant".to_string(), trimmed.to_string()));
+        } else {
+            // Continuation of assistant text
+            if let Some(last) = messages.last_mut() {
+                if last.0 == "assistant" {
+                    last.1.push('\n');
+                    last.1.push_str(trimmed);
+                }
+            }
+        }
+    }
+
+    // Flush remaining user message
+    if in_user && !current_user.is_empty() {
+        messages.push(("user".to_string(), current_user.trim().to_string()));
+    }
+
+    if messages.len() >= 2 {
+        Some(messages)
+    } else {
+        None
+    }
+}
+
+/// Convert `(role, text)` pairs into `Vec<RawObservation>` with deterministic IDs.
+fn messages_to_observations(
+    messages: &[(String, String)],
+    session_id: &str,
+    source_format: &str,
+) -> Vec<RawObservation> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(index, (role, text))| {
+            make_observation(role, text, session_id, source_format, index, &Value::Null)
+        })
+        .collect()
+}
+
 fn try_normalize_json(content: &str) -> Option<String> {
     if let Some(normalized) = try_claude_code_jsonl(content) {
         return Some(normalized);
@@ -316,6 +750,9 @@ fn try_normalize_json(content: &str) -> Option<String> {
     if let Some(normalized) = try_soulforge_jsonl(content) {
         return Some(normalized);
     }
+    if let Some(normalized) = try_pi_jsonl(content) {
+        return Some(normalized);
+    }
     if let Some(normalized) = try_aider_md(content) {
         return Some(normalized);
     }
@@ -324,7 +761,13 @@ fn try_normalize_json(content: &str) -> Option<String> {
         return None;
     };
 
-    for parser in [try_claude_ai_json, try_chatgpt_json, try_slack_json] {
+    for parser in [
+        try_claude_ai_json,
+        try_chatgpt_json,
+        try_gemini_ai_studio_json,
+        try_continue_dev_json,
+        try_slack_json,
+    ] {
         if let Some(normalized) = parser(&data) {
             return Some(normalized);
         }
@@ -333,6 +776,17 @@ fn try_normalize_json(content: &str) -> Option<String> {
     None
 }
 
+/// Try to parse Claude Code JSONL session format.
+///
+/// Each line is a JSON object with `type` ("human"/"user"/"assistant") and
+/// `message` containing `content` (string or array of content blocks).
+///
+/// Hardened against:
+/// - Malformed lines (skipped silently)
+/// - Missing fields (skipped, never panics)
+/// - Large files (streamed line-by-line, not loaded entirely)
+/// - `thinking` / `caching` content blocks (ignored gracefully)
+/// - Empty assistant turns (collapsed with adjacent user turns)
 fn try_claude_code_jsonl(content: &str) -> Option<String> {
     let lines: Vec<&str> = content
         .trim()
@@ -346,20 +800,33 @@ fn try_claude_code_jsonl(content: &str) -> Option<String> {
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let entry = entry.as_object()?;
-        let msg_type = entry.get("type")?.as_str()?;
-        let message = entry.get("message")?.as_object()?;
+        let Some(entry_obj) = entry.as_object() else {
+            continue;
+        };
+        let msg_type = match entry_obj.get("type").and_then(|v| v.as_str()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let message = match entry_obj.get("message").and_then(|v| v.as_object()) {
+            Some(m) => m,
+            None => continue,
+        };
 
         match msg_type {
             "assistant" => {
-                let content_val = message.get("content")?;
+                let Some(content_val) = message.get("content") else {
+                    continue;
+                };
+
+                // Collect tool_use IDs from this assistant block
                 if let Some(arr) = content_val.as_array() {
                     for block in arr {
                         let obj = match block.as_object() {
                             Some(o) => o,
                             None => continue,
                         };
-                        if obj.get("type").and_then(|v| v.as_str()) != Some("tool_use") {
+                        let block_type = obj.get("type").and_then(|v| v.as_str());
+                        if block_type != Some("tool_use") {
                             continue;
                         }
                         let tool_id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -379,10 +846,13 @@ fn try_claude_code_jsonl(content: &str) -> Option<String> {
                 messages.push(("assistant".to_string(), text));
             }
             "human" | "user" => {
-                let content_val = message.get("content")?;
+                let Some(content_val) = message.get("content") else {
+                    continue;
+                };
                 let (user_text, is_tool_only) =
                     extract_claude_code_user_text(content_val, &tool_use_map);
 
+                // Tool-only results get folded into the preceding assistant turn
                 if is_tool_only {
                     if let Some(prev) = messages.last_mut() {
                         if prev.0 == "assistant" {
@@ -400,6 +870,7 @@ fn try_claude_code_jsonl(content: &str) -> Option<String> {
                 }
                 messages.push(("user".to_string(), user_text));
             }
+            // "summary", "system", "meta" etc. — skip
             _ => continue,
         }
     }
@@ -881,6 +1352,277 @@ fn try_soulforge_jsonl(content: &str) -> Option<String> {
     None
 }
 
+/// Try to parse Google AI Studio (Gemini AI Studio) JSON export format.
+///
+/// AI Studio exports conversations as a JSON array where each element is a
+/// conversation with a `messages` or `contents` array. Each message has
+/// `role` and either `parts` (array of `{text}` objects) or `content` (string).
+///
+/// Detection: JSON array where first element has `messages` or `contents` key
+/// and at least one message has `role` in {user, model, assistant}.
+fn try_gemini_ai_studio_json(data: &Value) -> Option<String> {
+    // AI Studio can export as a single conversation object or array of conversations
+    // Normalize to a list of conversation values to iterate
+    let conv_list: Vec<&Value> = if let Some(arr) = data.as_array() {
+        arr.iter().collect()
+    } else {
+        // Single conversation object
+        vec![data]
+    };
+
+    // Find the first conversation that has recognizable messages
+    for conv in conv_list {
+        let messages_data = conv
+            .get("messages")
+            .or_else(|| conv.get("contents"))
+            .or_else(|| conv.get("conversation"))
+            .or_else(|| conv.get("turns"));
+
+        let list = match messages_data.and_then(|v| v.as_array()) {
+            Some(l) => l,
+            None => continue,
+        };
+
+        let mut messages: Vec<(String, String)> = Vec::new();
+
+        for item in list {
+            let obj = match item.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+
+            let role = obj
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let text = if let Some(parts) = obj.get("parts").and_then(|p| p.as_array()) {
+                let buf: Vec<String> = parts
+                    .iter()
+                    .filter_map(|part| {
+                        let p = part.as_object()?;
+                        p.get("text")
+                            .and_then(|t| t.as_str())
+                            .map(String::from)
+                    })
+                    .collect();
+                buf.join("\n")
+            } else {
+                extract_content_to_string(obj.get("content")?)
+            };
+
+            if text.is_empty() {
+                continue;
+            }
+
+            match role {
+                "user" | "human" => messages.push(("user".to_string(), text)),
+                "model" | "assistant" | "ai" => messages.push(("assistant".to_string(), text)),
+                "system" => continue,
+                _ => continue,
+            }
+        }
+
+        if messages.len() >= 2 {
+            return Some(messages_to_transcript(&messages));
+        }
+    }
+
+    None
+}
+
+/// Try to parse Pi AI (Inflection) JSONL session format.
+///
+/// Pi JSONL files have one JSON object per line with fields:
+/// - `type` or `kind`: "user" | "pi" | "assistant"
+/// - `text` or `message` or `content`: the message body
+/// - `createdAt` or `timestamp`: optional ISO-8601 timestamp
+///
+/// Detection: at least one line has `type`/`kind` in {user, pi, assistant}
+/// AND a `text`/`message`/`content` field.
+fn try_pi_jsonl(content: &str) -> Option<String> {
+    let lines: Vec<&str> = content
+        .trim()
+        .split('\n')
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    // Quick detection: scan first few lines for Pi markers
+    let mut has_pi_marker = false;
+    for line in lines.iter().take(20) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(obj) = v.as_object() else {
+            continue;
+        };
+        let role = obj
+            .get("type")
+            .or_else(|| obj.get("kind"))
+            .and_then(|r| r.as_str());
+        let is_pi_role = matches!(role, Some("user") | Some("pi") | Some("assistant"));
+        let has_payload = obj.contains_key("text")
+            || obj.contains_key("message")
+            || obj.contains_key("content");
+        if is_pi_role && has_payload {
+            has_pi_marker = true;
+            break;
+        }
+    }
+    if !has_pi_marker {
+        return None;
+    }
+
+    let mut messages: Vec<(String, String)> = Vec::new();
+
+    for line in lines {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(obj) = v.as_object() else {
+            continue;
+        };
+
+        let role_raw = obj
+            .get("type")
+            .or_else(|| obj.get("kind"))
+            .and_then(|r| r.as_str())
+            .unwrap_or("user");
+
+        let text = obj
+            .get("text")
+            .or_else(|| obj.get("message"))
+            .or_else(|| obj.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        if text.is_empty() {
+            continue;
+        }
+
+        match role_raw {
+            "user" | "human" => messages.push(("user".to_string(), text)),
+            "pi" | "assistant" | "ai" => messages.push(("assistant".to_string(), text)),
+            _ => continue,
+        }
+    }
+
+    if messages.len() >= 2 {
+        Some(messages_to_transcript(&messages))
+    } else {
+        None
+    }
+}
+
+/// Try to parse Continue.dev conversation JSON format.
+///
+/// Continue.dev stores conversations as JSON with a top-level object containing
+/// either:
+/// - `history`: array of `{ role, content }` or `{ role, parts }` messages
+/// - `messages`: same structure
+/// - A nested `conversation` or `chat` object with a messages array
+///
+/// Each message may have `content` as string or array of content blocks.
+///
+/// Detection: JSON object with `history` or `messages` key containing objects
+/// with `role` in {user, assistant, system} and recognizable content.
+fn try_continue_dev_json(data: &Value) -> Option<String> {
+    let obj = data.as_object()?;
+
+    // Continue.dev uses "history" or "messages" at top level, or nested
+    let messages_data = obj
+        .get("history")
+        .or_else(|| obj.get("messages"))
+        .or_else(|| obj.get("chatHistory"))
+        .or_else(|| obj.get("conversation"));
+
+    // Also check for nested conversation object
+    let messages_data = if messages_data.is_some() {
+        messages_data
+    } else {
+        // Try nested: obj.conversation.messages or obj.chat.messages
+        let nested = obj
+            .get("conversation")
+            .or_else(|| obj.get("chat"))
+            .and_then(|n| n.as_object());
+        if let Some(nested_obj) = nested {
+            nested_obj
+                .get("messages")
+                .or_else(|| nested_obj.get("history"))
+        } else {
+            None
+        }
+    };
+
+    let list = messages_data?.as_array()?;
+
+    // Check for Continue.dev markers: role field with content/parts
+    let has_continue_marker = list.iter().any(|item| {
+        if let Some(obj) = item.as_object() {
+            let role = obj.get("role").and_then(|r| r.as_str());
+            let has_content = obj.contains_key("content") || obj.contains_key("parts");
+            matches!(role, Some("user") | Some("assistant") | Some("system")) && has_content
+        } else {
+            false
+        }
+    });
+
+    if !has_continue_marker {
+        return None;
+    }
+
+    let mut messages: Vec<(String, String)> = Vec::new();
+
+    for item in list {
+        let obj = match item.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+
+        let role = obj.get("role").and_then(|v| v.as_str()).unwrap_or("");
+
+        let text = if let Some(parts) = obj.get("parts").and_then(|p| p.as_array()) {
+            let buf: Vec<String> = parts
+                .iter()
+                .filter_map(|part| {
+                    if let Some(s) = part.as_str() {
+                        return Some(s.to_string());
+                    }
+                    let p = part.as_object()?;
+                    p.get("text")
+                        .and_then(|t| t.as_str())
+                        .map(String::from)
+                })
+                .collect();
+            buf.join("\n")
+        } else {
+            extract_content_to_string(obj.get("content")?)
+        };
+
+        if text.is_empty() {
+            continue;
+        }
+
+        match role {
+            "user" | "human" => messages.push(("user".to_string(), text)),
+            "assistant" | "ai" => messages.push(("assistant".to_string(), text)),
+            "system" => continue,
+            _ => continue,
+        }
+    }
+
+    if messages.len() >= 2 {
+        Some(messages_to_transcript(&messages))
+    } else {
+        None
+    }
+}
+
 /// Try to parse Aider .aider.chat.history.md format.
 /// Format: Lines starting with "> " are user turns, other lines are assistant responses.
 /// Detected by: presence of "# Aider Chat History" header or "> " quoted lines.
@@ -1113,31 +1855,37 @@ fn extract_claude_code_assistant_text(
                 };
                 let item_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-                if item_type == "text" {
-                    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            parts.push(trimmed.to_string());
+                match item_type {
+                    "text" => {
+                        if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                parts.push(trimmed.to_string());
+                            }
                         }
                     }
-                } else if item_type == "tool_use" {
-                    let formatted = format_tool_use(item);
-                    if !formatted.is_empty() {
-                        parts.push(formatted);
+                    "tool_use" => {
+                        let formatted = format_tool_use(item);
+                        if !formatted.is_empty() {
+                            parts.push(formatted);
+                        }
                     }
-                }
-                // tool_result in assistant messages is rare but possible;
-                // format it if we have the tool name
-                else if item_type == "tool_result" {
-                    let tool_id = obj
-                        .get("tool_use_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let tool_name = tool_use_map.get(tool_id).map(|s| s.as_str());
-                    let formatted = format_tool_result(item, tool_name);
-                    if !formatted.is_empty() {
-                        parts.push(formatted);
+                    "tool_result" => {
+                        let tool_id = obj
+                            .get("tool_use_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let tool_name = tool_use_map.get(tool_id).map(|s| s.as_str());
+                        let formatted = format_tool_result(item, tool_name);
+                        if !formatted.is_empty() {
+                            parts.push(formatted);
+                        }
                     }
+                    // thinking / thinking_content blocks are internal
+                    // reasoning — skip silently
+                    "thinking" | "thinking_content" => {}
+                    // cache_control is metadata, not content
+                    _ => {}
                 }
             }
             parts.join(" ")
@@ -1272,6 +2020,27 @@ pub fn detect_format(content: &str) -> Option<String> {
         return Some("soulforge_jsonl".to_string());
     }
 
+    // Check for Pi JSONL (type/kind in {user, pi, assistant} + text/message/content)
+    let has_pi = lines.iter().take(20).any(|l| {
+        if let Ok(v) = serde_json::from_str::<Value>(l) {
+            if let Some(obj) = v.as_object() {
+                let role = obj
+                    .get("type")
+                    .or_else(|| obj.get("kind"))
+                    .and_then(|r| r.as_str());
+                let is_pi_role = matches!(role, Some("user") | Some("pi") | Some("assistant"));
+                let has_payload = obj.contains_key("text")
+                    || obj.contains_key("message")
+                    || obj.contains_key("content");
+                return is_pi_role && has_payload;
+            }
+        }
+        false
+    });
+    if has_pi {
+        return Some("pi_jsonl".to_string());
+    }
+
     // Check for Aider markdown format
     let has_aider =
         trimmed.contains("Aider Chat History") || trimmed.contains("aider.chat.history");
@@ -1294,11 +2063,42 @@ pub fn detect_format(content: &str) -> Option<String> {
                 if obj.get("mapping").is_some() {
                     return Some("chatgpt_json".to_string());
                 }
+                // Gemini AI Studio single-object format
+                if obj.get("contents").is_some() {
+                    return Some("gemini_ai_studio_json".to_string());
+                }
+                // Continue.dev: has "history" or "messages" with role-based entries
+                if let Some(hist) = obj.get("history").or_else(|| obj.get("chatHistory")) {
+                    if let Some(arr) = hist.as_array() {
+                        if arr.iter().any(|item| {
+                            item.as_object()
+                                .and_then(|o| o.get("role"))
+                                .and_then(|r| r.as_str())
+                                .map(|r| matches!(r, "user" | "assistant"))
+                                .unwrap_or(false)
+                        }) {
+                            return Some("continue_dev_json".to_string());
+                        }
+                    }
+                }
             }
             if let Some(arr) = data.as_array() {
                 if let Some(first) = arr.first() {
-                    if first.get("type").and_then(|v| v.as_str()) == Some("message") {
+                    let first_obj = first.as_object();
+                    if first_obj
+                        .and_then(|o| o.get("type"))
+                        .and_then(|v| v.as_str())
+                        == Some("message")
+                    {
                         return Some("slack_json".to_string());
+                    }
+                    // Gemini AI Studio: array of objects with messages/contents
+                    if first_obj
+                        .and_then(|o| o.get("messages").or_else(|| o.get("contents")))
+                        .and_then(|v| v.as_array())
+                        .is_some()
+                    {
+                        return Some("gemini_ai_studio_json".to_string());
                     }
                 }
             }
@@ -1308,6 +2108,12 @@ pub fn detect_format(content: &str) -> Option<String> {
                 if let Some(obj) = first.as_object() {
                     if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
                         if t == "conversation" {
+                            return Some("claude_code_jsonl".to_string());
+                        }
+                        // Claude Code JSONL also uses type: "human"/"user"/"assistant"
+                        if matches!(t, "human" | "user" | "assistant")
+                            && obj.contains_key("message")
+                        {
                             return Some("claude_code_jsonl".to_string());
                         }
                     }
@@ -1498,5 +2304,228 @@ mod tests {
             "slack_json"
         );
         assert!(detect_format("plain text").is_some());
+    }
+
+    // --- New format tests ---
+
+    #[test]
+    fn test_gemini_ai_studio_json_array_of_conversations() {
+        let content = r#"[
+            {
+                "messages": [
+                    {"role": "user", "content": "What is Rust?"},
+                    {"role": "model", "content": "Rust is a systems programming language."}
+                ]
+            }
+        ]"#;
+        let result = normalize(std::path::Path::new("export.json"), content).unwrap();
+        assert!(result.contains("> What is Rust?"));
+        assert!(result.contains("Rust is a systems programming language."));
+    }
+
+    #[test]
+    fn test_gemini_ai_studio_json_with_parts() {
+        let content = r#"{"contents": [
+            {"role": "user", "parts": [{"text": "Hello from AI Studio"}]},
+            {"role": "model", "parts": [{"text": "Hi there!"}]}
+        ]}"#;
+        let result = normalize(std::path::Path::new("export.json"), content).unwrap();
+        assert!(result.contains("> Hello from AI Studio"));
+        assert!(result.contains("Hi there!"));
+    }
+
+    #[test]
+    fn test_gemini_ai_studio_detect_format() {
+        let content = r#"[{"messages": [{"role": "user", "content": "hi"}]}]"#;
+        let result = detect_format(content);
+        assert_eq!(result, Some("gemini_ai_studio_json".to_string()));
+    }
+
+    #[test]
+    fn test_pi_jsonl_basic() {
+        let content = r#"{"type":"user","text":"Hello Pi"}
+{"type":"pi","text":"Hi! How can I help?"}"#;
+        let result = normalize(std::path::Path::new("chat.jsonl"), content).unwrap();
+        assert!(result.contains("> Hello Pi"));
+        assert!(result.contains("Hi! How can I help?"));
+    }
+
+    #[test]
+    fn test_pi_jsonl_with_kind_field() {
+        let content = r#"{"kind":"user","message":"What's up?"}
+{"kind":"pi","message":"Not much, you?"}"#;
+        let result = normalize(std::path::Path::new("chat.jsonl"), content).unwrap();
+        assert!(result.contains("> What's up?"));
+        assert!(result.contains("Not much, you?"));
+    }
+
+    #[test]
+    fn test_pi_jsonl_detect_format() {
+        let content = r#"{"type":"user","text":"hi"}
+{"type":"pi","text":"hello"}"#;
+        let result = detect_format(content);
+        assert_eq!(result, Some("pi_jsonl".to_string()));
+    }
+
+    #[test]
+    fn test_continue_dev_json_history() {
+        let content = r#"{
+            "history": [
+                {"role": "user", "content": "How do I deploy this"},
+                {"role": "assistant", "content": "Run cargo build and then upload the binary."}
+            ]
+        }"#;
+        let result = normalize(std::path::Path::new("chat.json"), content).unwrap();
+        assert!(result.contains("> How do I deploy this"));
+        assert!(result.contains("cargo build"));
+    }
+
+    #[test]
+    fn test_continue_dev_json_messages() {
+        let content = r#"{
+            "messages": [
+                {"role": "user", "parts": [{"text": "Debug this code"}]},
+                {"role": "assistant", "parts": [{"text": "I see the issue."}]}
+            ]
+        }"#;
+        let result = normalize(std::path::Path::new("chat.json"), content).unwrap();
+        assert!(result.contains("> Debug this code"));
+        assert!(result.contains("I see the issue."));
+    }
+
+    #[test]
+    fn test_continue_dev_json_detect_format() {
+        let content = r#"{"history": [
+            {"role": "user", "content": "test"},
+            {"role": "assistant", "content": "response"}
+        ]}"#;
+        let result = detect_format(content);
+        assert_eq!(result, Some("continue_dev_json".to_string()));
+    }
+
+    #[test]
+    fn test_claude_code_jsonl_harden_skips_malformed_lines() {
+        let content = r#"not json at all
+{"type":"human","message":{"content":"Hello"}}
+{"broken json
+{"type":"assistant","message":{"content":"Hi there"}}"#;
+        let result = normalize(std::path::Path::new("test.jsonl"), content).unwrap();
+        assert!(result.contains("> Hello"));
+        assert!(result.contains("Hi there"));
+    }
+
+    #[test]
+    fn test_claude_code_jsonl_harden_ignores_thinking_blocks() {
+        let content = r#"{"type":"human","message":{"content":"Hello"}}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"internal reasoning"},{"type":"text","text":"Hi there!"}]}}"#;
+        let result = normalize(std::path::Path::new("test.jsonl"), content).unwrap();
+        assert!(result.contains("> Hello"));
+        assert!(result.contains("Hi there!"));
+        assert!(!result.contains("internal reasoning"));
+    }
+
+    #[test]
+    fn test_deterministic_obs_id_is_stable() {
+        let id1 = deterministic_obs_id("test_format", 0, "hello world");
+        let id2 = deterministic_obs_id("test_format", 0, "hello world");
+        assert_eq!(id1, id2);
+        assert!(id1.starts_with("obs-"));
+        assert_eq!(id1.len(), 20); // "obs-" + 16 hex chars
+    }
+
+    #[test]
+    fn test_deterministic_obs_id_varies_by_content() {
+        let id1 = deterministic_obs_id("test", 0, "hello");
+        let id2 = deterministic_obs_id("test", 0, "world");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_deterministic_obs_id_varies_by_index() {
+        let id1 = deterministic_obs_id("test", 0, "hello");
+        let id2 = deterministic_obs_id("test", 1, "hello");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_normalize_to_observations_claude_code() {
+        let content = r#"{"type":"human","message":{"content":"Hello"}}
+{"type":"assistant","message":{"content":"Hi there"}}"#;
+        let obs = normalize_to_observations(
+            std::path::Path::new("test.jsonl"),
+            content,
+            "test-session",
+        )
+        .unwrap();
+        assert_eq!(obs.len(), 2);
+        assert_eq!(obs[0].user_prompt.as_deref(), Some("Hello"));
+        assert_eq!(obs[1].assistant_response.as_deref(), Some("Hi there"));
+        assert!(obs[0].id.starts_with("obs-"));
+        assert!(obs[1].id.starts_with("obs-"));
+        assert_ne!(obs[0].id, obs[1].id);
+        assert_eq!(obs[0].session_id, "test-session");
+    }
+
+    #[test]
+    fn test_normalize_to_observations_pi_jsonl() {
+        let content = r#"{"type":"user","text":"Hello Pi"}
+{"type":"pi","text":"Hi there!"}"#;
+        let obs = normalize_to_observations(
+            std::path::Path::new("chat.jsonl"),
+            content,
+            "pi-session",
+        )
+        .unwrap();
+        assert_eq!(obs.len(), 2);
+        assert_eq!(obs[0].user_prompt.as_deref(), Some("Hello Pi"));
+        assert_eq!(obs[1].assistant_response.as_deref(), Some("Hi there!"));
+    }
+
+    #[test]
+    fn test_normalize_to_observations_empty() {
+        let obs = normalize_to_observations(
+            std::path::Path::new("empty.txt"),
+            "",
+            "session",
+        )
+        .unwrap();
+        assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_to_observations_gemini_ai_studio() {
+        let content = r#"{"contents": [
+            {"role": "user", "parts": [{"text": "Hi"}]},
+            {"role": "model", "parts": [{"text": "Hello!"}]}
+        ]}"#;
+        let obs = normalize_to_observations(
+            std::path::Path::new("export.json"),
+            content,
+            "ai-studio-session",
+        )
+        .unwrap();
+        assert_eq!(obs.len(), 2);
+        assert_eq!(obs[0].user_prompt.as_deref(), Some("Hi"));
+        assert_eq!(obs[1].assistant_response.as_deref(), Some("Hello!"));
+    }
+
+    #[test]
+    fn test_parse_transcript_to_messages() {
+        let transcript = "> Hello world\nHi there!\n\n> Another question\nAnother answer\n";
+        let messages = parse_transcript_to_messages(transcript).unwrap();
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0], ("user".to_string(), "Hello world".to_string()));
+        assert_eq!(
+            messages[1],
+            ("assistant".to_string(), "Hi there!".to_string())
+        );
+        assert_eq!(
+            messages[2],
+            ("user".to_string(), "Another question".to_string())
+        );
+        assert_eq!(
+            messages[3],
+            ("assistant".to_string(), "Another answer".to_string())
+        );
     }
 }

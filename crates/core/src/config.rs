@@ -533,6 +533,20 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+    // ---- Qdrant backend config (backend-qdrant) ----
+    //
+    /// Qdrant HTTP API base URL. Falls back to env var
+    /// `MEMPALACE_QDRANT_URL`, then to `http://localhost:6333`.
+    #[serde(default)]
+    pub qdrant_url: Option<String>,
+    /// Qdrant collection name. Falls back to env var
+    /// `MEMPALACE_QDRANT_COLLECTION`, then to `mempalace_drawers`.
+    #[serde(default)]
+    pub qdrant_collection: Option<String>,
+    /// Qdrant Cloud API key (optional). Falls back to env var
+    /// `MEMPALACE_QDRANT_API_KEY`.
+    #[serde(default)]
+    pub qdrant_api_key: Option<String>,
 }
 
 #[cfg(unix)]
@@ -639,6 +653,9 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            qdrant_url: None,
+            qdrant_collection: None,
+            qdrant_api_key: None,
         }
     }
 }
@@ -994,6 +1011,9 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            qdrant_url: None,
+            qdrant_collection: None,
+            qdrant_api_key: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1057,6 +1077,9 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            qdrant_url: None,
+            qdrant_collection: None,
+            qdrant_api_key: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

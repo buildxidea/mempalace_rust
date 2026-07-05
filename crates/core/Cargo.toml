@@ -46,6 +46,9 @@ rerank = []
 llm-sidecar = []
 full = ["llm-openai", "llm-anthropic", "vision", "rerank"]
 health = ["dep:sysinfo"]
+# Qdrant vector database backend via REST API (backend-qdrant).
+# Uses the already-present `reqwest` dep; no additional SDK dependency.
+backend-qdrant = []
 # HTTP REST API server (axum-based, `mpr serve --http`).
 http-server = ["dep:axum", "dep:tower-http"]
 

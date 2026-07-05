@@ -283,6 +283,7 @@ const MUTATION_TOOLS: &[&str] = &[
     "mempalace_mesh_sync",
     "mempalace_team_share",
     "mempalace_consolidate",
+    "mempalace_dedup",
     "mempalace_snapshot_create",
     "mempalace_kg_snapshot_rebuild",
     "mempalace_kg_reset",
@@ -583,8 +584,10 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "memory_claude_bridge_sync" | "mempalace_claude_bridge_sync" => {
                     tool_claude_bridge_sync(&state, args)
                 }
-                #[cfg(feature = "spellcheck")]
-                "mempalace_spellcheck" => tool_spellcheck(&state, args),
+                // Deduplication tool
+                "mempalace_dedup" => tool_dedup(&state, args),
+                // Aliases for dedup
+                "memory_dedup" => tool_dedup(&state, args),
                 other => Err(ErrorData::invalid_params(
                     format!("Unknown tool: {}", other),
                     None,
@@ -1135,12 +1138,36 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Alias for memory_claude_bridge_sync - sync memories to/from Claude Code's MEMORY.md file.",
             serde_json::json!({ "type": "object", "properties": { "direction": { "type": "string", "description": "Sync direction: push (to Claude), pull (from Claude), or sync (bidirectional, default: sync)" } }, "additionalProperties": false }),
         ),
-        #[cfg(feature = "spellcheck")]
         tool(
-            "mempalace_spellcheck",
-            "Spellcheck",
-            "Check and correct spelling in text. Returns the corrected text along with per-token diagnostics. Useful for fixing search queries before retrying.",
-            serde_json::json!({ "type": "object", "properties": { "text": { "type": "string", "description": "Text to spellcheck" }, "max_edit": { "type": "integer", "description": "Maximum edit distance (default: 3)" }, "max_suggestions": { "type": "integer", "description": "Maximum number of suggestions (default: 5)" } }, "required": ["text"] }),
+            "mempalace_dedup",
+            "Deduplicate Drawers",
+            "Detect and remove near-duplicate drawers using cosine distance. Groups by source_file, keeps the longest version, deletes the rest. Supports dry-run mode.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "threshold": {
+                        "type": "number",
+                        "description": "Cosine distance threshold (default: 0.15, lower=stricter)"
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview what would be deleted without making changes (default: true)"
+                    },
+                    "wing": {
+                        "type": "string",
+                        "description": "Scope to a single wing/project (optional)"
+                    },
+                    "source_pattern": {
+                        "type": "string",
+                        "description": "Filter by source file substring (optional)"
+                    },
+                    "stats_only": {
+                        "type": "boolean",
+                        "description": "Show statistics only, no dedup pass (default: false)"
+                    }
+                },
+                "additionalProperties": false
+            }),
         ),
     ]
 }
@@ -5562,6 +5589,75 @@ fn tool_consolidate(state: &AppState, args: JsonObject) -> Result<CallToolResult
     }
 }
 
+fn tool_dedup(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    #[derive(Deserialize)]
+    struct Input {
+        threshold: Option<f64>,
+        dry_run: Option<bool>,
+        wing: Option<String>,
+        source_pattern: Option<String>,
+        stats_only: Option<bool>,
+    }
+    let input: Input = parse_args(args)?;
+
+    if input.stats_only.unwrap_or(false) {
+        // Stats-only mode: no mutation.
+        let mut db = fresh_db(state)?;
+        let config = crate::dedup::DedupConfig {
+            threshold: input.threshold.unwrap_or(0.15),
+            dry_run: true,
+            wing: input.wing.clone(),
+            source_pattern: input.source_pattern.clone(),
+            min_drawers_to_check: 5,
+        };
+        let stats = crate::dedup::dedup_db(&mut db, &config).map_err(|e| internal_error_safe(&e))?;
+        return ok_json(serde_json::json!({
+            "stats": {
+                "sources_checked": stats.sources_checked,
+                "total_kept": stats.total_kept,
+                "total_deleted": stats.total_deleted,
+                "palace_size_before": stats.palace_size_before,
+                "palace_size_after": stats.palace_size_after,
+            }
+        }));
+    }
+
+    let dry_run = input.dry_run.unwrap_or(true);
+
+    if !dry_run {
+        read_only_guard(state)?;
+    }
+
+    let config = crate::dedup::DedupConfig {
+        threshold: input.threshold.unwrap_or(0.15),
+        dry_run,
+        wing: input.wing.clone(),
+        source_pattern: input.source_pattern.clone(),
+        min_drawers_to_check: 5,
+    };
+
+    let mut db = fresh_db(state).map_err(|e| internal_error_safe(&e))?;
+    let stats = crate::dedup::dedup_db(&mut db, &config).map_err(|e| internal_error_safe(&e))?;
+
+    // Flush to disk if actual deletions occurred.
+    if !dry_run && !stats.deleted_ids.is_empty() {
+        db.flush().map_err(|e| internal_error_safe(&e))?;
+    }
+
+    ok_json(serde_json::json!({
+        "stats": {
+            "sources_checked": stats.sources_checked,
+            "total_kept": stats.total_kept,
+            "total_deleted": stats.total_deleted,
+            "palace_size_before": stats.palace_size_before,
+            "palace_size_after": stats.palace_size_after,
+        },
+        "deleted_ids": stats.deleted_ids,
+        "source_summaries": stats.source_summaries,
+        "dry_run": dry_run,
+    }))
+}
+
 fn tool_snapshot_create(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     read_only_guard(state)?;
     #[derive(Deserialize)]
@@ -8036,6 +8132,7 @@ mod tests {
             "mempalace_hybrid_search",
             "memory_claude_bridge_sync",
             "mempalace_claude_bridge_sync",
+            "mempalace_dedup",
         ];
         assert_eq!(names, expected);
     }

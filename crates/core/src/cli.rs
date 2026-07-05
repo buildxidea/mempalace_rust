@@ -493,6 +493,38 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Deduplicate near-identical drawers using cosine distance.
+    /// Groups drawers by source_file, keeps the longest version,
+    /// deletes the rest. Supports dry-run for preview.
+    Dedup {
+        /// Cosine distance threshold (default: 0.15 = ~85% similarity).
+        /// Lower = stricter (near-identical only). Higher = catches
+        /// paraphrased content (0.3-0.4).
+        #[arg(long, default_value = "0.15")]
+        threshold: f64,
+
+        /// Show stats only — no dedup pass.
+        #[arg(long)]
+        stats: bool,
+
+        /// Preview changes without modifying the palace.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Actually apply deletions. Without this, only a dry-run
+        /// preview is shown.
+        #[arg(long)]
+        apply: bool,
+
+        /// Scope dedup to a single wing/project.
+        #[arg(long)]
+        wing: Option<String>,
+
+        /// Filter by source file substring.
+        #[arg(long)]
+        source: Option<String>,
+    },
+
     /// Remove MemPalace data and config from this machine.
     Remove {
         /// Skip the confirmation prompt.
@@ -2953,6 +2985,81 @@ fn cmd_evolve(palace_arg: Option<&str>, wing: Option<&str>, count: usize) -> Res
     Ok(())
 }
 
+fn cmd_dedup(
+    palace_arg: Option<&str>,
+    threshold: f64,
+    dry_run: bool,
+    wing: Option<&str>,
+    source: Option<&str>,
+) -> Result<()> {
+    let palace_path = resolve_palace_path(palace_arg)?;
+    let config = crate::dedup::DedupConfig {
+        threshold,
+        dry_run,
+        wing: wing.map(|s| s.to_string()),
+        source_pattern: source.map(|s| s.to_string()),
+        min_drawers_to_check: 5,
+    };
+
+    println!();
+    println!("{}", "=".repeat(55));
+    println!("  MemPalace Deduplicator");
+    println!("{}", "=".repeat(55));
+    println!("  Palace: {}", palace_path.display());
+    println!("  Threshold: {}", config.threshold);
+    println!(
+        "  Mode: {}",
+        if config.dry_run {
+            "DRY RUN"
+        } else {
+            "LIVE (deletions will be applied)"
+        }
+    );
+    if let Some(ref w) = config.wing {
+        println!("  Wing: {}", w);
+    }
+    if let Some(ref s) = config.source_pattern {
+        println!("  Source filter: {}", s);
+    }
+    println!("{}", "-".repeat(55));
+
+    let stats = crate::dedup::dedup_palace(Some(palace_path.as_path()), &config)?;
+
+    println!();
+    println!("  Sources checked: {}", stats.sources_checked);
+    println!("  Drawers kept: {}", stats.total_kept);
+    println!("  Drawers deleted: {}", stats.total_deleted);
+    println!(
+        "  Palace: {} -> {} drawers",
+        stats.palace_size_before, stats.palace_size_after
+    );
+    if stats.total_deleted > 0 && !config.dry_run {
+        println!("  [APPLIED] {} drawer(s) permanently removed.", stats.total_deleted);
+    } else if config.dry_run {
+        println!();
+        println!("  [DRY RUN] No changes written. Re-run with --apply to delete.");
+    } else {
+        println!();
+        println!("  No duplicates found at this threshold.");
+    }
+    println!("{}", "=".repeat(55));
+    println!();
+
+    Ok(())
+}
+
+fn cmd_dedup_stats(palace_arg: Option<&str>) -> Result<()> {
+    let palace_path = resolve_palace_path(palace_arg)?;
+    println!("{}", "=".repeat(55));
+    println!("  MemPalace Deduplication Stats");
+    println!("{}", "=".repeat(55));
+    crate::dedup::show_stats(Some(palace_path.as_path()))?;
+    println!();
+    println!("{}", "=".repeat(55));
+    println!();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Output helpers
 // ---------------------------------------------------------------------------
@@ -3289,6 +3396,21 @@ pub fn run() -> Result<()> {
         }
         Commands::Connect { adapter, dry_run } => {
             crate::connect::run(adapter.as_deref(), *dry_run)?;
+        }
+        Commands::Dedup {
+            threshold,
+            stats,
+            dry_run,
+            apply,
+            wing,
+            source,
+        } => {
+            let effective_dry_run = !*apply || *dry_run;
+            if *stats {
+                cmd_dedup_stats(palace_arg)?;
+            } else {
+                cmd_dedup(palace_arg, *threshold, effective_dry_run, wing.as_deref(), source.as_deref())?;
+            }
         }
         Commands::Remove {
             force,

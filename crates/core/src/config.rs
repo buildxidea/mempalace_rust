@@ -140,6 +140,10 @@ fn default_max_cache_size_mb() -> usize {
     128
 }
 
+fn default_daemon_channel_capacity() -> usize {
+    256
+}
+
 fn default_true() -> bool {
     true
 }
@@ -533,15 +537,15 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
-    /// Port for the MCP HTTP transport server (feature `http-server`).
-    /// Default: 3112. Override via `MEMPALACE_MCP_HTTP_PORT` env var.
+    /// `mr-daemon`: enable the in-process daemon for serialized writes.
+    /// When `true`, `mpr daemon start` is required before submit_job_sync
+    /// will queue jobs; when `false` (default), writes are immediate.
     #[serde(default)]
-    pub mcp_http_port: Option<u16>,
-    /// Bearer token for MCP HTTP transport authentication.
-    /// When set, clients must send `Authorization: Bearer <token>`.
-    /// Override via `MEMPALACE_MCP_HTTP_TOKEN` env var.
-    #[serde(default)]
-    pub mcp_http_token: Option<String>,
+    pub daemon_enabled: bool,
+    /// `mr-daemon`: maximum number of jobs that can queue in the daemon
+    /// channel before back-pressure kicks in. Default: 256.
+    #[serde(default = "default_daemon_channel_capacity")]
+    pub daemon_channel_capacity: usize,
 }
 
 #[cfg(unix)]
@@ -648,8 +652,8 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
-            mcp_http_port: None,
-            mcp_http_token: None,
+            daemon_enabled: false,
+            daemon_channel_capacity: default_daemon_channel_capacity(),
         }
     }
 }
@@ -1013,8 +1017,8 @@ mod tests {
             wal_retention_days: None,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
-            mcp_http_port: None,
-            mcp_http_token: None,
+            daemon_enabled: false,
+            daemon_channel_capacity: default_daemon_channel_capacity(),
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1079,8 +1083,8 @@ mod tests {
             wal_retention_days: None,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
-            mcp_http_port: None,
-            mcp_http_token: None,
+            daemon_enabled: false,
+            daemon_channel_capacity: default_daemon_channel_capacity(),
         };
         assert_eq!(
             cfg.tunnel_file(),

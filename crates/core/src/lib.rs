@@ -258,6 +258,13 @@ pub mod connect;
 #[doc(hidden)]
 pub mod background;
 
+// =====================================================================
+// Daemon — serialized write queue (internal)
+// =====================================================================
+
+#[doc(hidden)]
+pub mod daemon;
+
 /// Post-retrieval maintenance engine (issue #35). Runs 7 maintenance
 /// tasks after every search+verify cycle: link discovery, confidence
 /// boost/decay, gap detection, cluster refinement, tag inference, and

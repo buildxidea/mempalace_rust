@@ -639,6 +639,10 @@ pub enum Commands {
         #[arg(long)]
         data: Option<String>,
     },
+
+    /// Manage the in-process write daemon.
+    #[command(subcommand)]
+    Daemon(DaemonAction),
 }
 
 #[derive(Subcommand)]
@@ -709,6 +713,16 @@ pub enum MiningMode {
     Projects,
     Convos,
     Auto,
+}
+
+#[derive(Subcommand, Clone, Debug)]
+pub enum DaemonAction {
+    /// Start the daemon background task.
+    Start,
+    /// Stop the running daemon.
+    Stop,
+    /// Show daemon status.
+    Status,
 }
 
 #[derive(Subcommand, Clone, Debug)]
@@ -3545,6 +3559,9 @@ pub fn run() -> Result<()> {
         } => {
             cmd_hook(hook, session_id, project, cwd, data.as_deref())?;
         }
+        Commands::Daemon(action) => {
+            cmd_daemon(action, palace_arg)?;
+        }
     }
 
     Ok(())
@@ -3650,6 +3667,50 @@ fn cmd_hook(
     }
 
     println!("  Observation captured: {} ({:?})", obs.id, hook_type);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Daemon Command
+// ---------------------------------------------------------------------------
+
+fn cmd_daemon(action: &DaemonAction, palace_arg: Option<&str>) -> Result<()> {
+    match action {
+        DaemonAction::Start => {
+            let palace_path = resolve_palace_path(palace_arg)?;
+            let config = Config::load()?;
+            let capacity = config.daemon_channel_capacity;
+            let handle = crate::daemon::start_daemon(crate::daemon::DaemonConfig {
+                palace_path: palace_path.clone(),
+                channel_capacity: capacity,
+            })?;
+            println!("Daemon started: palace={}", palace_path.display());
+            println!("  channel capacity: {}", capacity);
+            let _ = handle;
+        }
+        DaemonAction::Stop => {
+            let status = crate::daemon::stop_daemon()?;
+            if status.running {
+                println!("Daemon is still running (this should not happen)");
+            } else {
+                println!("Daemon stopped");
+                println!("  processed: {}", status.processed);
+                println!("  errored:   {}", status.errored);
+            }
+        }
+        DaemonAction::Status => {
+            let status = crate::daemon::daemon_status();
+            if status.running {
+                println!("Daemon: running");
+            } else {
+                println!("Daemon: not running");
+            }
+            println!("  palace: {}", status.palace_path);
+            println!("  processed: {}", status.processed);
+            println!("  errored:   {}", status.errored);
+            println!("  queued:    {}", status.queued);
+        }
+    }
     Ok(())
 }
 

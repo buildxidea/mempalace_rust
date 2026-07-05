@@ -471,3 +471,39 @@ fn test_cmd_diagnose_with_fresh_palace() {
         result.err()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Multi-instance port management (mempalace_rust-fqvg)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_serve_instance_parses() {
+    assert!(Cli::try_parse_from(["mpr", "serve", "--instance", "1"]).is_ok());
+}
+
+#[test]
+fn test_cli_serve_instance_zero_parses() {
+    assert!(Cli::try_parse_from(["mpr", "serve", "--instance", "0"]).is_ok());
+}
+
+#[test]
+fn test_cli_serve_instance_max_parses() {
+    assert!(Cli::try_parse_from(["mpr", "serve", "--instance", "50"]).is_ok());
+}
+
+#[test]
+fn test_cli_serve_instance_over_max_fails() {
+    assert!(Cli::try_parse_from(["mpr", "serve", "--instance", "51"]).is_err());
+}
+
+#[test]
+fn test_cli_serve_instance_with_http_parses() {
+    assert!(Cli::try_parse_from(["mpr", "serve", "--http", "--instance", "2"]).is_ok());
+}
+
+#[test]
+fn test_cli_serve_port_and_instance_mutually_exclusive() {
+    // Already tested above, but verify both directions
+    assert!(Cli::try_parse_from(["mpr", "serve", "--instance", "1", "--port", "3333"]).is_err());
+    assert!(Cli::try_parse_from(["mpr", "serve", "--port", "3333", "--instance", "1"]).is_err());
+}

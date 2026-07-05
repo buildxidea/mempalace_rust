@@ -479,7 +479,7 @@ mpr serve --no-background          # disable auto-forget / consolidation tasks
 |--------|-------------|
 | `--http` | Start HTTP REST API server instead of stdio MCP |
 | `--port` | HTTP REST port override (default: `3111`, env: `MEMPALACE_HTTP_PORT`) |
-| `--instance N` | Multi-instance: assigns REST `3111+N*100`, stream `3112+N*100`, engine `49134+N*100` |
+| `--instance N` | Multi-instance: assigns REST `3111+N*100`, stream `3112+N*100`, engine `49134+N*100`. Max 50. Config env: `MEMPALACE_INSTANCE` (default: 0). |
 | `--read-only` | Block all mutations |
 | `--no-background` | Disable background maintenance tasks (auto-forget, consolidation) |
 

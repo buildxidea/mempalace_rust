@@ -1,19 +1,30 @@
 //! fact_checker.rs — Verify text against known facts in the palace.
 //!
-//! Purely offline. No network calls.
-
-#![doc(hidden)]
+//! Checks AI responses, diary entries, and new content against the entity
+//! registry and knowledge graph for three classes of issue:
+//!
+//! * `SimilarName` — text mentions a name that's one/two edits
+//!   away from *another* registered name, raising the possibility of a
+//!   typo or mix-up.
+//! * `RelationshipMismatch` — text asserts a role between two entities
+//!   (e.g. "Bob is Alice's brother") while the KG records a *different*
+//!   current role for the same subject/object pair.
+//! * `StaleFact` — text asserts a fact that the KG marks closed
+//!   (``valid_to`` in the past).
+//!
+//! Purely offline. Inputs: entity_registry JSON + KG SQLite. No network.
 
 use crate::config::Config;
-use crate::knowledge_graph::KnowledgeGraph;
+use crate::knowledge_graph::{EntityQueryResult, KnowledgeGraph};
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::Path;
+use tracing::{debug, info, warn};
 
 pub use self::FactIssueType::*;
 
 /// Fact issues detected in text.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct FactIssue {
     #[serde(rename = "type")]
@@ -33,7 +44,7 @@ pub struct FactIssue {
     pub valid_to: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum FactIssueType {
@@ -42,41 +53,92 @@ pub enum FactIssueType {
     StaleFact,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Claim {
     pub predicate: String,
     pub object: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct KgFact {
     pub predicate: String,
     pub object: String,
 }
 
+/// Structured report of all issues found in text.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FactCheckReport {
+    /// Detected issues (empty = no contradictions found).
+    pub issues: Vec<FactIssue>,
+    /// Number of claims parsed from text.
+    pub claims_checked: usize,
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
 /// Check text for fact contradictions against the entity registry and KG.
-pub fn check_text(text: &str) -> Vec<FactIssue> {
+///
+/// Loads configuration, entity registry, and knowledge graph from disk.
+/// Returns a [`FactCheckReport`] with all detected issues.
+pub fn check_text(text: &str) -> FactCheckReport {
     if text.is_empty() {
-        return Vec::new();
+        return FactCheckReport {
+            issues: Vec::new(),
+            claims_checked: 0,
+        };
     }
 
     let config = match Config::load() {
         Ok(c) => c,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            warn!("Failed to load config for fact check: {}", e);
+            return FactCheckReport {
+                issues: Vec::new(),
+                claims_checked: 0,
+            };
+        }
     };
 
     let mut issues = Vec::new();
-
-    // Load entity registry names
     let entity_names = load_known_entity_names();
     issues.extend(check_entity_confusion(text, &entity_names));
 
-    // Load KG and check contradictions
+    let claims_checked = claims_in_text(text);
     issues.extend(check_kg_contradictions(text, &config.palace_path));
 
-    issues
+    FactCheckReport {
+        issues,
+        claims_checked,
+    }
+}
+
+/// Check text against a pre-loaded knowledge graph (no Config dependency).
+///
+/// Use this when you already have a `KnowledgeGraph` handle (e.g. inside the
+/// MCP server or daemon).  Only checks KG contradictions — does NOT check
+/// entity-name confusion (which requires the entity registry).
+pub fn check_text_with_kg(text: &str, kg: &KnowledgeGraph) -> FactCheckReport {
+    if text.is_empty() {
+        return FactCheckReport {
+            issues: Vec::new(),
+            claims_checked: 0,
+        };
+    }
+
+    let entity_names = load_known_entity_names();
+    let mut issues = Vec::new();
+
+    issues.extend(check_entity_confusion(text, &entity_names));
+
+    let claims_checked = claims_in_text(text);
+    issues.extend(check_claims_against_kg(text, kg));
+
+    FactCheckReport {
+        issues,
+        claims_checked,
+    }
 }
 
 // ── entity-name confusion ────────────────────────────────────────────────────
@@ -111,8 +173,15 @@ fn check_entity_confusion(text: &str, all_names: &HashSet<String>) -> Vec<FactIs
         .collect();
 
     if mentioned.is_empty() {
+        info!("Fact-check: no registered entity names found in text");
         return Vec::new();
     }
+
+    debug!(
+        "Fact-check: {} names mentioned in text, scanning {} registry entries",
+        mentioned.len(),
+        all_names.len()
+    );
 
     let mut issues = Vec::new();
     let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
@@ -139,6 +208,10 @@ fn check_entity_confusion(text: &str, all_names: &HashSet<String>) -> Vec<FactIs
 
             let distance = edit_distance(&a_lower, &name_b.to_lowercase());
             if distance > 0 && distance <= 2 {
+                info!(
+                    "Fact-check: similar name detected: '{}' ~ '{}' (dist={})",
+                    name_a, name_b, distance
+                );
                 issues.push(FactIssue {
                     issue_type: FactIssueType::SimilarName,
                     detail: format!(
@@ -160,10 +233,55 @@ fn check_entity_confusion(text: &str, all_names: &HashSet<String>) -> Vec<FactIs
     issues
 }
 
-// ── KG contradictions ─────────────────────────────────────────────────────────
+// ── KG contradictions ────────────────────────────────────────────────────────
 
-// "Bob is Alice's brother" → subject=Bob, possessor=Alice, role=brother
-// "Alice's brother is Bob" → possessor=Alice, role=brother, subject=Bob
+/// "Bob is Alice's brother" → subject=Bob, possessor=Alice, role=brother
+/// "Alice's brother is Bob" → possessor=Alice, role=brother, subject=Bob
+
+fn get_claim_patterns() -> Vec<Regex> {
+    vec![
+        Regex::new(r"\b([A-Z][\w-]+)\s+is\s+([A-Z][\w-]+)'s\s+([a-z]{3,20})\b").unwrap(),
+        Regex::new(r"\b([A-Z][\w-]+)'s\s+([a-z]{3,20})\s+is\s+([A-Z][\w-]+)\b").unwrap(),
+    ]
+}
+
+#[derive(Debug)]
+struct ParsedClaim {
+    subject: String,
+    predicate: String,
+    object: String,
+    span: String,
+}
+
+fn extract_claims(text: &str) -> Vec<ParsedClaim> {
+    let mut claims = Vec::new();
+    let patterns = get_claim_patterns();
+    for (i, pat) in patterns.iter().enumerate() {
+        for cap in pat.captures_iter(text) {
+            let (_, groups) = cap.extract::<3>();
+            let (subject, possessor, role) = if i == 0 {
+                (groups[0], groups[1], groups[2])
+            } else {
+                (groups[2], groups[0], groups[1])
+            };
+            claims.push(ParsedClaim {
+                subject: subject.to_string(),
+                predicate: role.to_lowercase(),
+                object: possessor.to_string(),
+                span: groups[0].to_string(),
+            });
+        }
+    }
+    claims
+}
+
+fn claims_in_text(text: &str) -> usize {
+    let mut count = 0;
+    for pat in get_claim_patterns() {
+        count += pat.captures_iter(text).count();
+    }
+    count
+}
 
 fn check_kg_contradictions(text: &str, palace_path: &Path) -> Vec<FactIssue> {
     let claims = extract_claims(text);
@@ -176,18 +294,34 @@ fn check_kg_contradictions(text: &str, palace_path: &Path) -> Vec<FactIssue> {
         return Vec::new();
     };
 
-    let mut issues = Vec::new();
-    let now = chrono_now_date();
+    check_claims_against_kg(text, &kg)
+}
 
-    for claim in claims {
-        let Ok(facts) = kg.query_entity(&claim.subject, None, "outgoing") else {
+fn check_claims_against_kg(text: &str, kg: &KnowledgeGraph) -> Vec<FactIssue> {
+    let claims = extract_claims(text);
+    if claims.is_empty() {
+        debug!("Fact-check: no relationship claims found in text");
+        return Vec::new();
+    }
+
+    debug!(
+        "Fact-check: checking {} claims against KG",
+        claims.len()
+    );
+
+    let now = simple_iso_date();
+    let mut issues = Vec::new();
+
+    for claim in &claims {
+        let Ok(facts) = kg.query_entity(&claim.subject, None, None, "outgoing") else {
+            debug!("Fact-check: KG lookup failed for subject '{}'", claim.subject);
             continue;
         };
         if facts.is_empty() {
             continue;
         }
 
-        let current_facts: Vec<_> = facts.iter().filter(|f| f.current).collect();
+        let current_facts: Vec<&EntityQueryResult> = facts.iter().filter(|f| f.current).collect();
 
         // Mismatch: same (subject, object) pair but different predicate
         for fact in &current_facts {
@@ -197,6 +331,10 @@ fn check_kg_contradictions(text: &str, palace_path: &Path) -> Vec<FactIssue> {
             }
             let kg_pred = fact.predicate.to_lowercase();
             if !kg_pred.is_empty() && kg_pred != claim.predicate {
+                warn!(
+                    "Fact-check: relationship mismatch: text says '{}' but KG records {} {} {}",
+                    claim.span, claim.subject, kg_pred, kg_obj
+                );
                 issues.push(FactIssue {
                     issue_type: FactIssueType::RelationshipMismatch,
                     detail: format!(
@@ -231,12 +369,17 @@ fn check_kg_contradictions(text: &str, palace_path: &Path) -> Vec<FactIssue> {
             if !objects_match(&fact.object, &claim.object) {
                 continue;
             }
-            // Skip facts superseded in transaction_time (t_expired = Some means a newer correction replaced this fact)
+            // Skip facts superseded in transaction_time (t_expired = Some means a newer
+            // correction replaced this fact)
             if fact.t_expired.is_some() {
                 continue;
             }
             if let Some(valid_to) = &fact.valid_to {
                 if valid_to.as_str() < now.as_str() {
+                    info!(
+                        "Fact-check: stale fact: text says '{}' but KG marks closed on {}",
+                        claim.span, valid_to
+                    );
                     issues.push(FactIssue {
                         issue_type: FactIssueType::StaleFact,
                         detail: format!(
@@ -258,42 +401,6 @@ fn check_kg_contradictions(text: &str, palace_path: &Path) -> Vec<FactIssue> {
     issues
 }
 
-struct ParsedClaim {
-    subject: String,
-    predicate: String,
-    object: String,
-    span: String,
-}
-
-fn get_claim_patterns() -> Vec<Regex> {
-    vec![
-        Regex::new(r"\b([A-Z][\w-]+)\s+is\s+([A-Z][\w-]+)'s\s+([a-z]{3,20})\b").unwrap(),
-        Regex::new(r"\b([A-Z][\w-]+)'s\s+([a-z]{3,20})\s+is\s+([A-Z][\w-]+)\b").unwrap(),
-    ]
-}
-
-fn extract_claims(text: &str) -> Vec<ParsedClaim> {
-    let mut claims = Vec::new();
-    let patterns = get_claim_patterns();
-    for (i, pat) in patterns.iter().enumerate() {
-        for cap in pat.captures_iter(text) {
-            let (_, groups) = cap.extract::<3>();
-            let (subject, possessor, role) = if i == 0 {
-                (groups[0], groups[1], groups[2])
-            } else {
-                (groups[2], groups[0], groups[1])
-            };
-            claims.push(ParsedClaim {
-                subject: subject.to_string(),
-                predicate: role.to_lowercase(),
-                object: possessor.to_string(),
-                span: groups[0].to_string(),
-            });
-        }
-    }
-    claims
-}
-
 fn objects_match(kg_obj: &str, claim_obj: &str) -> bool {
     if kg_obj.is_empty() || claim_obj.is_empty() {
         return false;
@@ -301,8 +408,9 @@ fn objects_match(kg_obj: &str, claim_obj: &str) -> bool {
     kg_obj.trim().eq_ignore_ascii_case(claim_obj.trim())
 }
 
-#[allow(clippy::manual_is_multiple_of)]
-fn chrono_now_date() -> String {
+// ── Date helper ──────────────────────────────────────────────────────────────
+
+fn simple_iso_date() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap();
@@ -365,16 +473,43 @@ fn edit_distance(s1: &str, s2: &str) -> usize {
 mod tests {
     use super::*;
 
+    // ── edit_distance ─────────────────────────────────────────────────────
+
     #[test]
-    fn test_edit_distance() {
+    fn test_edit_distance_identical() {
         assert_eq!(edit_distance("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn test_edit_distance_one_change() {
         assert_eq!(edit_distance("hello", "hallo"), 1);
+    }
+
+    #[test]
+    fn test_edit_distance_one_delete() {
         assert_eq!(edit_distance("hello", "helo"), 1);
+    }
+
+    #[test]
+    fn test_edit_distance_transpose() {
+        // "kitten" -> "sitten" (sub) -> "sittin" (sub) -> "sitting" (ins)
         assert_eq!(edit_distance("kitten", "sitting"), 3);
     }
 
     #[test]
-    fn test_extract_claims() {
+    fn test_edit_distance_empty_s1() {
+        assert_eq!(edit_distance("", "abc"), 3);
+    }
+
+    #[test]
+    fn test_edit_distance_empty_s2() {
+        assert_eq!(edit_distance("abc", ""), 3);
+    }
+
+    // ── claim extraction ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_claims_bob_is_alices_brother() {
         let claims = extract_claims("Bob is Alice's brother");
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0].subject, "Bob");
@@ -383,15 +518,197 @@ mod tests {
     }
 
     #[test]
-    fn test_objects_match() {
-        assert!(objects_match("Alice", "alice"));
-        assert!(objects_match("Alice", "Alice"));
-        assert!(!objects_match("", "Alice"));
+    fn test_extract_claims_alices_brother_is_bob() {
+        let claims = extract_claims("Alice's brother is Bob");
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].subject, "Bob");
+        assert_eq!(claims[0].predicate, "brother");
+        assert_eq!(claims[0].object, "Alice");
     }
 
     #[test]
+    fn test_extract_claims_no_match() {
+        let claims = extract_claims("Alice went to the store");
+        assert!(claims.is_empty());
+    }
+
+    #[test]
+    fn test_extract_claims_multiple() {
+        let claims =
+            extract_claims("Bob is Alice's brother. Charlie is Dave's cousin.");
+        assert_eq!(claims.len(), 2);
+        assert_eq!(claims[0].subject, "Bob");
+        assert_eq!(claims[1].subject, "Charlie");
+    }
+
+    #[test]
+    fn test_claims_in_text() {
+        assert_eq!(claims_in_text("Bob is Alice's brother"), 1);
+        assert_eq!(claims_in_text("no claims here"), 0);
+        assert_eq!(claims_in_text(""), 0);
+    }
+
+    // ── objects_match ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_objects_match_identical() {
+        assert!(objects_match("Alice", "Alice"));
+    }
+
+    #[test]
+    fn test_objects_match_case_insensitive() {
+        assert!(objects_match("Alice", "alice"));
+    }
+
+    #[test]
+    fn test_objects_match_empty() {
+        assert!(!objects_match("", "Alice"));
+        assert!(!objects_match("Alice", ""));
+    }
+
+    #[test]
+    fn test_objects_match_trimmed() {
+        assert!(objects_match("  Alice  ", "alice"));
+    }
+
+    // ── simple_iso_date ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_simple_iso_date_format() {
+        let date = simple_iso_date();
+        assert_eq!(date.len(), 10, "expected YYYY-MM-DD format, got: {}", date);
+        // Ensure it's a parseable date
+        assert_eq!(date.as_bytes()[4], b'-');
+        assert_eq!(date.as_bytes()[7], b'-');
+    }
+
+    // ── check_text (no-config path) ───────────────────────────────────────
+
+    #[test]
     fn test_check_text_empty() {
-        let result = check_text("");
-        assert!(result.is_empty());
+        let report = check_text("");
+        assert!(report.issues.is_empty());
+        assert_eq!(report.claims_checked, 0);
+    }
+
+    #[test]
+    fn test_check_text_with_kg_empty() {
+        // Can't create a real KG without a DB, but we can test the empty-text
+        // short-circuit.
+        let report = check_text_with_kg("", &KnowledgeGraph::open(std::path::Path::new(
+            ":memory:",
+        ))
+        .unwrap());
+        assert!(report.issues.is_empty());
+        assert_eq!(report.claims_checked, 0);
+    }
+
+    // ── entity confusion (unit-tested via check_entity_confusion) ────────
+
+    #[test]
+    fn test_entity_confusion_empty_names() {
+        let names = HashSet::new();
+        let issues = check_entity_confusion("Alice is here", &names);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_entity_confusion_no_mentioned() {
+        let mut names = HashSet::new();
+        names.insert("Bob".to_string());
+        // "Alice" not in the set
+        let issues = check_entity_confusion("Alice is here", &names);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_entity_confusion_too_many_edits() {
+        let mut names = HashSet::new();
+        names.insert("Alexander".to_string());
+        // "Alice" is > 2 edits from "Alexander"
+        let issues = check_entity_confusion("Alice is here", &names);
+        assert!(issues.is_empty());
+    }
+
+    // ── edit distance boundary ────────────────────────────────────────────
+
+    #[test]
+    fn test_edit_distance_one_vs_two() {
+        // "Jon" -> "John" = 1 edit (insert h)
+        assert_eq!(edit_distance("jon", "john"), 1);
+        // "Jon" -> "Joan" = 1 edit (delete a)
+        assert_eq!(edit_distance("jon", "joan"), 1);
+        // "Jon" -> "Jones" = 2 edits (insert e, insert s)
+        // "jon" (3 chars) -> "jones" (5 chars): insert 'e', insert 's'
+        assert_eq!(edit_distance("jon", "jones"), 2);
+    }
+
+    // ── serialization ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_fact_issue_serialization() {
+        let issue = FactIssue {
+            issue_type: FactIssueType::SimilarName,
+            detail: "test".to_string(),
+            names: Some(vec!["Alice".into(), "Alicia".into()]),
+            distance: Some(1),
+            entity: None,
+            claim: None,
+            kg_fact: None,
+            valid_to: None,
+        };
+        let json = serde_json::to_value(&issue).unwrap();
+        assert_eq!(json["type"], "similar_name");
+        assert_eq!(json["names"][0], "Alice");
+        assert_eq!(json["distance"], 1);
+    }
+
+    #[test]
+    fn test_fact_issue_type_serialization() {
+        assert_eq!(
+            serde_json::to_value(FactIssueType::SimilarName).unwrap(),
+            "similar_name"
+        );
+        assert_eq!(
+            serde_json::to_value(FactIssueType::RelationshipMismatch).unwrap(),
+            "relationship_mismatch"
+        );
+        assert_eq!(
+            serde_json::to_value(FactIssueType::StaleFact).unwrap(),
+            "stale_fact"
+        );
+    }
+
+    #[test]
+    fn test_report_serialization() {
+        let report = FactCheckReport {
+            issues: Vec::new(),
+            claims_checked: 0,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json["issues"].as_array().unwrap().is_empty());
+        assert_eq!(json["claims_checked"], 0);
+    }
+
+    #[test]
+    fn test_report_with_issues() {
+        let report = FactCheckReport {
+            issues: vec![FactIssue {
+                issue_type: FactIssueType::StaleFact,
+                detail: "old fact".to_string(),
+                names: None,
+                distance: None,
+                entity: Some("Bob".to_string()),
+                claim: None,
+                kg_fact: None,
+                valid_to: Some("2025-01-01".to_string()),
+            }],
+            claims_checked: 1,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["issues"].as_array().unwrap().len(), 1);
+        assert_eq!(json["issues"][0]["type"], "stale_fact");
+        assert_eq!(json["issues"][0]["entity"], "Bob");
+        assert_eq!(json["claims_checked"], 1);
     }
 }

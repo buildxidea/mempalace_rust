@@ -46,6 +46,9 @@ rerank = []
 llm-sidecar = []
 full = ["llm-openai", "llm-anthropic", "vision", "rerank"]
 health = ["dep:sysinfo"]
+# Source adapter subsystem (RFC 002). Enables the SourceAdapter trait,
+# AdapterRegistry, and MCP/CLI tools for external data ingestion.
+source-adapter = []
 # HTTP REST API server (axum-based, `mpr serve --http`).
 http-server = ["dep:axum", "dep:tower-http"]
 

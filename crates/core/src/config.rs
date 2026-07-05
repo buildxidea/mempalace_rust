@@ -533,6 +533,20 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+
+    // ------------------------------------------------------------------
+    // Source adapter subsystem (RFC 002)
+    // ------------------------------------------------------------------
+
+    /// Enable the source adapter subsystem. When `false` (default),
+    /// adapter discovery and ingestion are short-circuited.
+    #[serde(default)]
+    pub sources_enabled: bool,
+
+    /// Name of the adapter to use when no adapter is explicitly
+    /// specified (e.g. `"obsidian"`, `"github_issues"`).
+    #[serde(default)]
+    pub default_source_adapter: Option<String>,
 }
 
 #[cfg(unix)]
@@ -639,6 +653,8 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            sources_enabled: false,
+            default_source_adapter: None,
         }
     }
 }
@@ -994,6 +1010,8 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            sources_enabled: false,
+            default_source_adapter: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1057,6 +1075,8 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            sources_enabled: false,
+            default_source_adapter: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

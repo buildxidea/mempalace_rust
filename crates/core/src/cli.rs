@@ -583,6 +583,10 @@ pub enum Commands {
         #[arg(long)]
         data: Option<String>,
     },
+
+    /// Manage source adapters (RFC 002).
+    #[command(subcommand)]
+    Sources(SourceCommands),
 }
 
 #[derive(Subcommand)]
@@ -591,6 +595,30 @@ pub enum ConfigCommands {
     Show,
     /// Print the configuration file path.
     Path,
+}
+
+#[derive(Subcommand)]
+pub enum SourceCommands {
+    /// List all registered source adapters.
+    List,
+    /// Show schema for a source adapter.
+    Schema {
+        /// Adapter name
+        adapter: String,
+    },
+    /// Discover items from a source adapter.
+    Discover {
+        /// Adapter name
+        adapter: String,
+    },
+    /// Ingest records from a source adapter.
+    Ingest {
+        /// Adapter name
+        adapter: String,
+        /// Max records to ingest (default: all discovered)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -3279,6 +3307,9 @@ pub fn run() -> Result<()> {
         } => {
             cmd_hook(hook, session_id, project, cwd, data.as_deref())?;
         }
+        Commands::Sources(ref source_cmd) => {
+            cmd_sources(source_cmd)?;
+        }
     }
 
     Ok(())
@@ -3333,6 +3364,114 @@ fn cmd_hook(
     }
 
     println!("  Observation captured: {} ({:?})", obs.id, hook_type);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Source Adapter Commands (RFC 002)
+// ---------------------------------------------------------------------------
+
+fn cmd_sources(cmd: &SourceCommands) -> Result<()> {
+    let registry = crate::sources::global_registry();
+
+    match cmd {
+        SourceCommands::List => {
+            let schemas = registry.list_schemas();
+            if schemas.is_empty() {
+                println!("  No source adapters registered.");
+                println!("  Adapters are registered by external crates implementing the SourceAdapter trait.");
+                println!("  See RFC 002 for details on building a custom adapter.");
+                return Ok(());
+            }
+            println!("  Registered source adapters ({}):", schemas.len());
+            for schema in &schemas {
+                println!();
+                println!("    {}", schema.name);
+                println!("      Version:  {}", schema.version);
+                if let Some(ref desc) = schema.description {
+                    println!("      About:    {}", desc);
+                }
+                println!("      Fields:   {}", schema.fields.len());
+                println!("      Required: {}", schema.required.len());
+            }
+        }
+        SourceCommands::Schema { adapter } => {
+            let adapter_arc = registry.get_adapter(adapter).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "adapter '{}' not found. Use 'mpr sources list' to see available adapters.",
+                    adapter
+                )
+            })?;
+            let schema = adapter_arc.schema();
+            let caps = adapter_arc.capabilities();
+            println!("  Adapter:   {}", schema.name);
+            println!("  Version:   {}", schema.version);
+            if let Some(ref desc) = schema.description {
+                println!("  About:     {}", desc);
+            }
+            println!("  Capabilities:");
+            println!("    discover:  {}", caps.discover);
+            println!("    ingest:    {}", caps.ingest);
+            println!("    transform: {}", caps.transform);
+            println!("  Fields:");
+            for (name, ty) in &schema.fields {
+                let required = if schema.required.contains(name) {
+                    " (required)"
+                } else {
+                    ""
+                };
+                println!("    {}: {}{}", name, ty, required);
+            }
+        }
+        SourceCommands::Discover { adapter } => {
+            let adapter_arc = registry.get_adapter(adapter).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "adapter '{}' not found. Use 'mpr sources list' to see available adapters.",
+                    adapter
+                )
+            })?;
+            let rt = runtime();
+            let items = rt.block_on(adapter_arc.discover())?;
+            println!("  Discovered {} items from '{}' :", items.len(), adapter);
+            for item in &items {
+                let loc = item
+                    .location
+                    .as_deref()
+                    .unwrap_or("(no location)");
+                println!("    {} — {}", item.id, loc);
+            }
+        }
+        SourceCommands::Ingest { adapter, limit } => {
+            let adapter_arc = registry.get_adapter(adapter).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "adapter '{}' not found. Use 'mpr sources list' to see available adapters.",
+                    adapter
+                )
+            })?;
+            let rt = runtime();
+            let records = rt.block_on(async {
+                let items = adapter_arc.discover().await.map_err(|e| {
+                    anyhow::anyhow!("discovery failed: {}", e)
+                })?;
+                let limited = if let Some(lim) = limit {
+                    &items[..items.len().min(*lim)]
+                } else {
+                    &items
+                };
+                adapter_arc.ingest(limited).await.map_err(|e| {
+                    anyhow::anyhow!("ingestion failed: {}", e)
+                })
+            })?;
+            println!(
+                "  Ingested {} records from '{}':",
+                records.len(),
+                adapter_arc.name()
+            );
+            for record in &records {
+                println!("    {} ({})", record.record_id, record.timestamp);
+            }
+        }
+    }
     Ok(())
 }
 

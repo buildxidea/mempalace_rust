@@ -45,6 +45,9 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo clippy --all-targets
 
+      - name: Build
+        run: cargo build --workspace
+
       - name: Test (all features)
         if: runner.os != 'Windows'
         run: cargo test --workspace --all-features

@@ -50,6 +50,9 @@ pub use builder::PalaceBuilder;
 pub use store::embedvec::EmbedvecStore;
 pub use store::StoreTier;
 
+#[cfg(feature = "backend-pgvector")]
+pub use store::pgvector::{PgvectorConfig, PgvectorIndexType, PgvectorStore};
+
 // ---------------------------------------------------------------------------
 // Public types (mirroring the §3 Concrete API Sketch)
 // ---------------------------------------------------------------------------

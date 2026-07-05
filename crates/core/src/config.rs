@@ -533,6 +533,15 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+    /// Port for the MCP HTTP transport server (feature `http-server`).
+    /// Default: 3112. Override via `MEMPALACE_MCP_HTTP_PORT` env var.
+    #[serde(default)]
+    pub mcp_http_port: Option<u16>,
+    /// Bearer token for MCP HTTP transport authentication.
+    /// When set, clients must send `Authorization: Bearer <token>`.
+    /// Override via `MEMPALACE_MCP_HTTP_TOKEN` env var.
+    #[serde(default)]
+    pub mcp_http_token: Option<String>,
 }
 
 #[cfg(unix)]
@@ -639,6 +648,8 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            mcp_http_port: None,
+            mcp_http_token: None,
         }
     }
 }
@@ -994,6 +1005,8 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            mcp_http_port: None,
+            mcp_http_token: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1057,6 +1070,8 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            mcp_http_port: None,
+            mcp_http_token: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

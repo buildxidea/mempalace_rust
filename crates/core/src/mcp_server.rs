@@ -595,7 +595,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-fn make_tools() -> Vec<rmcp::model::Tool> {
+pub(crate) fn make_tools() -> Vec<rmcp::model::Tool> {
     use std::sync::Arc;
     fn tool(
         name: &'static str,
@@ -6726,7 +6726,7 @@ pub fn run_server(palace_override: Option<&str>, read_only: bool) -> anyhow::Res
     Ok(())
 }
 
-fn resolve_palace_override(raw: &str) -> std::path::PathBuf {
+pub(crate) fn resolve_palace_override(raw: &str) -> std::path::PathBuf {
     if let Some(rest) = raw.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
             return std::path::PathBuf::from(home).join(rest);

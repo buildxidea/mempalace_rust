@@ -396,6 +396,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "mempalace_verify" => tool_verify(&state, args),
                 "mempalace_governance_delete" => tool_governance_delete(&state, args),
                 "mempalace_obsidian_export" => tool_obsidian_export(&state, args),
+                "mempalace_export" => tool_mempalace_export(&state, args),
                 "mempalace_compress_file" => tool_compress_file(&state, args),
                 "mempalace_detect_worktree" => tool_detect_worktree(&state, args),
                 "mempalace_replay_import" => tool_replay_import(&state, args),
@@ -775,6 +776,12 @@ fn make_tools() -> Vec<rmcp::model::Tool> {
             "Obsidian Export",
             "Export memories or observations to an Obsidian-compatible markdown vault.",
             serde_json::json!({ "type": "object", "properties": { "export_type": { "type": "string", "description": "What to export: 'memories' or 'observations'" }, "output_dir": { "type": "string", "description": "Output directory for exported markdown files (default: ./memory-export)" }, "include_frontmatter": { "type": "boolean", "description": "Include YAML frontmatter in exported files (default: true)" }, "include_tags": { "type": "boolean", "description": "Include tags in exported files (default: true)" } }, "required": ["export_type"] }),
+        ),
+        tool(
+            "mempalace_export",
+            "Export Palace",
+            "Export the palace to a browsable directory of Markdown files (index.md + wing/room.md). Returns wing count, room count, and drawer count.",
+            serde_json::json!({ "type": "object", "properties": { "output_dir": { "type": "string", "description": "Output directory for exported markdown files (default: ./export)" }, "wing": { "type": "string", "description": "Filter to a single wing (optional)" } } }),
         ),
         tool(
             "mempalace_compress_file",
@@ -2745,6 +2752,39 @@ fn tool_obsidian_export(state: &AppState, args: JsonObject) -> Result<CallToolRe
         "exported_count": export_result.exported_count,
         "output_dir": export_result.output_dir,
         "files": export_result.files,
+    }))
+}
+
+fn tool_mempalace_export(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    read_only_guard(state)?;
+    #[derive(Deserialize)]
+    struct Input {
+        output_dir: Option<String>,
+        wing: Option<String>,
+    }
+    let input: Input = parse_args(args)?;
+
+    let output_dir = input
+        .output_dir
+        .unwrap_or_else(|| {
+            // Fall back to config, then ./export
+            crate::Config::load()
+                .ok()
+                .and_then(|c| c.export_output_dir)
+                .unwrap_or_else(|| "./export".to_string())
+        });
+
+    let output_path = std::path::PathBuf::from(&output_dir);
+    let palace_path = &state.config.palace_path;
+
+    let stats = crate::export::export_markdown(palace_path, &output_path, input.wing.as_deref())
+        .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({
+        "wings": stats.wings,
+        "rooms": stats.rooms,
+        "drawers": stats.drawers,
+        "output_dir": output_dir,
     }))
 }
 
@@ -7902,6 +7942,7 @@ mod tests {
             "mempalace_verify",
             "mempalace_governance_delete",
             "mempalace_obsidian_export",
+            "mempalace_export",
             "mempalace_compress_file",
             "mempalace_detect_worktree",
             "mempalace_replay_import",

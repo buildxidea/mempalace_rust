@@ -327,12 +327,19 @@ pub enum Commands {
 
     /// Export the palace to a directory of Markdown files (Obsidian-compatible).
     Export {
-        /// Output directory for the exported vault.
-        output_dir: PathBuf,
+        /// Output directory for the exported vault. Defaults to config
+        /// `export_output_dir` or `./export`.
+        #[arg(long)]
+        output: Option<PathBuf>,
 
-        /// Export format: "basic-memory" (Markdown/Obsidian, default) or "markdown".
+        /// Export format: "basic-memory" (Markdown/Obsidian, default), "markdown",
+        /// or "streaming" (wing/room grouped SQLite streaming export).
         #[arg(long, default_value = "basic-memory")]
         format: String,
+
+        /// Filter to a single wing when using the streaming export format.
+        #[arg(long)]
+        wing: Option<String>,
     },
 
     /// Consolidate memories using consolidation pipeline.
@@ -3150,18 +3157,45 @@ pub fn run() -> Result<()> {
             }
         }
         Commands::Sweep { target, palace } => cmd_sweep(target, palace.as_deref())?,
-        Commands::Export { output_dir, format } => {
-            let output = std::path::PathBuf::from(&output_dir);
+        Commands::Export { output, format, wing } => {
             let format = format.as_str();
-            if format == "basic-memory" || format == "markdown" {
-                if let Some(ref p) = palace_arg {
-                    let path = std::path::PathBuf::from(p);
-                    crate::exporter::export_palace(Some(path.as_path()), &output)?;
-                } else {
-                    crate::exporter::export_palace(None, &output)?;
+            match format {
+                "basic-memory" | "markdown" => {
+                    let output_dir = output.clone().or_else(|| {
+                        // Fall back to config or ./export
+                        Config::load()
+                            .ok()
+                            .and_then(|c| c.export_output_dir)
+                            .map(std::path::PathBuf::from)
+                    }).unwrap_or_else(|| std::path::PathBuf::from("./export"));
+
+                    if let Some(ref p) = palace_arg {
+                        let path = std::path::PathBuf::from(p);
+                        crate::exporter::export_palace(Some(path.as_path()), &output_dir)?;
+                    } else {
+                        crate::exporter::export_palace(None, &output_dir)?;
+                    }
                 }
-            } else {
-                anyhow::bail!("unknown export format '{format}': use 'basic-memory' or 'markdown'");
+                "streaming" => {
+                    let output_dir = output.clone().or_else(|| {
+                        Config::load()
+                            .ok()
+                            .and_then(|c| c.export_output_dir)
+                            .map(std::path::PathBuf::from)
+                    }).unwrap_or_else(|| std::path::PathBuf::from("./export"));
+
+                    let palace_path = resolve_palace_path(palace_arg)?;
+                    crate::export::export_markdown(
+                        &palace_path,
+                        &output_dir,
+                        wing.as_deref(),
+                    )?;
+                }
+                _ => {
+                    anyhow::bail!(
+                        "unknown export format '{format}': use 'basic-memory', 'markdown', or 'streaming'"
+                    );
+                }
             }
         }
         Commands::Consolidate {

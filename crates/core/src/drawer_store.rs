@@ -418,6 +418,57 @@ impl DrawerStore {
         Ok(rows)
     }
 
+    /// Get all drawers with full column data for export.
+    ///
+    /// Returns `(id, content, wing, room, source_file, filed_at)` tuples,
+    /// optionally filtered by wing. Ordered by `wing, room, filed_at`.
+    /// Used by the streaming Markdown exporter.
+    pub fn get_all_for_export(
+        &self,
+        wing: Option<&str>,
+    ) -> Result<Vec<(String, String, String, String, Option<String>, String)>> {
+        let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(w) = wing {
+            (
+                "SELECT id, content, wing, room, source_file, filed_at
+                 FROM drawers
+                 WHERE wing = ?1
+                 ORDER BY wing, room, filed_at"
+                    .to_string(),
+                vec![Box::new(w.to_string())],
+            )
+        } else {
+            (
+                "SELECT id, content, wing, room, source_file, filed_at
+                 FROM drawers
+                 ORDER BY wing, room, filed_at"
+                    .to_string(),
+                vec![],
+            )
+        };
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let guard = self.conn.lock().expect("conn");
+        let mut stmt = guard.prepare(&sql)?;
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
     /// Streaming export: iterate all drawers grouped by source_file,
     /// writing one output file per source_file.
     ///

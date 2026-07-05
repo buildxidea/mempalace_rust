@@ -533,6 +533,11 @@ pub struct Config {
     /// path) short-circuits. Honors `MEMPALACE_HOOKS_AUTO_SAVE=false`.
     #[serde(default = "default_true")]
     pub hooks_auto_save: bool,
+    /// Default output directory for `mpr export`. When set, the CLI uses
+    /// this path unless `--output` is provided. Env override:
+    /// `MEMPALACE_EXPORT_OUTPUT_DIR`.
+    #[serde(default)]
+    pub export_output_dir: Option<String>,
 }
 
 #[cfg(unix)]
@@ -639,6 +644,7 @@ impl Default for Config {
             max_backups: None,
             hooks_auto_save: true,
             embedder_identity_strict: true,
+            export_output_dir: None,
         }
     }
 }
@@ -994,6 +1000,7 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            export_output_dir: None,
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1057,6 +1064,7 @@ mod tests {
             hooks_auto_save: true,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            export_output_dir: None,
         };
         assert_eq!(
             cfg.tunnel_file(),

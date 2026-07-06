@@ -26,6 +26,11 @@ const MAX_EDIT_DISTANCE: usize = 3;
 const DEFAULT_MAX_SUGGESTIONS: usize = 5;
 const DICT_CAPACITY: usize = 8000;
 
+/// English contraction suffixes to strip before dictionary lookup so that
+/// "What's" (base "What"), "don't" (base "don"), etc. are not spuriously
+/// "corrected" by the spellchecker.
+const CONTRACTIONS: &[&str] = &["'s", "'t", "'re", "'ve", "'ll", "'m", "'d"];
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -172,10 +177,26 @@ pub fn spellcheck(text: &str, config: &SpellcheckConfig) -> SpellcheckResult {
             continue;
         }
 
-        let lower = token.to_lowercase();
+        // Strip common trailing punctuation so "Rust?", "Hello,", etc.
+        // still match the dictionary lookup. Also handle common English
+        // contractions: strip "'s", "'t", "'re", "'ve", "'ll", "'m", "'d"
+        // and check if the base form is in the dictionary.
+        let stripped = token.trim_end_matches(|c: char| c.is_ascii_punctuation());
+        let base = CONTRACTIONS.iter().fold(stripped, |acc, suffix| {
+            let l = acc.to_lowercase();
+            if l.ends_with(suffix) {
+                &acc[..acc.len() - suffix.len()]
+            } else {
+                acc
+            }
+        });
+        let base = base.trim_end_matches(|c: char| c.is_ascii_punctuation());
+        let lower = base.to_lowercase();
 
         // Skip if already in dictionary (or looks like a known name/technical term)
-        if dict.contains(&lower) || should_skip(token) {
+        let skip = dict.contains(&lower) || should_skip(stripped);
+        // Drop borrow so we can use token again below
+        if skip {
             corrected_tokens.push(token.to_string());
             token_corrections.push(TokenCorrection {
                 original: token.to_string(),
@@ -3216,6 +3237,8 @@ const PALACE_TERMS: &[&str] = &[
     "datadog",
     "datasette",
     "dbpedia",
+    "debug",
+    "debugging",
     "deno",
     "deployment",
     "devops",

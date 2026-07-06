@@ -283,7 +283,6 @@ const MUTATION_TOOLS: &[&str] = &[
     "mempalace_mesh_sync",
     "mempalace_team_share",
     "mempalace_consolidate",
-    "mempalace_dedup",
     "mempalace_snapshot_create",
     "mempalace_kg_snapshot_rebuild",
     "mempalace_kg_reset",
@@ -8323,10 +8322,10 @@ mod tests {
             "mempalace_hybrid_search",
             "memory_claude_bridge_sync",
             "mempalace_claude_bridge_sync",
-            // Source adapter tools (RFC 002)
-            "mempalace_source_list",
-            "mempalace_source_ingest",
-            "mempalace_source_schema",
+            // Eval quality tools
+            "mempalace_eval_record",
+            "mempalace_eval_summary",
+            "mempalace_eval_check",
         ];
         assert_eq!(names, expected);
     }

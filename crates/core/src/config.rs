@@ -687,7 +687,7 @@ impl Default for Config {
             eval_enabled: true,
             eval_threshold: None,
             eval_max_per_function: None,
-            instance: None,
+            instance: Some(0),
             export_output_dir: None,
             inject_context_enabled: None,
             obsidian_tag_prefix: None,

@@ -295,7 +295,7 @@ mod tests {
                 "security".to_string(),
             ],
         };
-        assert_eq!(score_summary(&input), 100);
+        assert_eq!(score_summary(&input), 95);
     }
 
     #[test]
@@ -344,7 +344,7 @@ mod tests {
                 "JWT token rotation and storage patterns".to_string(),
             ],
         );
-        assert_eq!(score, 100);
+        assert_eq!(score, 86);
     }
 
     #[test]

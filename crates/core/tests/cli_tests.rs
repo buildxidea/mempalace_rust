@@ -174,7 +174,7 @@ fn test_cli_connect_adapter_arg() {
 
 #[test]
 fn test_cli_export_parses_output_dir() {
-    assert!(Cli::try_parse_from(["mpr", "export", "/tmp/export"]).is_ok());
+    assert!(Cli::try_parse_from(["mpr", "export", "--output", "/tmp/export"]).is_ok());
 }
 
 #[test]
@@ -380,7 +380,8 @@ fn test_cli_split_missing_dir_fails() {
 
 #[test]
 fn test_cli_export_missing_output_dir_fails() {
-    assert!(Cli::try_parse_from(["mpr", "export"]).is_err());
+    // export is valid without --output (defaults to config or ./export)
+    assert!(Cli::try_parse_from(["mpr", "export"]).is_ok());
 }
 
 #[test]

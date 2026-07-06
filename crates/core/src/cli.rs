@@ -3711,7 +3711,12 @@ pub fn run() -> Result<()> {
             max_suggestions,
             json,
         } => {
-            cmd_spellcheck(&text.join(" "), max_edit.unwrap_or(2), max_suggestions.unwrap_or(5), *json)?;
+            cmd_spellcheck(
+                &text.join(" "),
+                max_edit.unwrap_or(2),
+                max_suggestions.unwrap_or(5),
+                *json,
+            )?;
         }
         Commands::Hook {
             hook,

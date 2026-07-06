@@ -168,7 +168,7 @@ impl ContextInjector {
     /// budget, or an empty string if injection is disabled.
     pub fn build_context(&self, tool_name: &str, tool_params: &str) -> String {
         // Injection is enabled if env var is set OR config field is true.
-        let enabled = is_context_injection_enabled() || self.state.config.inject_context_enabled;
+        let enabled = is_context_injection_enabled() || self.state.config.inject_context_enabled.unwrap_or(false);
         if !enabled || is_sdk_child_context() {
             return String::new();
         }

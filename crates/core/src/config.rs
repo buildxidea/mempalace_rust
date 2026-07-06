@@ -549,6 +549,35 @@ pub struct Config {
     /// Honors `MEMPALACE_EVAL_MAX_PER_FUNCTION`.
     #[serde(default)]
     pub eval_max_per_function: Option<usize>,
+
+    /// Multi-instance port management (0-50). When set, offsets REST/MCP
+    /// ports by `instance * 10` to allow multiple mempalace servers.
+    #[serde(default)]
+    pub instance: Option<usize>,
+
+    /// Default output directory for the markdown exporter.
+    #[serde(default)]
+    pub export_output_dir: Option<String>,
+
+    /// When true, inject context into MCP tool calls.
+    #[serde(default)]
+    pub inject_context_enabled: Option<bool>,
+
+    /// Obsidian export: tag prefix (default "mempalace/").
+    #[serde(default)]
+    pub obsidian_tag_prefix: Option<String>,
+
+    /// Obsidian export: date format string (default "%Y-%m-%d %H:%M").
+    #[serde(default)]
+    pub obsidian_date_format: Option<String>,
+
+    /// Obsidian export: output directory (default "./memory-export").
+    #[serde(default)]
+    pub obsidian_export_dir: Option<String>,
+
+    /// WAL audit trail: days to retain entries (default 90).
+    #[serde(default)]
+    pub wal_retention_days: Option<usize>,
 }
 
 #[cfg(unix)]
@@ -658,6 +687,13 @@ impl Default for Config {
             eval_enabled: true,
             eval_threshold: None,
             eval_max_per_function: None,
+            instance: None,
+            export_output_dir: None,
+            inject_context_enabled: None,
+            obsidian_tag_prefix: None,
+            obsidian_date_format: None,
+            obsidian_export_dir: None,
+            wal_retention_days: None,
         }
     }
 }
@@ -682,7 +718,7 @@ impl Config {
         // `mempalace_rust-fqvg`: MEMPALACE_INSTANCE env overrides config file value.
         if let Ok(env_val) = std::env::var("MEMPALACE_INSTANCE") {
             if let Ok(n) = env_val.parse::<u16>() {
-                config.instance = n.min(50);
+                config.instance = Some(n.min(50) as usize);
             }
         }
 

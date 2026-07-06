@@ -159,7 +159,7 @@ pub fn score_context_relevance(
     }
 
     // Top result strength (0-20).
-    if let Some(&top) = scores.iter().cloned().reduce(f64::max) {
+    if let Some(top) = scores.iter().cloned().reduce(f64::max) {
         score += (top * 20.0).round().min(20.0) as u8;
     }
 

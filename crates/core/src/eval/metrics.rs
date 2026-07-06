@@ -67,13 +67,13 @@ impl MetricsStore {
             note,
         };
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let cap = inner.max_per_function;
         let entries = inner
             .measurements
             .entry(function_name.to_string())
             .or_default();
         entries.push(measurement);
         // Ring-buffer: drop oldest when exceeding cap.
-        let cap = inner.max_per_function;
         if entries.len() > cap {
             let drain_count = entries.len() - cap;
             entries.drain(..drain_count);

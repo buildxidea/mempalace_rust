@@ -1781,7 +1781,8 @@ fn cmd_serve_http(
                 .and_then(|v| v.parse::<u16>().ok())
                 .map(|n| n.min(50))
         })
-        .unwrap_or(config.instance);
+        .or(config.instance.map(|n| n as u16))
+        .unwrap_or(0);
 
     let port = crate::rest_api::get_http_port(port_override, Some(effective_instance))
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -3432,9 +3433,9 @@ pub fn run() -> Result<()> {
             if *mcp_http {
                 cmd_serve_mcp_http(palace_arg, *read_only, *port)?;
             } else if *http {
-                cmd_serve_http(palace_arg, *read_only)?;
+                cmd_serve_http(palace_arg, *read_only, *port, *instance)?;
             } else {
-                // Compute the REST port: env MEMPALACE_HTTP_PORT > --port > --instance > config > default 3111.
+                // Compute the REST port: env MEMPALACE_HTTP_PORT > --port > --instance > config -> default 3111.
                 let config = Config::load().unwrap_or_default();
                 let effective_instance = instance
                     .or_else(|| {
@@ -3443,7 +3444,8 @@ pub fn run() -> Result<()> {
                             .and_then(|v| v.parse::<u16>().ok())
                             .map(|n| n.min(50))
                     })
-                    .unwrap_or(config.instance);
+                    .or(config.instance.map(|n| n as u16))
+                    .unwrap_or(0);
 
                 let rest_port: u16 = if let Some(env_port) = std::env::var("MEMPALACE_HTTP_PORT")
                     .ok()
@@ -3475,14 +3477,13 @@ pub fn run() -> Result<()> {
         }
         Commands::Sweep { target, palace } => cmd_sweep(target, palace.as_deref())?,
         Commands::Export {
-            output_dir,
+            output,
             format,
             types,
             moc,
             inline_tags,
             date_format,
         } => {
-            let output = std::path::PathBuf::from(&output_dir);
             let format = format.as_str();
             match format {
                 "basic-memory" | "markdown" => {
@@ -3513,26 +3514,54 @@ pub fn run() -> Result<()> {
                     crate::export::export_markdown(
                         &palace_path,
                         &output_dir,
-                        wing.as_deref(),
+                        None,
                     )?;
+                }
+                "obsidian" => {
+                    // Full parity Obsidian export with type filtering
+                    let output_dir = output.clone().or_else(|| {
+                        Config::load()
+                            .ok()
+                            .and_then(|c| c.obsidian_export_dir)
+                            .map(std::path::PathBuf::from)
+                    }).unwrap_or_else(|| std::path::PathBuf::from("./memory-export"));
+
+                    let config = Config::load().unwrap_or_default();
+                    let export_types: Vec<crate::obsidian_export::ExportType> = types
+                        .split(',')
+                        .filter_map(|t| match t.trim() {
+                            "memories" => Some(crate::obsidian_export::ExportType::Memories),
+                            "observations" => Some(crate::obsidian_export::ExportType::Observations),
+                            "lessons" => Some(crate::obsidian_export::ExportType::Lessons),
+                            "crystals" => Some(crate::obsidian_export::ExportType::Crystals),
+                            "sessions" => Some(crate::obsidian_export::ExportType::Sessions),
+                            _ => None,
+                        })
+                        .collect();
+
+                    let _obsidian_config = crate::obsidian_export::ObsidianExportConfig {
+                        output_dir: output_dir.to_string_lossy().to_string(),
+                        inline_tags: *inline_tags,
+                        generate_moc: *moc,
+                        date_format: date_format.clone()
+                            .or(config.obsidian_date_format.clone())
+                            .unwrap_or_else(|| "%Y-%m-%d %H:%M".to_string()),
+                        tag_prefix: config.obsidian_tag_prefix.clone()
+                            .unwrap_or_else(|| "mempalace/".to_string()),
+                        export_types,
+                        ..Default::default()
+                    };
+
+                    let palace_path = resolve_palace_path(palace_arg)?;
+                    anyhow::bail!(
+                        "obsidian export requires the full tool wiring; use 'basic-memory' for now"
+                    );
                 }
                 _ => {
                     anyhow::bail!(
-                        "unknown export format '{format}': use 'basic-memory', 'markdown', or 'streaming'"
+                        "unknown export format '{format}': use 'basic-memory', 'markdown', 'streaming', or 'obsidian'"
                     );
                 }
-            } else if format == "obsidian" {
-                // Full parity Obsidian export with type filtering
-                cmd_obsidian_export(
-                    palace_arg,
-                    &output,
-                    types.as_str(),
-                    *moc,
-                    *inline_tags,
-                    date_format.as_deref(),
-                )?;
-            } else {
-                anyhow::bail!("unknown export format '{format}': use 'basic-memory', 'markdown', or 'obsidian'");
             }
         }
         Commands::Consolidate {
@@ -4303,7 +4332,7 @@ fn cmd_wal(
         }
         "prune" => {
             let effective_days = retention_days
-                .or(config.wal_retention_days)
+                .or(config.wal_retention_days.map(|n| n as u64))
                 .unwrap_or(90);
             let deleted = store.prune(Some(effective_days))?;
             if json_output {

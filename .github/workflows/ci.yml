@@ -56,7 +56,8 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --workspace
 
-      - name: Compile benches
+      - name: Compile benches (Linux skipped — runner OOM on optimized link)
+        if: runner.os != 'Linux'
         run: cargo bench --no-run -p mempalace-core
 
   docs:

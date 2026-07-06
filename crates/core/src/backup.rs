@@ -84,10 +84,7 @@ pub fn prune_backups(pattern: &str, max_backups: Option<usize>) -> Vec<String> {
     }
 
     // Newest first; the path breaks mtime ties so ordering is deterministic.
-    scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| b.1.cmp(&a.1))
-    });
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
 
     let mut removed: Vec<String> = Vec::new();
     for (_mtime, path_str) in scored.into_iter().skip(cap) {
@@ -112,7 +109,8 @@ fn remove_backup_path(path: &Path) -> Result<()> {
     if path.is_symlink() {
         std::fs::remove_file(path).with_context(|| format!("removing symlink {}", path.display()))
     } else if path.is_dir() {
-        std::fs::remove_dir_all(path).with_context(|| format!("removing directory {}", path.display()))
+        std::fs::remove_dir_all(path)
+            .with_context(|| format!("removing directory {}", path.display()))
     } else {
         std::fs::remove_file(path).with_context(|| format!("removing file {}", path.display()))
     }
@@ -189,7 +187,10 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        assert!(removed_file.contains("oldest"), "oldest should be removed, got {removed_file}");
+        assert!(
+            removed_file.contains("oldest"),
+            "oldest should be removed, got {removed_file}"
+        );
     }
 
     #[test]
@@ -264,7 +265,11 @@ mod tests {
             .filter(|e| e.path().extension().map(|s| s == "tar").unwrap_or(false))
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(kept_files, vec!["z.tar"], "expected z.tar to be kept (last in sort)");
+        assert_eq!(
+            kept_files,
+            vec!["z.tar"],
+            "expected z.tar to be kept (last in sort)"
+        );
     }
 
     /// Test that a non-empty return from prune_backups matches the

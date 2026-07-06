@@ -176,7 +176,10 @@ fn validate_compression(obs: &CompressedObservation) -> Vec<String> {
     if obs.title.is_empty() {
         issues.push("Title is empty".to_string());
     } else if obs.title.len() > 200 {
-        issues.push(format!("Title too long: {} chars (max 200)", obs.title.len()));
+        issues.push(format!(
+            "Title too long: {} chars (max 200)",
+            obs.title.len()
+        ));
     }
 
     if obs.narrative.is_empty() {
@@ -252,10 +255,7 @@ fn apply_compression_fixes(obs: &mut CompressedObservation) {
 
     // Pad short narrative.
     if obs.narrative.is_empty() {
-        obs.narrative = format!(
-            "{:?} operation performed",
-            obs.observation_type
-        );
+        obs.narrative = format!("{:?} operation performed", obs.observation_type);
     } else if obs.narrative.len() < 10 {
         obs.narrative = format!("{} (minimal observation)", obs.narrative);
     }

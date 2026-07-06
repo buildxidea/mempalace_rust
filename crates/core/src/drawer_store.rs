@@ -427,24 +427,25 @@ impl DrawerStore {
         &self,
         wing: Option<&str>,
     ) -> Result<Vec<(String, String, String, String, Option<String>, String)>> {
-        let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(w) = wing {
-            (
-                "SELECT id, content, wing, room, source_file, filed_at
+        let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            if let Some(w) = wing {
+                (
+                    "SELECT id, content, wing, room, source_file, filed_at
                  FROM drawers
                  WHERE wing = ?1
                  ORDER BY wing, room, filed_at"
-                    .to_string(),
-                vec![Box::new(w.to_string())],
-            )
-        } else {
-            (
-                "SELECT id, content, wing, room, source_file, filed_at
+                        .to_string(),
+                    vec![Box::new(w.to_string())],
+                )
+            } else {
+                (
+                    "SELECT id, content, wing, room, source_file, filed_at
                  FROM drawers
                  ORDER BY wing, room, filed_at"
-                    .to_string(),
-                vec![],
-            )
-        };
+                        .to_string(),
+                    vec![],
+                )
+            };
 
         let params_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();

@@ -168,7 +168,8 @@ impl ContextInjector {
     /// budget, or an empty string if injection is disabled.
     pub fn build_context(&self, tool_name: &str, tool_params: &str) -> String {
         // Injection is enabled if env var is set OR config field is true.
-        let enabled = is_context_injection_enabled() || self.state.config.inject_context_enabled.unwrap_or(false);
+        let enabled = is_context_injection_enabled()
+            || self.state.config.inject_context_enabled.unwrap_or(false);
         if !enabled || is_sdk_child_context() {
             return String::new();
         }
@@ -256,114 +257,112 @@ impl ContextInjector {
 
     /// Get pinned slots from DB (cached).
     fn get_pinned_slots(&self) -> String {
-        self.cache
-            .get_or_compute(&self.cache.pinned_slots, || {
-                let db = match crate::palace_db::PalaceDb::open(&self.state.palace_path) {
-                    Ok(db) => db,
-                    Err(e) => {
-                        eprintln!("[mempalace] context inject: failed to open db: {}", e);
-                        return String::new();
-                    }
-                };
-                let slots = match db.slot_list(None) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[mempalace] context inject: slot_list failed: {}", e);
-                        return String::new();
-                    }
-                };
-                let pinned: Vec<_> = slots.into_iter().filter(|s| s.pinned).collect();
-                if pinned.is_empty() {
+        self.cache.get_or_compute(&self.cache.pinned_slots, || {
+            let db = match crate::palace_db::PalaceDb::open(&self.state.palace_path) {
+                Ok(db) => db,
+                Err(e) => {
+                    eprintln!("[mempalace] context inject: failed to open db: {}", e);
                     return String::new();
                 }
-                let mut out = String::new();
-                for slot in pinned.into_iter().take(MAX_PINNED_SLOTS) {
-                    let preview = truncate_block(&slot.content);
-                    out.push_str(&format!("- **{}**: {}\n", slot.label, preview));
+            };
+            let slots = match db.slot_list(None) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[mempalace] context inject: slot_list failed: {}", e);
+                    return String::new();
                 }
-                out
-            })
+            };
+            let pinned: Vec<_> = slots.into_iter().filter(|s| s.pinned).collect();
+            if pinned.is_empty() {
+                return String::new();
+            }
+            let mut out = String::new();
+            for slot in pinned.into_iter().take(MAX_PINNED_SLOTS) {
+                let preview = truncate_block(&slot.content);
+                out.push_str(&format!("- **{}**: {}\n", slot.label, preview));
+            }
+            out
+        })
     }
 
     /// Get project profile summary (cached).
     fn get_project_profile(&self) -> String {
-        self.cache
-            .get_or_compute(&self.cache.project_profile, || {
-                let db = match crate::palace_db::PalaceDb::open(&self.state.palace_path) {
-                    Ok(db) => db,
-                    Err(e) => {
-                        eprintln!("[mempalace] context inject: failed to open db: {}", e);
-                        return String::new();
-                    }
-                };
-                let all_drawers = db.get_all(None, None, 500);
-                if all_drawers.is_empty() {
+        self.cache.get_or_compute(&self.cache.project_profile, || {
+            let db = match crate::palace_db::PalaceDb::open(&self.state.palace_path) {
+                Ok(db) => db,
+                Err(e) => {
+                    eprintln!("[mempalace] context inject: failed to open db: {}", e);
                     return String::new();
                 }
+            };
+            let all_drawers = db.get_all(None, None, 500);
+            if all_drawers.is_empty() {
+                return String::new();
+            }
 
-                let total = all_drawers.iter().map(|qr| qr.ids.len()).sum::<usize>();
-                if total == 0 {
-                    return String::new();
-                }
+            let total = all_drawers.iter().map(|qr| qr.ids.len()).sum::<usize>();
+            if total == 0 {
+                return String::new();
+            }
 
-                // Top concepts
-                let mut concept_counts: std::collections::HashMap<String, usize> =
-                    std::collections::HashMap::new();
-                for qr in &all_drawers {
-                    if let Some(meta) = qr.metadatas.first() {
-                        if let Some(c) = meta.get("concepts").and_then(|v| v.as_str()) {
-                            for concept in c.split(',') {
-                                let c = concept.trim();
-                                if !c.is_empty() {
-                                    *concept_counts.entry(c.to_string()).or_insert(0) += 1;
-                                }
+            // Top concepts
+            let mut concept_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for qr in &all_drawers {
+                if let Some(meta) = qr.metadatas.first() {
+                    if let Some(c) = meta.get("concepts").and_then(|v| v.as_str()) {
+                        for concept in c.split(',') {
+                            let c = concept.trim();
+                            if !c.is_empty() {
+                                *concept_counts.entry(c.to_string()).or_insert(0) += 1;
                             }
                         }
                     }
                 }
-                let mut top_concepts: Vec<_> = concept_counts.into_iter().collect();
-                top_concepts.sort_by(|a, b| b.1.cmp(&a.1));
-                let concepts_str: String = top_concepts
-                    .iter()
-                    .take(8)
-                    .map(|(k, _)| k.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            }
+            let mut top_concepts: Vec<_> = concept_counts.into_iter().collect();
+            top_concepts.sort_by(|a, b| b.1.cmp(&a.1));
+            let concepts_str: String = top_concepts
+                .iter()
+                .take(8)
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
 
-                // Top rooms
-                let mut room_counts: std::collections::HashMap<String, usize> =
-                    std::collections::HashMap::new();
-                for qr in &all_drawers {
-                    if let Some(meta) = qr.metadatas.first() {
-                        if let Some(r) = meta.get("room").and_then(|v| v.as_str()) {
-                            *room_counts.entry(r.to_string()).or_insert(0) += 1;
-                        }
+            // Top rooms
+            let mut room_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for qr in &all_drawers {
+                if let Some(meta) = qr.metadatas.first() {
+                    if let Some(r) = meta.get("room").and_then(|v| v.as_str()) {
+                        *room_counts.entry(r.to_string()).or_insert(0) += 1;
                     }
                 }
-                let mut top_rooms: Vec<_> = room_counts.into_iter().collect();
-                top_rooms.sort_by(|a, b| b.1.cmp(&a.1));
-                let rooms_str: String = top_rooms
-                    .iter()
-                    .take(5)
-                    .map(|(k, _)| k.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            }
+            let mut top_rooms: Vec<_> = room_counts.into_iter().collect();
+            top_rooms.sort_by(|a, b| b.1.cmp(&a.1));
+            let rooms_str: String = top_rooms
+                .iter()
+                .take(5)
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
 
-                format!(
-                    "Memories: {} total\nConcepts: {}\nRooms: {}\n",
-                    total,
-                    if concepts_str.is_empty() {
-                        "n/a"
-                    } else {
-                        &concepts_str
-                    },
-                    if rooms_str.is_empty() {
-                        "n/a"
-                    } else {
-                        &rooms_str
-                    },
-                )
-            })
+            format!(
+                "Memories: {} total\nConcepts: {}\nRooms: {}\n",
+                total,
+                if concepts_str.is_empty() {
+                    "n/a"
+                } else {
+                    &concepts_str
+                },
+                if rooms_str.is_empty() {
+                    "n/a"
+                } else {
+                    &rooms_str
+                },
+            )
+        })
     }
 
     /// Get recent lessons (cached).
@@ -404,7 +403,11 @@ impl ContextInjector {
             .filter(|line| line.to_lowercase().contains(&needle.to_lowercase()))
             .collect::<Vec<_>>()
             .join("\n");
-        if filtered.is_empty() { all } else { format!("{}\n", filtered) }
+        if filtered.is_empty() {
+            all
+        } else {
+            format!("{}\n", filtered)
+        }
     }
 
     /// Get recent session summaries (cached).
@@ -431,14 +434,8 @@ impl ContextInjector {
                 for session in sessions.iter().take(MAX_SESSION_SUMMARIES) {
                     if let Some(ref summary) = session.summary {
                         let preview = truncate_block(summary);
-                        let started = session
-                            .started_at
-                            .format("%Y-%m-%d %H:%M")
-                            .to_string();
-                        out.push_str(&format!(
-                            "- [{}] {} {}\n",
-                            started, session.id, preview
-                        ));
+                        let started = session.started_at.format("%Y-%m-%d %H:%M").to_string();
+                        out.push_str(&format!("- [{}] {} {}\n", started, session.id, preview));
                     }
                 }
                 out
@@ -457,7 +454,11 @@ impl ContextInjector {
             .filter(|line| line.to_lowercase().contains(&needle.to_lowercase()))
             .collect::<Vec<_>>()
             .join("\n");
-        if filtered.is_empty() { all } else { format!("{}\n", filtered) }
+        if filtered.is_empty() {
+            all
+        } else {
+            format!("{}\n", filtered)
+        }
     }
 
     /// Search for file-related memories (not cached — freshness matters).
@@ -484,10 +485,7 @@ impl ContextInjector {
                 if response.results.is_empty() {
                     return String::new();
                 }
-                let mut out = String::from(&format!(
-                    "\n### Related: `{}`\n",
-                    file_name_stem(file)
-                ));
+                let mut out = String::from(&format!("\n### Related: `{}`\n", file_name_stem(file)));
                 for result in response.results.iter().take(3) {
                     let preview = truncate_block(&result.text);
                     if !preview.is_empty() {
@@ -567,8 +565,7 @@ pub fn build_context_for_tool(
         return Ok(String::new());
     }
     let injector = ContextInjector::new(std::sync::Arc::new(
-        AppState::new(state.config.clone(), state.read_only)
-            .map_err(|e| e.to_string())?,
+        AppState::new(state.config.clone(), state.read_only).map_err(|e| e.to_string())?,
     ));
     Ok(injector.build_context(tool_name, tool_params))
 }
@@ -744,9 +741,7 @@ fn extract_paths_from_command(cmd: &str) -> Vec<String> {
     for token in cmd.split_whitespace() {
         if looks_like_path(token) && !token.starts_with('-') {
             // Strip common command prefixes
-            let cleaned = token
-                .trim_start_matches('/')
-                .trim_start_matches("./");
+            let cleaned = token.trim_start_matches('/').trim_start_matches("./");
             if cleaned.contains('/') && cleaned.len() > 3 {
                 paths.push(cleaned.to_string());
             }
@@ -791,14 +786,18 @@ mod tests {
 
     #[test]
     fn test_is_sdk_child_context_default() {
-        let _guard = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_SDK_CHILD);
         assert!(!is_sdk_child_context());
     }
 
     #[test]
     fn test_is_sdk_child_context_enabled() {
-        let _guard = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::set_var(ENV_SDK_CHILD, "1");
         assert!(is_sdk_child_context());
         std::env::remove_var(ENV_SDK_CHILD);
@@ -806,7 +805,9 @@ mod tests {
 
     #[test]
     fn test_is_sdk_child_context_true_string() {
-        let _guard = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::set_var(ENV_SDK_CHILD, "true");
         assert!(is_sdk_child_context());
         std::env::remove_var(ENV_SDK_CHILD);
@@ -965,7 +966,9 @@ mod tests {
 
     #[test]
     fn test_build_context_disabled() {
-        let _guard = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("MEMPALACE_INJECT_CONTEXT");
         std::env::remove_var("MEMPALACE_INJECT");
 
@@ -976,7 +979,9 @@ mod tests {
 
     #[test]
     fn test_build_context_sdk_child_skip() {
-        let _guard = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::set_var("MEMPALACE_INJECT_CONTEXT", "1");
         std::env::set_var(ENV_SDK_CHILD, "1");
         assert!(is_sdk_child_context());

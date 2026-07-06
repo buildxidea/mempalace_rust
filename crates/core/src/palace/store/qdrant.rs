@@ -275,7 +275,10 @@ impl QdrantStore {
 
     /// Build an authorization header value, if an API key is configured.
     fn auth_header(&self) -> Option<String> {
-        self.config.api_key.as_ref().map(|key| format!("Bearer {key}"))
+        self.config
+            .api_key
+            .as_ref()
+            .map(|key| format!("Bearer {key}"))
     }
 
     /// Add auth header to a request builder if configured.
@@ -356,9 +359,7 @@ impl QdrantStore {
         if conditions.is_empty() {
             None
         } else {
-            Some(Filter {
-                must: conditions,
-            })
+            Some(Filter { must: conditions })
         }
     }
 
@@ -403,9 +404,19 @@ impl QdrantStore {
         for (k, v) in payload {
             if !matches!(
                 k.as_str(),
-                "content" | "kind" | "tier" | "wing" | "room" | "tags" | "trust"
-                    | "access_count" | "active" | "confidence" | "consolidation_strength"
-                    | "created_at" | "updated_at"
+                "content"
+                    | "kind"
+                    | "tier"
+                    | "wing"
+                    | "room"
+                    | "tags"
+                    | "trust"
+                    | "access_count"
+                    | "active"
+                    | "confidence"
+                    | "consolidation_strength"
+                    | "created_at"
+                    | "updated_at"
             ) {
                 metadata.insert(k.clone(), v.clone());
             }
@@ -484,7 +495,6 @@ impl QdrantStore {
         drawer.migrate_metadata();
         drawer
     }
-
 }
 
 #[async_trait]
@@ -529,16 +539,14 @@ impl PalaceStore for QdrantStore {
                 ),
             );
             if let Some(ref wing) = drawer.wing {
-                drawer.metadata.insert(
-                    "wing".to_string(),
-                    serde_json::Value::String(wing.clone()),
-                );
+                drawer
+                    .metadata
+                    .insert("wing".to_string(), serde_json::Value::String(wing.clone()));
             }
             if let Some(ref room) = drawer.room {
-                drawer.metadata.insert(
-                    "room".to_string(),
-                    serde_json::Value::String(room.clone()),
-                );
+                drawer
+                    .metadata
+                    .insert("room".to_string(), serde_json::Value::String(room.clone()));
             }
             if !drawer.tags.is_empty() {
                 let tags: Vec<serde_json::Value> = drawer
@@ -560,10 +568,9 @@ impl PalaceStore for QdrantStore {
                 "access_count".to_string(),
                 serde_json::Value::Number(drawer.access_count.into()),
             );
-            drawer.metadata.insert(
-                "active".to_string(),
-                serde_json::Value::Bool(drawer.active),
-            );
+            drawer
+                .metadata
+                .insert("active".to_string(), serde_json::Value::Bool(drawer.active));
             drawer.metadata.insert(
                 "confidence".to_string(),
                 serde_json::json!(drawer.confidence),
@@ -926,15 +933,9 @@ mod tests {
             serde_json::Value::String("2026-01-02T00:00:00Z".to_string()),
         );
         payload.insert("confidence".to_string(), serde_json::json!(0.95));
-        payload.insert(
-            "consolidation_strength".to_string(),
-            serde_json::json!(3),
-        );
+        payload.insert("consolidation_strength".to_string(), serde_json::json!(3));
         payload.insert("active".to_string(), serde_json::json!(true));
-        payload.insert(
-            "access_count".to_string(),
-            serde_json::json!(5),
-        );
+        payload.insert("access_count".to_string(), serde_json::json!(5));
 
         let id = PointIdValue::Uuid("test-uuid-123".to_string());
         let drawer = QdrantStore::point_to_drawer(&id, &payload);
@@ -985,10 +986,7 @@ mod tests {
             "tier".to_string(),
             serde_json::Value::String("working".to_string()),
         );
-        payload.insert(
-            "tags".to_string(),
-            serde_json::json!(["rust", "backend"]),
-        );
+        payload.insert("tags".to_string(), serde_json::json!(["rust", "backend"]));
         payload.insert(
             "trust".to_string(),
             serde_json::Value::String("high".to_string()),

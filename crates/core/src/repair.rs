@@ -67,10 +67,7 @@ pub struct RepairStatusReport {
 pub fn sqlite_integrity_preflight(palace_path: &Path) -> anyhow::Result<bool> {
     let db_path = palace_path.join("drawers.db");
     if !db_path.exists() {
-        anyhow::bail!(
-            "SQLite database not found at {}",
-            db_path.display()
-        );
+        anyhow::bail!("SQLite database not found at {}", db_path.display());
     }
     let conn = rusqlite::Connection::open(&db_path)?;
 
@@ -94,10 +91,7 @@ pub fn sqlite_integrity_preflight(palace_path: &Path) -> anyhow::Result<bool> {
 pub fn sqlite_full_integrity_check(palace_path: &Path) -> anyhow::Result<String> {
     let db_path = palace_path.join("drawers.db");
     if !db_path.exists() {
-        anyhow::bail!(
-            "SQLite database not found at {}",
-            db_path.display()
-        );
+        anyhow::bail!("SQLite database not found at {}", db_path.display());
     }
     let conn = rusqlite::Connection::open(&db_path)?;
     let result: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
@@ -370,7 +364,11 @@ fn extract_trailing_number(id: &str) -> Option<i64> {
         return Some(n);
     }
     // Trailing digits after a non-alphanumeric separator
-    let numeric_part: String = trimmed.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
+    let numeric_part: String = trimmed
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     if numeric_part.is_empty() {
         return None;
     }
@@ -631,9 +629,9 @@ pub fn repair_status(palace_path: &Path) -> anyhow::Result<RepairStatusReport> {
     if db_path.exists() {
         report.drawer_store_available = true;
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-            if let Ok(count) = conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| {
-                r.get::<_, i64>(0)
-            }) {
+            if let Ok(count) =
+                conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get::<_, i64>(0))
+            {
                 report.sqlite_drawer_count = count as usize;
             }
 
@@ -693,9 +691,8 @@ pub fn repair_status(palace_path: &Path) -> anyhow::Result<RepairStatusReport> {
     report.counts_consistent = report.sqlite_drawer_count == report.document_map_count;
 
     // Overall health: consistent counts + drawer store available + FTS5 present.
-    report.healthy = report.drawer_store_available
-        && report.counts_consistent
-        && report.sqlite_drawer_count > 0;
+    report.healthy =
+        report.drawer_store_available && report.counts_consistent && report.sqlite_drawer_count > 0;
 
     Ok(report)
 }

@@ -3197,7 +3197,10 @@ fn cmd_dedup(
         stats.palace_size_before, stats.palace_size_after
     );
     if stats.total_deleted > 0 && !config.dry_run {
-        println!("  [APPLIED] {} drawer(s) permanently removed.", stats.total_deleted);
+        println!(
+            "  [APPLIED] {} drawer(s) permanently removed.",
+            stats.total_deleted
+        );
     } else if config.dry_run {
         println!();
         println!("  [DRY RUN] No changes written. Re-run with --apply to delete.");
@@ -3487,13 +3490,16 @@ pub fn run() -> Result<()> {
             let format = format.as_str();
             match format {
                 "basic-memory" | "markdown" => {
-                    let output_dir = output.clone().or_else(|| {
-                        // Fall back to config or ./export
-                        Config::load()
-                            .ok()
-                            .and_then(|c| c.export_output_dir)
-                            .map(std::path::PathBuf::from)
-                    }).unwrap_or_else(|| std::path::PathBuf::from("./export"));
+                    let output_dir = output
+                        .clone()
+                        .or_else(|| {
+                            // Fall back to config or ./export
+                            Config::load()
+                                .ok()
+                                .and_then(|c| c.export_output_dir)
+                                .map(std::path::PathBuf::from)
+                        })
+                        .unwrap_or_else(|| std::path::PathBuf::from("./export"));
 
                     if let Some(ref p) = palace_arg {
                         let path = std::path::PathBuf::from(p);
@@ -3503,35 +3509,39 @@ pub fn run() -> Result<()> {
                     }
                 }
                 "streaming" => {
-                    let output_dir = output.clone().or_else(|| {
-                        Config::load()
-                            .ok()
-                            .and_then(|c| c.export_output_dir)
-                            .map(std::path::PathBuf::from)
-                    }).unwrap_or_else(|| std::path::PathBuf::from("./export"));
+                    let output_dir = output
+                        .clone()
+                        .or_else(|| {
+                            Config::load()
+                                .ok()
+                                .and_then(|c| c.export_output_dir)
+                                .map(std::path::PathBuf::from)
+                        })
+                        .unwrap_or_else(|| std::path::PathBuf::from("./export"));
 
                     let palace_path = resolve_palace_path(palace_arg)?;
-                    crate::export::export_markdown(
-                        &palace_path,
-                        &output_dir,
-                        None,
-                    )?;
+                    crate::export::export_markdown(&palace_path, &output_dir, None)?;
                 }
                 "obsidian" => {
                     // Full parity Obsidian export with type filtering
-                    let output_dir = output.clone().or_else(|| {
-                        Config::load()
-                            .ok()
-                            .and_then(|c| c.obsidian_export_dir)
-                            .map(std::path::PathBuf::from)
-                    }).unwrap_or_else(|| std::path::PathBuf::from("./memory-export"));
+                    let output_dir = output
+                        .clone()
+                        .or_else(|| {
+                            Config::load()
+                                .ok()
+                                .and_then(|c| c.obsidian_export_dir)
+                                .map(std::path::PathBuf::from)
+                        })
+                        .unwrap_or_else(|| std::path::PathBuf::from("./memory-export"));
 
                     let config = Config::load().unwrap_or_default();
                     let export_types: Vec<crate::obsidian_export::ExportType> = types
                         .split(',')
                         .filter_map(|t| match t.trim() {
                             "memories" => Some(crate::obsidian_export::ExportType::Memories),
-                            "observations" => Some(crate::obsidian_export::ExportType::Observations),
+                            "observations" => {
+                                Some(crate::obsidian_export::ExportType::Observations)
+                            }
                             "lessons" => Some(crate::obsidian_export::ExportType::Lessons),
                             "crystals" => Some(crate::obsidian_export::ExportType::Crystals),
                             "sessions" => Some(crate::obsidian_export::ExportType::Sessions),
@@ -3543,10 +3553,13 @@ pub fn run() -> Result<()> {
                         output_dir: output_dir.to_string_lossy().to_string(),
                         inline_tags: *inline_tags,
                         generate_moc: *moc,
-                        date_format: date_format.clone()
+                        date_format: date_format
+                            .clone()
                             .or(config.obsidian_date_format.clone())
                             .unwrap_or_else(|| "%Y-%m-%d %H:%M".to_string()),
-                        tag_prefix: config.obsidian_tag_prefix.clone()
+                        tag_prefix: config
+                            .obsidian_tag_prefix
+                            .clone()
                             .unwrap_or_else(|| "mempalace/".to_string()),
                         export_types,
                         ..Default::default()
@@ -3644,7 +3657,13 @@ pub fn run() -> Result<()> {
             if *stats {
                 cmd_dedup_stats(palace_arg)?;
             } else {
-                cmd_dedup(palace_arg, *threshold, effective_dry_run, wing.as_deref(), source.as_deref())?;
+                cmd_dedup(
+                    palace_arg,
+                    *threshold,
+                    effective_dry_run,
+                    wing.as_deref(),
+                    source.as_deref(),
+                )?;
             }
         }
         Commands::Remove {
@@ -3726,10 +3745,7 @@ fn cmd_eval(eval_cmd: &EvalCommands) -> Result<()> {
         } => {
             let score = (*score).min(100);
             eval::record_score(function_name, score, note.clone());
-            println!(
-                "Recorded score {} for function '{}'",
-                score, function_name
-            );
+            println!("Recorded score {} for function '{}'", score, function_name);
             if let Some(n) = note {
                 println!("  Note: {}", n);
             }
@@ -3740,7 +3756,10 @@ fn cmd_eval(eval_cmd: &EvalCommands) -> Result<()> {
                 println!("No quality measurements recorded yet.");
                 return Ok(());
             }
-            println!("{:<25} {:>5} {:>7} {:>5} {:>5} {:>7}", "Function", "Count", "Average", "Min", "Max", "Latest");
+            println!(
+                "{:<25} {:>5} {:>7} {:>5} {:>5} {:>7}",
+                "Function", "Count", "Average", "Min", "Max", "Latest"
+            );
             println!("{}", "-".repeat(60));
             let mut sorted: Vec<(&String, &eval::FunctionStats)> = summary.iter().collect();
             sorted.sort_by(|a, b| a.0.cmp(b.0));
@@ -3888,10 +3907,7 @@ fn cmd_sources(cmd: &SourceCommands) -> Result<()> {
             let items = rt.block_on(adapter_arc.discover())?;
             println!("  Discovered {} items from '{}' :", items.len(), adapter);
             for item in &items {
-                let loc = item
-                    .location
-                    .as_deref()
-                    .unwrap_or("(no location)");
+                let loc = item.location.as_deref().unwrap_or("(no location)");
                 println!("    {} — {}", item.id, loc);
             }
         }
@@ -3904,17 +3920,19 @@ fn cmd_sources(cmd: &SourceCommands) -> Result<()> {
             })?;
             let rt = runtime();
             let records = rt.block_on(async {
-                let items = adapter_arc.discover().await.map_err(|e| {
-                    anyhow::anyhow!("discovery failed: {}", e)
-                })?;
+                let items = adapter_arc
+                    .discover()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("discovery failed: {}", e))?;
                 let limited = if let Some(lim) = limit {
                     &items[..items.len().min(*lim)]
                 } else {
                     &items
                 };
-                adapter_arc.ingest(limited).await.map_err(|e| {
-                    anyhow::anyhow!("ingestion failed: {}", e)
-                })
+                adapter_arc
+                    .ingest(limited)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("ingestion failed: {}", e))
             })?;
             println!(
                 "  Ingested {} records from '{}':",
@@ -4283,7 +4301,10 @@ fn cmd_wal(
                     println!("No WAL entries found.");
                     return Ok(());
                 }
-                println!("[{:<36}] {:<26} {:<8} {:<20} source", "id", "timestamp", "op", "target");
+                println!(
+                    "[{:<36}] {:<26} {:<8} {:<20} source",
+                    "id", "timestamp", "op", "target"
+                );
                 println!("{}", "-".repeat(100));
                 for e in &entries {
                     println!(
@@ -4311,7 +4332,10 @@ fn cmd_wal(
                     println!("No matching WAL entries found.");
                     return Ok(());
                 }
-                println!("[{:<36}] {:<26} {:<8} {:<20} source", "id", "timestamp", "op", "target");
+                println!(
+                    "[{:<36}] {:<26} {:<8} {:<20} source",
+                    "id", "timestamp", "op", "target"
+                );
                 println!("{}", "-".repeat(100));
                 for e in &entries {
                     println!(
@@ -4353,9 +4377,7 @@ fn cmd_wal(
             }
         }
         other => {
-            anyhow::bail!(
-                "Unknown WAL operation '{other}'. Use: list, filter, prune, count"
-            );
+            anyhow::bail!("Unknown WAL operation '{other}'. Use: list, filter, prune, count");
         }
     }
 
@@ -4474,9 +4496,8 @@ fn get_engine_port(rest_port: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        cmd_compress, cmd_init, cmd_mine, confirm_entities, detect_mining_mode,
-        get_engine_port, get_stream_port,
-        merge_detected_into_registry, run_instructions, save_detected_entities,
+        cmd_compress, cmd_init, cmd_mine, confirm_entities, detect_mining_mode, get_engine_port,
+        get_stream_port, merge_detected_into_registry, run_instructions, save_detected_entities,
         scan_and_detect_entities, Cli, Commands, DetectedEntities, InstructionName, MiningMode,
         INSTRUCTION_HELP, INSTRUCTION_INIT, INSTRUCTION_MINE, INSTRUCTION_SEARCH,
         INSTRUCTION_STATUS, PRECOMPACT_BLOCK_REASON, SAVE_INTERVAL, STOP_BLOCK_REASON,

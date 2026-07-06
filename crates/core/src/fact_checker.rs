@@ -304,17 +304,17 @@ fn check_claims_against_kg(text: &str, kg: &KnowledgeGraph) -> Vec<FactIssue> {
         return Vec::new();
     }
 
-    debug!(
-        "Fact-check: checking {} claims against KG",
-        claims.len()
-    );
+    debug!("Fact-check: checking {} claims against KG", claims.len());
 
     let now = simple_iso_date();
     let mut issues = Vec::new();
 
     for claim in &claims {
         let Ok(facts) = kg.query_entity(&claim.subject, None, None, "outgoing") else {
-            debug!("Fact-check: KG lookup failed for subject '{}'", claim.subject);
+            debug!(
+                "Fact-check: KG lookup failed for subject '{}'",
+                claim.subject
+            );
             continue;
         };
         if facts.is_empty() {
@@ -534,8 +534,7 @@ mod tests {
 
     #[test]
     fn test_extract_claims_multiple() {
-        let claims =
-            extract_claims("Bob is Alice's brother. Charlie is Dave's cousin.");
+        let claims = extract_claims("Bob is Alice's brother. Charlie is Dave's cousin.");
         assert_eq!(claims.len(), 2);
         assert_eq!(claims[0].subject, "Bob");
         assert_eq!(claims[1].subject, "Charlie");
@@ -595,10 +594,10 @@ mod tests {
     fn test_check_text_with_kg_empty() {
         // Can't create a real KG without a DB, but we can test the empty-text
         // short-circuit.
-        let report = check_text_with_kg("", &KnowledgeGraph::open(std::path::Path::new(
-            ":memory:",
-        ))
-        .unwrap());
+        let report = check_text_with_kg(
+            "",
+            &KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap(),
+        );
         assert!(report.issues.is_empty());
         assert_eq!(report.claims_checked, 0);
     }

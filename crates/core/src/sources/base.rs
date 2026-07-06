@@ -25,31 +25,19 @@ pub enum SourceError {
 
     /// Discovery failed (e.g. unreadable path, network error).
     #[error("discovery failed for adapter '{adapter}': {reason}")]
-    DiscoveryFailed {
-        adapter: String,
-        reason: String,
-    },
+    DiscoveryFailed { adapter: String, reason: String },
 
     /// Ingestion failed (parse error, schema mismatch, I/O).
     #[error("ingestion failed for adapter '{adapter}': {reason}")]
-    IngestionFailed {
-        adapter: String,
-        reason: String,
-    },
+    IngestionFailed { adapter: String, reason: String },
 
     /// Transform pipeline rejected a record.
     #[error("transform rejected for adapter '{adapter}': {reason}")]
-    TransformRejected {
-        adapter: String,
-        reason: String,
-    },
+    TransformRejected { adapter: String, reason: String },
 
     /// The adapter's schema does not match the expected shape.
     #[error("schema mismatch for adapter '{adapter}': {detail}")]
-    SchemaMismatch {
-        adapter: String,
-        detail: String,
-    },
+    SchemaMismatch { adapter: String, detail: String },
 
     /// Generic wrapper for `anyhow::Error` propagated through adapters.
     #[error("adapter '{adapter}' error: {source}")]
@@ -388,8 +376,7 @@ mod tests {
             required: vec!["title".into()],
             description: None,
         };
-        let record = SourceRecord::new("a", "1")
-            .with_payload("title", json!("My Title"));
+        let record = SourceRecord::new("a", "1").with_payload("title", json!("My Title"));
         assert!(schema.validate(&record).is_ok());
     }
 
@@ -453,18 +440,24 @@ mod tests {
     #[test]
     fn test_transform_pipeline_chains_steps() {
         let pipeline = TransformPipeline::new()
-            .push("tag_all", Box::new(|mut records| {
-                for r in &mut records {
-                    r.tags.push("processed".into());
-                }
-                Ok(records)
-            }))
-            .push("add_content", Box::new(|mut records| {
-                for r in &mut records {
-                    r.content = Some("enriched".into());
-                }
-                Ok(records)
-            }));
+            .push(
+                "tag_all",
+                Box::new(|mut records| {
+                    for r in &mut records {
+                        r.tags.push("processed".into());
+                    }
+                    Ok(records)
+                }),
+            )
+            .push(
+                "add_content",
+                Box::new(|mut records| {
+                    for r in &mut records {
+                        r.content = Some("enriched".into());
+                    }
+                    Ok(records)
+                }),
+            );
 
         let records = vec![SourceRecord::new("a", "1")];
         let result = pipeline.run(records).unwrap();
@@ -476,12 +469,15 @@ mod tests {
 
     #[test]
     fn test_transform_pipeline_error_propagation() {
-        let pipeline = TransformPipeline::new().push("fail", Box::new(|_| {
-            Err(SourceError::TransformRejected {
-                adapter: "test".into(),
-                reason: "intentional".into(),
-            })
-        }));
+        let pipeline = TransformPipeline::new().push(
+            "fail",
+            Box::new(|_| {
+                Err(SourceError::TransformRejected {
+                    adapter: "test".into(),
+                    reason: "intentional".into(),
+                })
+            }),
+        );
 
         let records = vec![SourceRecord::new("a", "1")];
         let result = pipeline.run(records);

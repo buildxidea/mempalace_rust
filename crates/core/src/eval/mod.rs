@@ -63,7 +63,9 @@ pub fn check_thresholds() -> Vec<(String, f64, u8)> {
 ///
 /// Returns `(score, validation_result)`. The score is also recorded on
 /// the global metrics store under the key `"compress"`.
-pub fn evaluate_compression(obs: &mut crate::types::CompressedObservation) -> (u8, ValidationResult) {
+pub fn evaluate_compression(
+    obs: &mut crate::types::CompressedObservation,
+) -> (u8, ValidationResult) {
     let score = score_compression(obs);
     record_score("compress", score, None);
     let validation = validate_and_correct_compression(obs);
@@ -90,7 +92,8 @@ pub fn evaluate_summary(
     };
     let score = score_summary(&input);
     record_score("summarize", score, None);
-    let validation = validate_and_correct_summary(title, narrative, key_decisions, files_modified, concepts);
+    let validation =
+        validate_and_correct_summary(title, narrative, key_decisions, files_modified, concepts);
     (score, validation)
 }
 
@@ -126,7 +129,8 @@ mod tests {
             title: "Read main.rs".to_string(),
             subtitle: None,
             facts: vec!["File has 100 lines".to_string()],
-            narrative: "Read the main.rs file which contains the entry point for the application".to_string(),
+            narrative: "Read the main.rs file which contains the entry point for the application"
+                .to_string(),
             concepts: vec!["rust".to_string()],
             files: vec!["src/main.rs".to_string()],
             importance: 7,
@@ -144,7 +148,8 @@ mod tests {
     #[test]
     fn test_evaluate_summary() {
         let mut title = "Auth Implementation".to_string();
-        let mut narrative = "Implemented JWT auth with refresh tokens.\n\nAdded middleware.".to_string();
+        let mut narrative =
+            "Implemented JWT auth with refresh tokens.\n\nAdded middleware.".to_string();
         let mut decisions = vec!["Use JWT".to_string()];
         let mut files = vec!["src/auth.rs".to_string()];
         let mut concepts = vec!["auth".to_string()];

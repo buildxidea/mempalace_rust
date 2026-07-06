@@ -1,6 +1,6 @@
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
@@ -397,14 +397,22 @@ pub fn normalize_to_observations(
     {
         if let Some(transcript) = try_normalize_json(content) {
             if let Some(messages) = parse_transcript_to_messages(&transcript) {
-                return Ok(messages_to_observations(&messages, session_id, &source_format));
+                return Ok(messages_to_observations(
+                    &messages,
+                    session_id,
+                    &source_format,
+                ));
             }
         }
     }
 
     // Fall back to in-memory parsing
     let messages = extract_messages(content, &source_format);
-    Ok(messages_to_observations(&messages, session_id, &source_format))
+    Ok(messages_to_observations(
+        &messages,
+        session_id,
+        &source_format,
+    ))
 }
 
 /// Streaming JSONL parser that processes lines one at a time.
@@ -442,14 +450,7 @@ fn parse_jsonl_to_observations(
                 index += 1;
                 continue;
             }
-            let obs = make_observation(
-                &role,
-                &text,
-                session_id,
-                source_format,
-                index,
-                &entry,
-            );
+            let obs = make_observation(&role, &text, session_id, source_format, index, &entry);
             observations.push(obs);
             index += 1;
         }
@@ -661,9 +662,15 @@ fn extract_messages(content: &str, source_format: &str) -> Vec<(String, String)>
 }
 
 /// Try to extract messages from a parsed JSON value for object-based formats.
-fn try_extract_messages_from_json(data: &Value, source_format: &str) -> Option<Vec<(String, String)>> {
+fn try_extract_messages_from_json(
+    data: &Value,
+    source_format: &str,
+) -> Option<Vec<(String, String)>> {
     match source_format {
-        "claude_ai_json" | "chatgpt_json" | "slack_json" | "gemini_ai_studio_json"
+        "claude_ai_json"
+        | "chatgpt_json"
+        | "slack_json"
+        | "gemini_ai_studio_json"
         | "continue_dev_json" => {
             // Use the existing parsers' logic to get messages
             let transcript = try_normalize_json(&data.to_string())?;
@@ -1398,19 +1405,14 @@ fn try_gemini_ai_studio_json(data: &Value) -> Option<String> {
                 None => continue,
             };
 
-            let role = obj
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let role = obj.get("role").and_then(|v| v.as_str()).unwrap_or("");
 
             let text = if let Some(parts) = obj.get("parts").and_then(|p| p.as_array()) {
                 let buf: Vec<String> = parts
                     .iter()
                     .filter_map(|part| {
                         let p = part.as_object()?;
-                        p.get("text")
-                            .and_then(|t| t.as_str())
-                            .map(String::from)
+                        p.get("text").and_then(|t| t.as_str()).map(String::from)
                     })
                     .collect();
                 buf.join("\n")
@@ -1471,9 +1473,8 @@ fn try_pi_jsonl(content: &str) -> Option<String> {
             .or_else(|| obj.get("kind"))
             .and_then(|r| r.as_str());
         let is_pi_role = matches!(role, Some("user") | Some("pi") | Some("assistant"));
-        let has_payload = obj.contains_key("text")
-            || obj.contains_key("message")
-            || obj.contains_key("content");
+        let has_payload =
+            obj.contains_key("text") || obj.contains_key("message") || obj.contains_key("content");
         if is_pi_role && has_payload {
             has_pi_marker = true;
             break;
@@ -1601,9 +1602,7 @@ fn try_continue_dev_json(data: &Value) -> Option<String> {
                         return Some(s.to_string());
                     }
                     let p = part.as_object()?;
-                    p.get("text")
-                        .and_then(|t| t.as_str())
-                        .map(String::from)
+                    p.get("text").and_then(|t| t.as_str()).map(String::from)
                 })
                 .collect();
             buf.join("\n")
@@ -2458,12 +2457,9 @@ mod tests {
     fn test_normalize_to_observations_claude_code() {
         let content = r#"{"type":"human","message":{"content":"Hello"}}
 {"type":"assistant","message":{"content":"Hi there"}}"#;
-        let obs = normalize_to_observations(
-            std::path::Path::new("test.jsonl"),
-            content,
-            "test-session",
-        )
-        .unwrap();
+        let obs =
+            normalize_to_observations(std::path::Path::new("test.jsonl"), content, "test-session")
+                .unwrap();
         assert_eq!(obs.len(), 2);
         assert_eq!(obs[0].user_prompt.as_deref(), Some("Hello"));
         assert_eq!(obs[1].assistant_response.as_deref(), Some("Hi there"));
@@ -2477,12 +2473,9 @@ mod tests {
     fn test_normalize_to_observations_pi_jsonl() {
         let content = r#"{"type":"user","text":"Hello Pi"}
 {"type":"pi","text":"Hi there!"}"#;
-        let obs = normalize_to_observations(
-            std::path::Path::new("chat.jsonl"),
-            content,
-            "pi-session",
-        )
-        .unwrap();
+        let obs =
+            normalize_to_observations(std::path::Path::new("chat.jsonl"), content, "pi-session")
+                .unwrap();
         assert_eq!(obs.len(), 2);
         assert_eq!(obs[0].user_prompt.as_deref(), Some("Hello Pi"));
         assert_eq!(obs[1].assistant_response.as_deref(), Some("Hi there!"));
@@ -2490,12 +2483,8 @@ mod tests {
 
     #[test]
     fn test_normalize_to_observations_empty() {
-        let obs = normalize_to_observations(
-            std::path::Path::new("empty.txt"),
-            "",
-            "session",
-        )
-        .unwrap();
+        let obs =
+            normalize_to_observations(std::path::Path::new("empty.txt"), "", "session").unwrap();
         assert!(obs.is_empty());
     }
 

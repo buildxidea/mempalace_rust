@@ -29,9 +29,7 @@ pub use base::{
     DiscoverItem, SourceAdapter, SourceCapability, SourceError, SourceRecord, SourceResult,
     SourceSchema, TransformPipeline, TransformStep,
 };
-pub use registry::{
-    get_global, global_registry, register_global, AdapterRegistry, PalaceContext,
-};
+pub use registry::{get_global, global_registry, register_global, AdapterRegistry, PalaceContext};
 
 #[cfg(test)]
 mod tests {
@@ -73,10 +71,8 @@ mod tests {
             Ok(items
                 .iter()
                 .map(|i| {
-                    SourceRecord::new("integration_test", &i.id).with_payload(
-                        "title",
-                        serde_json::json!(format!("Title for {}", i.id)),
-                    )
+                    SourceRecord::new("integration_test", &i.id)
+                        .with_payload("title", serde_json::json!(format!("Title for {}", i.id)))
                 })
                 .collect())
         }
@@ -102,10 +98,9 @@ mod tests {
         // Schema
         let schema = retrieved.schema();
         assert_eq!(schema.name, "integration_test");
-        assert!(schema.validate(&SourceRecord::new("a", "1").with_payload(
-            "title",
-            serde_json::json!("x")
-        )).is_ok());
+        assert!(schema
+            .validate(&SourceRecord::new("a", "1").with_payload("title", serde_json::json!("x")))
+            .is_ok());
 
         // Discover
         let items = retrieved.discover().await.unwrap();

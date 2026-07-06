@@ -357,7 +357,9 @@ impl PgvectorStore {
         client
             .execute(SQL_CREATE_EXTENSION, &[])
             .await
-            .map_err(|e| anyhow::anyhow!("pgvector CREATE EXTENSION: {e}. Does the DB user have superuser?"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("pgvector CREATE EXTENSION: {e}. Does the DB user have superuser?")
+            })?;
 
         // Drawers table with dimension parameter.
         let dim_i32 = config.embedding_dim as i32;
@@ -443,11 +445,7 @@ impl PgvectorStore {
     }
 
     /// Store embedder identity metadata for manifest validation.
-    pub async fn set_embedder_meta(
-        &self,
-        key: &str,
-        value: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn set_embedder_meta(&self, key: &str, value: &str) -> anyhow::Result<()> {
         let client = self
             .pool
             .get()
@@ -619,8 +617,8 @@ impl PalaceStore for PgvectorStore {
                 "updated_at".to_string(),
                 JsonValue::String(drawer.updated_at.to_rfc3339()),
             );
-            let metadata_json = serde_json::to_value(&meta_map)
-                .unwrap_or(JsonValue::Object(Default::default()));
+            let metadata_json =
+                serde_json::to_value(&meta_map).unwrap_or(JsonValue::Object(Default::default()));
 
             // The embedding vector is NOT in the Drawer struct. For the
             // PalaceStore trait, upsert receives Drawer objects without
@@ -849,7 +847,10 @@ mod tests {
     #[test]
     fn test_pool_config_from_dsn() {
         let cfg = pool_config_from_dsn("postgresql://user:pass@localhost:5432/testdb", 10).unwrap();
-        assert_eq!(cfg.url.as_deref(), Some("postgresql://user:pass@localhost:5432/testdb"));
+        assert_eq!(
+            cfg.url.as_deref(),
+            Some("postgresql://user:pass@localhost:5432/testdb")
+        );
         let pool_cfg = cfg.pool.unwrap();
         assert_eq!(pool_cfg.max_size, 10);
     }

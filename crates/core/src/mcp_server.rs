@@ -2700,7 +2700,6 @@ fn tool_verify(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
     }))
 }
 
-
 fn tool_fact_check(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     struct Input {
@@ -2853,10 +2852,7 @@ fn tool_obsidian_export(state: &AppState, args: JsonObject) -> Result<CallToolRe
         }
         crate::obsidian_export::ExportType::Sessions => {
             // Sessions come from the session store
-            let sessions = state
-                .session_store
-                .list_sessions(None)
-                .unwrap_or_default();
+            let sessions = state.session_store.list_sessions(None).unwrap_or_default();
             crate::obsidian_export::export_sessions(&sessions, &config)
                 .map_err(|e| internal_error_safe(&e))?
         }
@@ -2892,15 +2888,13 @@ fn tool_mempalace_export(state: &AppState, args: JsonObject) -> Result<CallToolR
     }
     let input: Input = parse_args(args)?;
 
-    let output_dir = input
-        .output_dir
-        .unwrap_or_else(|| {
-            // Fall back to config, then ./export
-            crate::Config::load()
-                .ok()
-                .and_then(|c| c.export_output_dir)
-                .unwrap_or_else(|| "./export".to_string())
-        });
+    let output_dir = input.output_dir.unwrap_or_else(|| {
+        // Fall back to config, then ./export
+        crate::Config::load()
+            .ok()
+            .and_then(|c| c.export_output_dir)
+            .unwrap_or_else(|| "./export".to_string())
+    });
 
     let output_path = std::path::PathBuf::from(&output_dir);
     let palace_path = &state.config.palace_path;
@@ -5741,7 +5735,8 @@ fn tool_dedup(state: &AppState, args: JsonObject) -> Result<CallToolResult, Erro
             source_pattern: input.source_pattern.clone(),
             min_drawers_to_check: 5,
         };
-        let stats = crate::dedup::dedup_db(&mut db, &config).map_err(|e| internal_error_safe(&e))?;
+        let stats =
+            crate::dedup::dedup_db(&mut db, &config).map_err(|e| internal_error_safe(&e))?;
         return ok_json(serde_json::json!({
             "stats": {
                 "sources_checked": stats.sources_checked,
@@ -6968,10 +6963,7 @@ fn tool_claude_bridge_sync(
 // Eval framework tools
 // ---------------------------------------------------------------------------
 
-fn tool_eval_record(
-    _state: &AppState,
-    args: JsonObject,
-) -> Result<CallToolResult, ErrorData> {
+fn tool_eval_record(_state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Input {
@@ -6990,10 +6982,7 @@ fn tool_eval_record(
     }))
 }
 
-fn tool_eval_summary(
-    _state: &AppState,
-    _args: JsonObject,
-) -> Result<CallToolResult, ErrorData> {
+fn tool_eval_summary(_state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
     let summary = crate::eval::metrics_summary();
     let functions: Vec<serde_json::Value> = summary
         .iter()
@@ -7014,10 +7003,7 @@ fn tool_eval_summary(
     }))
 }
 
-fn tool_eval_check(
-    _state: &AppState,
-    _args: JsonObject,
-) -> Result<CallToolResult, ErrorData> {
+fn tool_eval_check(_state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
     let alerts = crate::eval::check_thresholds();
     let alert_list: Vec<serde_json::Value> = alerts
         .iter()
@@ -7080,8 +7066,8 @@ fn tool_repair_status(state: &AppState, _args: JsonObject) -> Result<CallToolRes
     if collection_missing(state) {
         return ok_json(no_palace());
     }
-    let report = crate::repair::repair_status(&state.palace_path)
-        .map_err(|e| internal_error_safe(&e))?;
+    let report =
+        crate::repair::repair_status(&state.palace_path).map_err(|e| internal_error_safe(&e))?;
     ok_json(serde_json::json!({
         "sqlite_drawer_count": report.sqlite_drawer_count,
         "document_map_count": report.document_map_count,
@@ -7097,10 +7083,7 @@ fn tool_repair_status(state: &AppState, _args: JsonObject) -> Result<CallToolRes
     }))
 }
 
-fn tool_sqlite_integrity(
-    state: &AppState,
-    _args: JsonObject,
-) -> Result<CallToolResult, ErrorData> {
+fn tool_sqlite_integrity(state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
     if collection_missing(state) {
         return ok_json(no_palace());
     }

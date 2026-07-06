@@ -171,10 +171,7 @@ pub fn dedup_palace(
 /// Run dedup targeting a specific `PalaceDb` instance (for MCP tool usage).
 ///
 /// Returns a [`DedupStats`] describing what happened.
-pub fn dedup_db(
-    db: &mut PalaceDb,
-    config: &DedupConfig,
-) -> anyhow::Result<DedupStats> {
+pub fn dedup_db(db: &mut PalaceDb, config: &DedupConfig) -> anyhow::Result<DedupStats> {
     let total_before = db.count();
     let all_entries = db.get_all(config.wing.as_deref(), None, usize::MAX);
 
@@ -250,7 +247,11 @@ pub fn dedup_db(
         info!("dedup: deleted {} drawers", deleted_ids.len());
     }
 
-    let total_after = if config.dry_run { total_before } else { db.count() };
+    let total_after = if config.dry_run {
+        total_before
+    } else {
+        db.count()
+    };
 
     Ok(DedupStats {
         sources_checked: groups.len(),
@@ -274,10 +275,7 @@ pub fn dedup_db(
 /// 2. For each candidate, compute cosine distance against every already-kept
 ///    drawer. If *any* kept drawer is closer than `threshold`, mark as dup.
 /// 3. Keep the first (longest) drawer, delete shorter near-duplicates.
-fn dedup_source_group_inner(
-    entries: &[QueryResult],
-    threshold: f64,
-) -> (Vec<String>, Vec<String>) {
+fn dedup_source_group_inner(entries: &[QueryResult], threshold: f64) -> (Vec<String>, Vec<String>) {
     // Build items with content length for sorting.
     let mut items: Vec<(usize, &QueryResult)> = entries
         .iter()
@@ -368,8 +366,11 @@ pub fn cosine_distance(a: &str, b: &str) -> f64 {
     }
 
     // Collect vocabulary from the union of both sets of keys.
-    let vocab: std::collections::HashSet<String> =
-        freq_a.keys().cloned().chain(freq_b.keys().cloned()).collect();
+    let vocab: std::collections::HashSet<String> = freq_a
+        .keys()
+        .cloned()
+        .chain(freq_b.keys().cloned())
+        .collect();
 
     let mut dot = 0.0_f64;
     let mut mag_a = 0.0_f64;
@@ -565,17 +566,17 @@ mod tests {
     #[test]
     fn test_cosine_distance_case_insensitive() {
         let d = cosine_distance("Hello World", "hello world");
-        assert!(
-            d < 0.001,
-            "case difference should still match, got {d}"
-        );
+        assert!(d < 0.001, "case difference should still match, got {d}");
     }
 
     #[test]
     fn test_cosine_distance_repeated_words() {
         // Same vocabulary with different frequencies.
         let d = cosine_distance("foo foo bar", "foo bar bar");
-        assert!(d > 0.0, "different frequencies should have non-zero distance");
+        assert!(
+            d > 0.0,
+            "different frequencies should have non-zero distance"
+        );
         assert!(d < 1.0, "partial overlap should be < 1.0, got {d}");
     }
 
@@ -587,7 +588,10 @@ mod tests {
     fn test_cosine_distance_vectors_identical() {
         let v = vec![1.0, 0.0, 0.0];
         let d = cosine_distance_vectors(&v, &v);
-        assert!(d < 0.001, "identical vectors should have distance ~0, got {d}");
+        assert!(
+            d < 0.001,
+            "identical vectors should have distance ~0, got {d}"
+        );
     }
 
     #[test]
@@ -646,10 +650,7 @@ mod tests {
 
     #[test]
     fn test_dedup_single_entry() {
-        let entries = vec![make_query_result(
-            "id1",
-            "hello world this is a test entry",
-        )];
+        let entries = vec![make_query_result("id1", "hello world this is a test entry")];
         let (kept, deleted) = dedup_source_group_inner(&entries, 0.15);
         assert_eq!(kept, vec!["id1"]);
         assert!(deleted.is_empty());
@@ -681,10 +682,7 @@ mod tests {
     #[test]
     fn test_dedup_distinct_content_all_kept() {
         let entries = vec![
-            make_query_result(
-                "id1",
-                "the quick brown fox jumps over the lazy dog",
-            ),
+            make_query_result("id1", "the quick brown fox jumps over the lazy dog"),
             make_query_result(
                 "id2",
                 "python is a programming language that is widely used",
@@ -716,10 +714,7 @@ mod tests {
     fn test_dedup_three_entries_two_kept() {
         let entries = vec![
             make_query_result("id1", "apple banana cherry date"),
-            make_query_result(
-                "id2",
-                "apple banana cherry date elderberry fig",
-            ),
+            make_query_result("id2", "apple banana cherry date elderberry fig"),
             make_query_result(
                 "id3",
                 "the distant ocean waves crash against the rocky shoreline at dusk",
@@ -727,18 +722,8 @@ mod tests {
         ];
         let (kept, deleted) = dedup_source_group_inner(&entries, 0.3);
         // id2 is longest, id1 is near-dup of id2, id3 is distinct
-        assert_eq!(
-            kept.len(),
-            2,
-            "should keep id2 and id3, got {:?}",
-            kept
-        );
-        assert_eq!(
-            deleted.len(),
-            1,
-            "should delete id1, got {:?}",
-            deleted
-        );
+        assert_eq!(kept.len(), 2, "should keep id2 and id3, got {:?}", kept);
+        assert_eq!(deleted.len(), 1, "should delete id1, got {:?}", deleted);
     }
 
     // -----------------------------------------------------------------------
@@ -756,7 +741,9 @@ mod tests {
 
     #[test]
     fn test_dedup_config_threshold_from_env() {
-        let _guard = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::set_var("MEMPALACE_DEDUP_THRESHOLD", "0.25");
         assert!((DedupConfig::threshold_from_env() - 0.25).abs() < 1e-10);
         std::env::remove_var("MEMPALACE_DEDUP_THRESHOLD");
@@ -764,7 +751,9 @@ mod tests {
 
     #[test]
     fn test_dedup_config_threshold_from_env_fallback() {
-        let _guard = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("MEMPALACE_DEDUP_THRESHOLD");
         assert!((DedupConfig::threshold_from_env() - DEFAULT_THRESHOLD).abs() < 1e-10);
     }

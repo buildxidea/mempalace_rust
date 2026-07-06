@@ -162,8 +162,10 @@ impl PalaceContext {
 
 #[cfg(test)]
 mod tests {
+    use super::super::base::{
+        DiscoverItem, SourceCapability, SourceError, SourceRecord, SourceResult,
+    };
     use super::*;
-    use super::super::base::{DiscoverItem, SourceCapability, SourceError, SourceRecord, SourceResult};
     use async_trait::async_trait;
 
     /// Minimal no-op adapter for testing.
@@ -224,12 +226,8 @@ mod tests {
     #[test]
     fn test_registry_list_adapters() {
         let registry = AdapterRegistry::new();
-        registry.register(Arc::new(DummyAdapter {
-            name: "a".into(),
-        }));
-        registry.register(Arc::new(DummyAdapter {
-            name: "b".into(),
-        }));
+        registry.register(Arc::new(DummyAdapter { name: "a".into() }));
+        registry.register(Arc::new(DummyAdapter { name: "b".into() }));
 
         let mut names = registry.list_adapters();
         names.sort();
@@ -242,9 +240,7 @@ mod tests {
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
 
-        registry.register(Arc::new(DummyAdapter {
-            name: "x".into(),
-        }));
+        registry.register(Arc::new(DummyAdapter { name: "x".into() }));
         assert!(!registry.is_empty());
         assert_eq!(registry.len(), 1);
     }
@@ -252,9 +248,7 @@ mod tests {
     #[test]
     fn test_registry_unregister() {
         let registry = AdapterRegistry::new();
-        registry.register(Arc::new(DummyAdapter {
-            name: "x".into(),
-        }));
+        registry.register(Arc::new(DummyAdapter { name: "x".into() }));
         assert!(registry.unregister("x"));
         assert!(!registry.unregister("x")); // already removed
         assert!(registry.is_empty());
@@ -263,12 +257,8 @@ mod tests {
     #[test]
     fn test_registry_overwrites_same_name() {
         let registry = AdapterRegistry::new();
-        registry.register(Arc::new(DummyAdapter {
-            name: "x".into(),
-        }));
-        registry.register(Arc::new(DummyAdapter {
-            name: "x".into(),
-        }));
+        registry.register(Arc::new(DummyAdapter { name: "x".into() }));
+        registry.register(Arc::new(DummyAdapter { name: "x".into() }));
         assert_eq!(registry.len(), 1);
     }
 

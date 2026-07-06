@@ -50,8 +50,8 @@ pub mod types;
 // only renders the surface above. See research/04 P2 #19.
 
 pub mod audit;
-pub mod backup;
 pub mod auth;
+pub mod backup;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod bm25;
@@ -109,8 +109,6 @@ pub mod instructions;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod languages;
-#[doc(hidden)]
-pub mod locales;
 pub mod lessons;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
@@ -118,6 +116,8 @@ pub mod llm_client;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod llm_refine;
+#[doc(hidden)]
+pub mod locales;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod migrate;
@@ -169,10 +169,10 @@ pub mod sentinels;
 pub mod signal_handler;
 pub mod sketches;
 pub mod slots;
+pub mod sources;
 #[cfg(feature = "spellcheck")]
 #[doc(hidden)]
 pub mod spellcheck;
-pub mod sources;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod split_mega_files;

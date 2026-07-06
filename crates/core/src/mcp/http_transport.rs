@@ -212,9 +212,7 @@ async fn auth_guard(
                 })?;
                 let token = value_str.strip_prefix("Bearer ").unwrap_or(value_str);
                 if token != expected {
-                    return Err(HttpMcpError::Unauthorized(
-                        "Invalid bearer token".into(),
-                    ));
+                    return Err(HttpMcpError::Unauthorized("Invalid bearer token".into()));
                 }
             }
             None => {
@@ -344,10 +342,7 @@ async fn mcp_handler(
     }
 
     // --- Legacy REST API compat path: {"tool": "...", "args": {...}} ---
-    let tool_name = body
-        .get("tool")
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
+    let tool_name = body.get("tool").and_then(|t| t.as_str()).unwrap_or("");
     if tool_name.is_empty() {
         return Err(HttpMcpError::BadRequest(
             "Request must contain 'method' (JSON-RPC) or 'tool' (legacy) field".into(),
@@ -373,7 +368,9 @@ async fn dispatch_tool(
             // Extract text content from the CallToolResult
             let content = &call_result.content;
             if content.is_empty() {
-                Ok(Json(json!({ "jsonrpc": "2.0", "result": { "content": [] } })))
+                Ok(Json(
+                    json!({ "jsonrpc": "2.0", "result": { "content": [] } }),
+                ))
             } else {
                 let first = content.first();
                 match first {
@@ -381,9 +378,8 @@ async fn dispatch_tool(
                         use rmcp::model::RawContent;
                         match &c.raw {
                             RawContent::Text(ref text) => {
-                                let parsed =
-                                    serde_json::from_str::<serde_json::Value>(&text.text)
-                                        .unwrap_or_else(|_| json!({ "text": text.text }));
+                                let parsed = serde_json::from_str::<serde_json::Value>(&text.text)
+                                    .unwrap_or_else(|_| json!({ "text": text.text }));
                                 Ok(Json(json!({
                                     "jsonrpc": "2.0",
                                     "result": {
@@ -401,7 +397,9 @@ async fn dispatch_tool(
                             }))),
                         }
                     }
-                    None => Ok(Json(json!({ "jsonrpc": "2.0", "result": { "content": [] } }))),
+                    None => Ok(Json(
+                        json!({ "jsonrpc": "2.0", "result": { "content": [] } }),
+                    )),
                 }
             }
         }
@@ -438,16 +436,8 @@ fn build_router(state: HttpMcpState) -> Router {
         .route("/healthz", get(healthz_handler))
         .route("/mcp", post(mcp_handler))
         // Catch-all: reject unknown paths with 404
-        .fallback(|| async {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Not found" })),
-            )
-        })
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth_guard,
-        ))
+        .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))) })
+        .layer(middleware::from_fn_with_state(state.clone(), auth_guard))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             dns_rebinding_guard,
@@ -510,9 +500,7 @@ fn resolve_bind_addr() -> String {
 
 /// Read the optional bearer token from the environment.
 fn resolve_auth_token() -> Option<String> {
-    std::env::var(ENV_HTTP_TOKEN)
-        .ok()
-        .filter(|s| !s.is_empty())
+    std::env::var(ENV_HTTP_TOKEN).ok().filter(|s| !s.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -550,9 +538,9 @@ pub fn run_mcp_http(
 
     let router = build_router(state);
 
-    let addr: SocketAddr = format!("{}:{}", bind_addr, port).parse().map_err(|e| {
-        anyhow::anyhow!("Invalid bind address {}:{}", bind_addr, e)
-    })?;
+    let addr: SocketAddr = format!("{}:{}", bind_addr, port)
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid bind address {}:{}", bind_addr, e))?;
 
     info!(
         "MCP HTTP transport listening on http://{}/mcp (read_only={})",

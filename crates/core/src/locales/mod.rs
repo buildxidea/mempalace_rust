@@ -107,9 +107,7 @@ static LOCALE_REGISTRY: LazyLock<HashMap<String, LocaleData>> = LazyLock::new(||
                 map.insert(code.to_lowercase(), data);
             }
             Err(e) => {
-                tracing::warn!(
-                    "Failed to parse locale {code} at compile-time embed: {e}"
-                );
+                tracing::warn!("Failed to parse locale {code} at compile-time embed: {e}");
             }
         }
     }
@@ -307,10 +305,14 @@ pub fn get_merged_patterns(langs: &[&str]) -> MergedPatterns {
             merged.candidate_patterns.push(e.candidate_pattern.clone());
         }
         if !e.multi_word_pattern.is_empty() {
-            merged.multi_word_patterns.push(e.multi_word_pattern.clone());
+            merged
+                .multi_word_patterns
+                .push(e.multi_word_pattern.clone());
         }
         if !e.direct_address_pattern.is_empty() {
-            merged.direct_address_patterns.push(e.direct_address_pattern.clone());
+            merged
+                .direct_address_patterns
+                .push(e.direct_address_pattern.clone());
         }
 
         for p in &e.person_verb_patterns {
@@ -407,9 +409,8 @@ mod tests {
 
     #[test]
     fn test_detect_russian() {
-        let lang = detect_language_heuristic(
-            "Привет, как дела? Это тест для определения языка текста.",
-        );
+        let lang =
+            detect_language_heuristic("Привет, как дела? Это тест для определения языка текста.");
         assert_eq!(lang, "ru");
     }
 
@@ -428,9 +429,8 @@ mod tests {
 
     #[test]
     fn test_detect_korean() {
-        let lang = detect_language_heuristic(
-            "이것은 한국어 텍스트입니다. 언어 감지 테스트를 합니다.",
-        );
+        let lang =
+            detect_language_heuristic("이것은 한국어 텍스트입니다. 언어 감지 테스트를 합니다.");
         assert_eq!(lang, "ko");
     }
 
@@ -513,7 +513,7 @@ mod tests {
         assert!(merged.stopwords.contains("the")); // en
         assert!(merged.stopwords.contains("le")); // fr
         assert!(merged.stopwords.contains("der")); // de
-        // Patterns should be deduplicated.
+                                                   // Patterns should be deduplicated.
         let count = merged
             .dialogue_patterns
             .iter()
@@ -533,7 +533,10 @@ mod tests {
         let patterns = auto_patterns("Привет мир, это тест на русском языке.");
         assert!(!patterns.person_verb_patterns.is_empty());
         // Russian verb templates should be present.
-        assert!(patterns.person_verb_patterns.iter().any(|p| p.contains("сказал")));
+        assert!(patterns
+            .person_verb_patterns
+            .iter()
+            .any(|p| p.contains("сказал")));
     }
 
     #[test]

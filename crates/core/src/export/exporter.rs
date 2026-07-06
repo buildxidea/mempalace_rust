@@ -233,10 +233,7 @@ pub fn export_markdown(
             writeln!(file, "# {} / {}\n", wing, room)?;
 
             for drawer in drawers {
-                let source = drawer
-                    .source_file
-                    .as_deref()
-                    .unwrap_or("unknown");
+                let source = drawer.source_file.as_deref().unwrap_or("unknown");
                 writeln!(file, "## {}", drawer.id)?;
                 writeln!(file)?;
                 writeln!(file, "> {}\n", drawer.content)?;
@@ -252,10 +249,7 @@ pub fn export_markdown(
             }
         }
 
-        index_data.insert(
-            wing.clone(),
-            (rooms.len(), room_drawer_count),
-        );
+        index_data.insert(wing.clone(), (rooms.len(), room_drawer_count));
         total_wings += 1;
         total_rooms += rooms.len();
     }
@@ -319,8 +313,8 @@ struct DrawerRow {
 mod tests {
     use super::*;
     use crate::drawer_store::DrawerStore;
-    use std::collections::HashMap;
     use serde_json::Value;
+    use std::collections::HashMap;
 
     fn make_store(temp: &tempfile::TempDir) -> DrawerStore {
         DrawerStore::open(temp.path()).unwrap()
@@ -351,9 +345,33 @@ mod tests {
         let output = tempfile::tempdir().unwrap();
         let store = make_store(&temp);
 
-        insert_test_drawer(&store, "d1", "hello", "wing_a", "room_1", Some("src.rs"), "2026-01-01");
-        insert_test_drawer(&store, "d2", "world", "wing_a", "room_2", Some("src.rs"), "2026-01-02");
-        insert_test_drawer(&store, "d3", "foo", "wing_b", "room_1", Some("lib.rs"), "2026-01-03");
+        insert_test_drawer(
+            &store,
+            "d1",
+            "hello",
+            "wing_a",
+            "room_1",
+            Some("src.rs"),
+            "2026-01-01",
+        );
+        insert_test_drawer(
+            &store,
+            "d2",
+            "world",
+            "wing_a",
+            "room_2",
+            Some("src.rs"),
+            "2026-01-02",
+        );
+        insert_test_drawer(
+            &store,
+            "d3",
+            "foo",
+            "wing_b",
+            "room_1",
+            Some("lib.rs"),
+            "2026-01-03",
+        );
 
         let stats = export_markdown(temp.path(), output.path(), None).unwrap();
         assert_eq!(stats.wings, 2);
@@ -378,7 +396,15 @@ mod tests {
         let output = tempfile::tempdir().unwrap();
         let store = make_store(&temp);
 
-        insert_test_drawer(&store, "abc", "test content", "proj", "decisions", Some("a.md"), "2026-06-15");
+        insert_test_drawer(
+            &store,
+            "abc",
+            "test content",
+            "proj",
+            "decisions",
+            Some("a.md"),
+            "2026-06-15",
+        );
 
         export_markdown(temp.path(), output.path(), None).unwrap();
 
@@ -442,8 +468,7 @@ mod tests {
         let link = temp.path().join("link.md");
         std::os::unix::fs::symlink(&real_target, &link).unwrap();
 
-        let err = safe_open_for_write(&link, false)
-            .expect_err("should refuse symlinked target");
+        let err = safe_open_for_write(&link, false).expect_err("should refuse symlinked target");
         let msg = format!("{}", err);
         assert!(msg.contains("symbolic link"), "unexpected error: {msg}");
     }

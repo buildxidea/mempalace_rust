@@ -229,8 +229,8 @@ impl WalStore {
 /// Parse a WAL entry row from SQLite query results.
 fn parse_wal_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WalEntry> {
     let metadata_str: String = row.get(4)?;
-    let metadata: serde_json::Value =
-        serde_json::from_str(&metadata_str).unwrap_or(serde_json::Value::Object(Default::default()));
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_str)
+        .unwrap_or(serde_json::Value::Object(Default::default()));
 
     Ok(WalEntry {
         id: row.get(0)?,
@@ -289,13 +289,9 @@ mod tests {
     #[test]
     fn test_list_recent_newest_first() {
         let store = make_store();
-        store
-            .record("add", "first", None, "test")
-            .unwrap();
+        store.record("add", "first", None, "test").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        store
-            .record("add", "second", None, "test")
-            .unwrap();
+        store.record("add", "second", None, "test").unwrap();
 
         let recent = store.list_recent(10).unwrap();
         assert_eq!(recent.len(), 2);
@@ -434,10 +430,7 @@ mod tests {
     fn test_empty_store_returns_empty() {
         let store = make_store();
         assert_eq!(store.list_recent(10).unwrap().len(), 0);
-        assert_eq!(
-            store.filter(None, None, None, 10).unwrap().len(),
-            0
-        );
+        assert_eq!(store.filter(None, None, None, 10).unwrap().len(), 0);
         assert_eq!(store.count().unwrap(), 0);
     }
 

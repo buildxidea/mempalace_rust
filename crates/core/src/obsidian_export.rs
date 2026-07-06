@@ -292,10 +292,7 @@ pub fn memory_to_obsidian_md(
     // Extra frontmatter fields
     let mut extra: Vec<(&str, String)> = vec![
         ("memory_type", memory.memory_type.to_string()),
-        (
-            "strength",
-            format!("{:.2}", memory.strength),
-        ),
+        ("strength", format!("{:.2}", memory.strength)),
         ("version", memory.version.to_string()),
         ("project", yaml_str(&memory.project)),
     ];
@@ -303,12 +300,8 @@ pub fn memory_to_obsidian_md(
         extra.push(("parent_id", parent.clone()));
     }
     if !memory.files.is_empty() {
-        let files_str: Vec<String> =
-            memory.files.iter().map(|f| format!("\"{}\"", f)).collect();
-        extra.push((
-            "files",
-            format!("[{}]", files_str.join(", ")),
-        ));
+        let files_str: Vec<String> = memory.files.iter().map(|f| format!("\"{}\"", f)).collect();
+        extra.push(("files", format!("[{}]", files_str.join(", "))));
     }
 
     if config.include_frontmatter {
@@ -385,15 +378,9 @@ pub fn observation_to_obsidian_md(
     let aliases: Vec<String> = vec![obs.session_id.clone()];
 
     let mut extra: Vec<(&str, String)> = vec![
-        (
-            "observation_type",
-            obs.observation_type.to_string(),
-        ),
+        ("observation_type", obs.observation_type.to_string()),
         ("importance", obs.importance.to_string()),
-        (
-            "confidence",
-            format!("{:.2}", obs.confidence),
-        ),
+        ("confidence", format!("{:.2}", obs.confidence)),
         ("session", obs.session_id.clone()),
     ];
     if let Some(ref agent) = obs.agent_id {
@@ -467,14 +454,8 @@ pub fn lesson_to_obsidian_md(
     let aliases: Vec<String> = lesson.source_ids.iter().cloned().collect();
 
     let mut extra: Vec<(&str, String)> = vec![
-        (
-            "confidence",
-            format!("{:.2}", lesson.confidence),
-        ),
-        (
-            "retention",
-            format!("{:.2}", lesson.retention),
-        ),
+        ("confidence", format!("{:.2}", lesson.confidence)),
+        ("retention", format!("{:.2}", lesson.retention)),
         (
             "reinforcement_count",
             lesson.reinforcement_count.to_string(),
@@ -568,10 +549,7 @@ pub fn crystal_to_obsidian_md(
             .iter()
             .map(|o| format!("\"{}\"", o.replace('"', "\\\"")))
             .collect();
-        extra.push((
-            "key_outcomes",
-            format!("[{}]", outcomes.join(", ")),
-        ));
+        extra.push(("key_outcomes", format!("[{}]", outcomes.join(", "))));
     }
     if !crystal.files_affected.is_empty() {
         let files: Vec<String> = crystal
@@ -579,10 +557,7 @@ pub fn crystal_to_obsidian_md(
             .iter()
             .map(|f| format!("\"{}\"", f))
             .collect();
-        extra.push((
-            "files_affected",
-            format!("[{}]", files.join(", ")),
-        ));
+        extra.push(("files_affected", format!("[{}]", files.join(", "))));
     }
     if !crystal.lessons.is_empty() {
         let lessons: Vec<String> = crystal
@@ -590,10 +565,7 @@ pub fn crystal_to_obsidian_md(
             .iter()
             .map(|l| format!("\"{}\"", l.replace('"', "\\\"")))
             .collect();
-        extra.push((
-            "lessons",
-            format!("[{}]", lessons.join(", ")),
-        ));
+        extra.push(("lessons", format!("[{}]", lessons.join(", "))));
     }
 
     let aliases: Vec<String> = crystal.action_ids.clone();
@@ -689,10 +661,7 @@ pub fn session_to_obsidian_md(
     let mut extra: Vec<(&str, String)> = vec![
         ("project", yaml_str(&session.project)),
         ("status", session.status.clone()),
-        (
-            "observation_count",
-            session.observation_count.to_string(),
-        ),
+        ("observation_count", session.observation_count.to_string()),
     ];
     if let Some(ref model) = session.model {
         extra.push(("model", model.clone()));
@@ -701,10 +670,7 @@ pub fn session_to_obsidian_md(
         extra.push(("agent_id", agent.clone()));
     }
     if let Some(ref ended) = session.ended_at {
-        extra.push((
-            "ended_at",
-            safe_timestamp(ended, &config.date_format),
-        ));
+        extra.push(("ended_at", safe_timestamp(ended, &config.date_format)));
     }
     if !session.commit_shas.is_empty() {
         let shas: Vec<String> = session
@@ -712,10 +678,7 @@ pub fn session_to_obsidian_md(
             .iter()
             .map(|s| format!("\"{}\"", s))
             .collect();
-        extra.push((
-            "commits",
-            format!("[{}]", shas.join(", ")),
-        ));
+        extra.push(("commits", format!("[{}]", shas.join(", "))));
     }
 
     if config.include_frontmatter {
@@ -779,11 +742,7 @@ pub fn generate_moc(entries: &[MocEntry], output_dir: &str) -> Result<String> {
     let path = Path::new(output_dir).join("00 - Index.md");
 
     let mut md = String::from("---\ntitle: Map of Content\ntype: moc\ndate: ");
-    md.push_str(
-        &Utc::now()
-            .format(&default_date_format())
-            .to_string(),
-    );
+    md.push_str(&Utc::now().format(&default_date_format()).to_string());
     md.push_str("\n---\n\n");
     md.push_str("# MemPalace Map of Content\n\n");
     md.push_str("> Auto-generated index of all exported memories, observations, and more.\n\n");
@@ -958,10 +917,7 @@ pub fn export_observations(
                 } else {
                     "unknown panic".to_string()
                 };
-                tracing::warn!(
-                    "Obsidian export panicked for observation {}: {msg}",
-                    obs.id
-                );
+                tracing::warn!("Obsidian export panicked for observation {}: {msg}", obs.id);
                 errors += 1;
                 continue;
             }
@@ -1024,14 +980,9 @@ pub fn export_lessons(
         let md = lesson_to_obsidian_md(lesson, config);
         let label = lesson.content.chars().take(60).collect::<String>();
         let filename = sanitize_filename(&label);
-        let path = output_dir
-            .join("lessons")
-            .join(format!("{}.md", filename));
+        let path = output_dir.join("lessons").join(format!("{}.md", filename));
         if let Err(e) = std::fs::write(&path, &md) {
-            tracing::warn!(
-                "Obsidian export write failed for lesson {}: {e}",
-                lesson.id
-            );
+            tracing::warn!("Obsidian export write failed for lesson {}: {e}", lesson.id);
             errors += 1;
             continue;
         }
@@ -1088,9 +1039,7 @@ pub fn export_crystals(
             .take(60)
             .collect::<String>();
         let filename = sanitize_filename(&title);
-        let path = output_dir
-            .join("crystals")
-            .join(format!("{}.md", filename));
+        let path = output_dir.join("crystals").join(format!("{}.md", filename));
         if let Err(e) = std::fs::write(&path, &md) {
             tracing::warn!(
                 "Obsidian export write failed for crystal {}: {e}",
@@ -1151,9 +1100,7 @@ pub fn export_sessions(
             .take(60)
             .collect::<String>();
         let filename = sanitize_filename(&title);
-        let path = output_dir
-            .join("sessions")
-            .join(format!("{}.md", filename));
+        let path = output_dir.join("sessions").join(format!("{}.md", filename));
         if let Err(e) = std::fs::write(&path, &md) {
             tracing::warn!(
                 "Obsidian export write failed for session {}: {e}",
@@ -1275,10 +1222,7 @@ mod tests {
             id: id.into(),
             action_ids: vec!["a-1".into(), "a-2".into()],
             narrative: "Implemented memory export system".into(),
-            key_outcomes: vec![
-                "Full Obsidian parity".into(),
-                "MOC index generated".into(),
-            ],
+            key_outcomes: vec!["Full Obsidian parity".into(), "MOC index generated".into()],
             files_affected: vec!["obsidian_export.rs".into()],
             lessons: vec!["use MOC for navigation".into()],
             session_id: Some("s-1".into()),

@@ -119,7 +119,10 @@ fn extract_verb_from_template(template: &str) -> Vec<String> {
     }
 
     // Try to extract the main verb - look for word characters.
-    let re = regex::Regex::new(r"\b([a-zA-ZäöüßÄÖÜéèêëàâäçùûüÿœæŒÆñáéíóúÁÉÍÓÚđĐa-яёА-ЯЁ぀-ゟ゠-ヿ一-鿿가-힣]+)").ok();
+    let re = regex::Regex::new(
+        r"\b([a-zA-ZäöüßÄÖÜéèêëàâäçùûüÿœæŒÆñáéíóúÁÉÍÓÚđĐa-яёА-ЯЁ぀-ゟ゠-ヿ一-鿿가-힣]+)",
+    )
+    .ok();
     if let Some(re) = re {
         for cap in re.captures_iter(trimmed) {
             if let Some(m) = cap.get(1) {

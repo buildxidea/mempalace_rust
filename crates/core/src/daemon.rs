@@ -222,8 +222,7 @@ pub fn start_daemon(config: DaemonConfig) -> anyhow::Result<DaemonHandle> {
     std::thread::Builder::new()
         .name("mempalace-daemon".into())
         .spawn(move || {
-            let rt =
-                tokio::runtime::Runtime::new().expect("failed to create daemon tokio runtime");
+            let rt = tokio::runtime::Runtime::new().expect("failed to create daemon tokio runtime");
             rt.block_on(async move {
                 daemon_loop(palace_path, rx, shutdown_c, processed_c, errored_c).await;
             });
@@ -336,7 +335,9 @@ pub fn submit_job_sync(job: WriteJob) -> Option<JobResult> {
 pub fn ensure_daemon(palace_path: PathBuf) -> anyhow::Result<DaemonHandle> {
     {
         let slot = daemon_slot();
-        let guard = slot.read().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        let guard = slot
+            .read()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         if let Some(handle) = guard.as_ref() {
             return Ok(handle.clone());
         }
@@ -404,11 +405,7 @@ async fn process_job(palace_path: &PathBuf, job: &WriteJob) -> anyhow::Result<()
             let meta_map: std::collections::HashMap<String, serde_json::Value> = metadata
                 .as_ref()
                 .and_then(|v| v.as_object())
-                .map(|obj| {
-                    obj.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
-                })
+                .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default();
             db.upsert_documents(&[(id.clone(), content.clone(), meta_map)])?;
             db.flush()?;

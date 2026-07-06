@@ -186,10 +186,7 @@ pub fn score_context_relevance(
             .collect();
         if !query_words.is_empty() {
             let all_text: String = result_narratives.join(" ").to_lowercase();
-            let matches = query_words
-                .iter()
-                .filter(|w| all_text.contains(*w))
-                .count();
+            let matches = query_words.iter().filter(|w| all_text.contains(*w)).count();
             let ratio = matches as f64 / query_words.len() as f64;
             score += (ratio * 15.0).round().min(15.0) as u8;
         }
@@ -331,8 +328,16 @@ mod tests {
         let score = score_context_relevance(
             "authentication JWT",
             &[0.95, 0.88, 0.82],
-            &["backend".to_string(), "security".to_string(), "backend".to_string()],
-            &["auth".to_string(), "middleware".to_string(), "tokens".to_string()],
+            &[
+                "backend".to_string(),
+                "security".to_string(),
+                "backend".to_string(),
+            ],
+            &[
+                "auth".to_string(),
+                "middleware".to_string(),
+                "tokens".to_string(),
+            ],
             &[
                 "Implemented JWT authentication with refresh tokens".to_string(),
                 "Added security middleware for token validation".to_string(),
@@ -367,7 +372,10 @@ mod tests {
             &[0.1, 0.05],
             &["frontend".to_string()],
             &["styles".to_string()],
-            &["CSS styling rules".to_string(), "layout adjustments".to_string()],
+            &[
+                "CSS styling rules".to_string(),
+                "layout adjustments".to_string(),
+            ],
         );
         // Even with low scores, having results and diversity gives some points.
         assert!(score > 0);

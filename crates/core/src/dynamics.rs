@@ -562,10 +562,7 @@ mod tests {
     #[test]
     fn test_constants_are_sane() {
         assert!(STRENGTH_FLOOR > 0.0, "floor must be positive");
-        assert!(
-            MAX_STRENGTH > STRENGTH_FLOOR,
-            "max must exceed floor"
-        );
+        assert!(MAX_STRENGTH > STRENGTH_FLOOR, "max must exceed floor");
         assert!(
             DEFAULT_STRENGTH > STRENGTH_FLOOR,
             "default strength must be above floor"
@@ -574,9 +571,18 @@ mod tests {
             DEFAULT_STRENGTH < MAX_STRENGTH,
             "default strength must be below max"
         );
-        assert!(DEFAULT_STABILITY > 0.0, "default stability must be positive");
-        assert!(POTENTIATION_INCREMENT > 0.0, "potentiation inc must be positive");
-        assert!(SPACED_INTERVAL_HOURS > 0.0, "spaced interval must be positive");
+        assert!(
+            DEFAULT_STABILITY > 0.0,
+            "default stability must be positive"
+        );
+        assert!(
+            POTENTIATION_INCREMENT > 0.0,
+            "potentiation inc must be positive"
+        );
+        assert!(
+            SPACED_INTERVAL_HOURS > 0.0,
+            "spaced interval must be positive"
+        );
         assert!(STABILITY_INCREMENT > 0.0, "stability inc must be positive");
 
         // 80 co-accesses from default to max (5.0 - 1.0 = 4.0, 4.0 / 0.05 = 80).

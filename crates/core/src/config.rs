@@ -1054,9 +1054,15 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
-            inject_context_enabled: false,
+            inject_context_enabled: None,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            export_output_dir: None,
+            instance: None,
+            obsidian_date_format: None,
+            obsidian_export_dir: None,
+            obsidian_tag_prefix: None,
+            wal_retention_days: None,
             eval_enabled: true,
             eval_threshold: None,
             eval_max_per_function: None,
@@ -1121,9 +1127,15 @@ mod tests {
             llm_consent_given: false,
             max_backups: None,
             hooks_auto_save: true,
-            inject_context_enabled: false,
+            inject_context_enabled: None,
             search_strategy: default_search_strategy(),
             max_cache_size_mb: default_max_cache_size_mb(),
+            export_output_dir: None,
+            instance: None,
+            obsidian_date_format: None,
+            obsidian_export_dir: None,
+            obsidian_tag_prefix: None,
+            wal_retention_days: None,
             eval_enabled: true,
             eval_threshold: None,
             eval_max_per_function: None,
@@ -1305,7 +1317,7 @@ mod tests {
     #[test]
     fn test_default_instance_is_zero() {
         let cfg = Config::default();
-        assert_eq!(cfg.instance, 0);
+        assert_eq!(cfg.instance, Some(0));
     }
 
     /// `mempalace_rust-fqvg`: MEMPALACE_INSTANCE env overrides config value.
@@ -1318,21 +1330,21 @@ mod tests {
 
         // Default is 0
         let cfg = Config::default();
-        assert_eq!(cfg.instance, 0);
+        assert_eq!(cfg.instance, Some(0));
 
         // Write config with instance=5
         let mut cfg = Config::default();
-        cfg.instance = 5;
+        cfg.instance = Some(5);
         cfg.save().unwrap();
 
         // Load without env: should be 5
         let loaded = Config::load().unwrap();
-        assert_eq!(loaded.instance, 5);
+        assert_eq!(loaded.instance, Some(5));
 
         // With env override: env wins
         std::env::set_var("MEMPALACE_INSTANCE", "3");
         let loaded = Config::load().unwrap();
-        assert_eq!(loaded.instance, 3);
+        assert_eq!(loaded.instance, Some(3));
 
         std::env::remove_var("MEMPALACE_INSTANCE");
         std::env::remove_var("XDG_CONFIG_HOME");
@@ -1348,7 +1360,7 @@ mod tests {
 
         std::env::set_var("MEMPALACE_INSTANCE", "99");
         let cfg = Config::load().unwrap();
-        assert_eq!(cfg.instance, 50);
+        assert_eq!(cfg.instance, Some(50));
 
         std::env::remove_var("MEMPALACE_INSTANCE");
         std::env::remove_var("XDG_CONFIG_HOME");

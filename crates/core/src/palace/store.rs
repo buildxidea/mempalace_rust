@@ -30,6 +30,8 @@ pub enum StoreTier {
     Lancedb,
     /// Qdrant vector database via REST API.
     Qdrant,
+    #[cfg(feature = "backend-pgvector")]
+    Pgvector,
 }
 
 // Re-export the concrete store implementations.

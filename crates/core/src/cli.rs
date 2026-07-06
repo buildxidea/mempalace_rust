@@ -3711,7 +3711,7 @@ pub fn run() -> Result<()> {
             max_suggestions,
             json,
         } => {
-            cmd_spellcheck(text, *max_edit, *max_suggestions, *json)?;
+            cmd_spellcheck(&text.join(" "), max_edit.unwrap_or(2), max_suggestions.unwrap_or(5), *json)?;
         }
         Commands::Hook {
             hook,
@@ -4120,6 +4120,16 @@ fn cmd_demo(custom_dir: Option<&Path>, force: bool, palace_arg: Option<&str>) ->
 fn notes_dir_from_palace(palace_arg: Option<&str>) -> Result<std::path::PathBuf> {
     let palace_path = resolve_palace_path(palace_arg)?;
     Ok(palace_path.join("notes"))
+}
+
+fn cmd_spellcheck(
+    _text: &str,
+    _max_edit: usize,
+    _max_suggestions: usize,
+    _json: bool,
+) -> Result<()> {
+    println!("Spellcheck command not yet fully implemented. Use `mpr search` instead.");
+    Ok(())
 }
 
 fn cmd_remember(text: &str, palace_arg: Option<&str>) -> Result<()> {

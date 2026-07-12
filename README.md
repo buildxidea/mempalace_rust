@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="mempalace_rust_illustration.webp" alt="mpr — MemPalace — the highest-scoring AI memory system in Rust" width="720">
+</p>
+
+<br>
+
 <div align="center">
 
 <img src="assets/mempalace_logo.png" alt="MemPalace" width="280">

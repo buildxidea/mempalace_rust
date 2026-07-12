@@ -1,16 +1,52 @@
-<p align="center">
-  <img src="mempalace_rust_illustration.webp" alt="mpr — MemPalace — the highest-scoring AI memory system in Rust" width="720">
-</p>
+# mpr — MemPalace
 
-<br>
+<div align="center">
+  <img src="mempalace_rust_illustration.webp" alt="mpr — MemPalace — the highest-scoring AI memory system in Rust" width="720">
+</div>
 
 <div align="center">
 
-<img src="assets/mempalace_logo.png" alt="MemPalace" width="280">
+[![version]][release-link]
+[![rust]][rust-link]
+[![license]][license-link]
 
-# MemPalace
+</div>
 
-### The highest-scoring AI memory system ever benchmarked. Now in Rust.
+**The highest-scoring AI memory system ever benchmarked. Now in Rust.**  
+96.6% LongMemEval R@5 with zero API calls. Mine projects and conversations into a searchable palace. AAAK compression. Auto-MCP for every major agent.
+
+<div align="center">
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quangdang46/mempalace_rust/main/install.sh | bash
+```
+
+</div>
+
+---
+
+## 🤖 Agent Quickstart (Auto-MCP)
+
+After install, MCP is auto-wired for Claude Code, Codex, Cursor, Windsurf, VS Code, Gemini, OpenCode, Amp, and Droid. Just ask your agent:
+
+```
+"What did we decide about auth?"
+```
+
+Or from CLI:
+
+```bash
+# Search everything
+mpr search "auth decision" --json
+
+# Mine a project
+mpr mine ~/projects/myapp --mode convos --json
+```
+
+**Output conventions**
+- stdout = structured data (JSON search results)
+- stderr = diagnostics
+- exit 0 = success
 
 <br>
 

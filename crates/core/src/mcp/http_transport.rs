@@ -152,14 +152,19 @@ pub fn resolve_auth_token(cli_token: Option<&str>) -> Option<String> {
             return Some(t.to_string());
         }
     }
+    // Treat empty / whitespace-only env values as unset. On Windows CI
+    // runners, a process-level empty env var can stick across tests even
+    // after `remove_var`, so trim + empty-check is required for both keys.
     if let Ok(t) = std::env::var(ENV_HTTP_TOKEN) {
+        let t = t.trim();
         if !t.is_empty() {
-            return Some(t);
+            return Some(t.to_string());
         }
     }
     if let Ok(t) = std::env::var(ENV_MCP_HTTP_TOKEN) {
+        let t = t.trim();
         if !t.is_empty() {
-            return Some(t);
+            return Some(t.to_string());
         }
     }
     None
@@ -906,12 +911,25 @@ mod tests {
     #[test]
     fn test_resolve_auth_token_empty_string_is_none() {
         let _lock = crate::test_env_lock();
-        std::env::remove_var(ENV_HTTP_TOKEN);
-        std::env::remove_var(ENV_MCP_HTTP_TOKEN);
-        std::env::set_var(ENV_MCP_HTTP_TOKEN, "");
-        let result = resolve_auth_token(None);
-        assert!(result.is_none());
-        std::env::remove_var(ENV_MCP_HTTP_TOKEN);
+        // Cover both env keys: empty / whitespace must not count as a token.
+        for key in [ENV_HTTP_TOKEN, ENV_MCP_HTTP_TOKEN] {
+            std::env::remove_var(ENV_HTTP_TOKEN);
+            std::env::remove_var(ENV_MCP_HTTP_TOKEN);
+            std::env::set_var(key, "");
+            assert!(
+                resolve_auth_token(None).is_none(),
+                "empty {key} must resolve to None"
+            );
+            std::env::set_var(key, "   ");
+            assert!(
+                resolve_auth_token(None).is_none(),
+                "whitespace-only {key} must resolve to None"
+            );
+            std::env::remove_var(key);
+        }
+        // CLI empty/whitespace also ignored
+        assert!(resolve_auth_token(Some("")).is_none());
+        assert!(resolve_auth_token(Some("  ")).is_none());
     }
 
     #[test]

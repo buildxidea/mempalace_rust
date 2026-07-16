@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn test_resolve_port_default() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         // Clear any env var
         std::env::remove_var(ENV_HTTP_PORT);
         assert_eq!(resolve_port(None), DEFAULT_PORT);
@@ -903,14 +903,14 @@ mod tests {
 
     #[test]
     fn test_resolve_port_override() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_HTTP_PORT);
         assert_eq!(resolve_port(Some(9999)), 9999);
     }
 
     #[test]
     fn test_resolve_auth_token_empty_string_is_none() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         // Cover both env keys: empty / whitespace must not count as a token.
         for key in [ENV_HTTP_TOKEN, ENV_MCP_HTTP_TOKEN] {
             std::env::remove_var(ENV_HTTP_TOKEN);
@@ -934,7 +934,7 @@ mod tests {
 
     #[test]
     fn test_resolve_auth_token_some() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_HTTP_TOKEN);
         std::env::set_var(ENV_MCP_HTTP_TOKEN, "my-secret-token");
         let result = resolve_auth_token(None);
@@ -944,7 +944,7 @@ mod tests {
 
     #[test]
     fn test_resolve_auth_token_removed_is_none() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(ENV_MCP_HTTP_TOKEN, "temp");
         std::env::remove_var(ENV_MCP_HTTP_TOKEN);
         std::env::remove_var(ENV_HTTP_TOKEN);
@@ -965,7 +965,7 @@ mod tests {
 
     #[test]
     fn test_resolve_http_auth_loopback_no_token_ok() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_HTTP_TOKEN);
         std::env::remove_var(ENV_MCP_HTTP_TOKEN);
         std::env::remove_var(ENV_HTTP_BIND_ADDR);
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn test_resolve_http_auth_non_loopback_without_token_errors() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_HTTP_TOKEN);
         std::env::remove_var(ENV_MCP_HTTP_TOKEN);
         std::env::remove_var(ENV_HTTP_BIND_ADDR);
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn test_resolve_http_auth_non_loopback_with_cli_token_ok() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_HTTP_TOKEN);
         std::env::remove_var(ENV_MCP_HTTP_TOKEN);
         let auth = resolve_http_auth(Some("0.0.0.0"), Some(8443), Some("s3cret"), false).unwrap();
@@ -1003,7 +1003,7 @@ mod tests {
 
     #[test]
     fn test_resolve_http_auth_non_loopback_auto_generate() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_HTTP_TOKEN);
         std::env::remove_var(ENV_MCP_HTTP_TOKEN);
         let auth = resolve_http_auth(Some("0.0.0.0"), Some(8443), None, true).unwrap();
@@ -1013,7 +1013,7 @@ mod tests {
 
     #[test]
     fn test_resolve_auth_token_prefers_http_token_env() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(ENV_HTTP_TOKEN, "from-http");
         std::env::set_var(ENV_MCP_HTTP_TOKEN, "from-mcp");
         assert_eq!(resolve_auth_token(None).as_deref(), Some("from-http"));
@@ -1046,7 +1046,7 @@ mod tests {
     // ===== P2-7 tests =====
     #[test]
     fn test_resolve_idle_exit_seconds() {
-        let _lock = crate::test_env_lock();
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(ENV_IDLE_EXIT_SECONDS);
         assert_eq!(resolve_idle_exit_seconds(), None);
 

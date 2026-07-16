@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — 0.6.7
+
+### Fixed (upstream sync 2026-07-16)
+- **P0-1** Atomic `KG.supersede()` + new `mempalace_kg_supersede` MCP tool — half-open `[valid_from, valid_to)` intervals at supersede boundary; successor + predecessor both queryable without overlap.
+- **P0-2** `MEMPALACE_STARTUP_INTEGRITY_MAX_MB` gate (default 512 MB) + async preflight — `ServerHandler::initialize` returns immediately; probe runs on `tokio::spawn`. Avoids 60s stalls on large palaces.
+- **P0-3** NUL-byte + lone-surrogate sanitization before FTS5 indexing (new `normalize::sanitize_for_fts5`). Prevents inverted-index corruption from `Bash` tool output containing `\0`.
+- **P0-4** SQLite `busy_timeout` bumped to 15s on every probe/repair path. Eliminates false-positive "corrupt" reports under load.
+- **P0-5** New `mempalace_list_drawers` MCP tool with `since` / `before` / `wing` / `limit` / `offset` filters; backed by `DrawerStore::list_filtered`.
+
+Upstream sources: [mempalace v3.6.0](https://github.com/mempalace/mempalace/commit/ec8788c), [agentmemory v0.9.27+](https://github.com/rohitg00/agentmemory/commit/93ae9bc). Plan: `docs/upstream-sync-action-plan-2026-07-16.md`.
+
 ## v0.6.6 (2026-06-27)
 
 ### Features

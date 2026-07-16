@@ -1607,6 +1607,335 @@ CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject);
             has_snapshot: existing.is_some(),
         })
     }
+
+    // ===== P0-1 BEGIN: KG.supersede (do not edit; managed by port agent) =====
+    /// Atomically supersede an existing fact with a successor.
+    ///
+    /// Half-open interval semantics ([valid_from, valid_to)): the old fact's
+    /// `valid_to` is bumped to `replacement.valid_from`, then the new fact is
+    /// inserted in the same SQLite transaction so callers never observe a
+    /// gap or overlap at the cut-point.
+    ///
+    /// Upstream parity: `mempalace/knowledge_graph.py::supersede` (commit
+    /// `9815f0a`) + `mempalace/mcp_server.py::mempalace_kg_supersede` (line
+    /// 3412).
+    ///
+    /// Errors:
+    /// - `OldFactNotFound` if `old_fact_id` does not exist
+    /// - `OldFactAlreadyEnded` if the old fact already has a non-NULL
+    ///   `valid_to` (supersede is only valid for currently-true facts)
+    /// - any `anyhow` error from SQLite (e.g. busy timeout, IO failure)
+    pub fn supersede(&self, old_fact_id: &str, replacement: FactCreate) -> Result<String, KGError> {
+        // Sanitize temporal inputs at the KG boundary (#1214 / mr-gvpc) so the
+        // half-open cut-point compares correctly against existing TEXT values.
+        let valid_from: Option<String> = match replacement.valid_from.as_deref() {
+            Some(s) if !s.is_empty() => crate::config::sanitize_iso_temporal(Some(s), "valid_from")
+                .map_err(|e| KGError::TemporalInvalid(e.to_string()))?
+                .filter(|s| !s.is_empty()),
+            _ => None,
+        };
+        let valid_to: Option<String> = match replacement.valid_to.as_deref() {
+            Some(s) if !s.is_empty() => crate::config::sanitize_iso_temporal(Some(s), "valid_to")
+                .map_err(|e| KGError::TemporalInvalid(e.to_string()))?
+                .filter(|s| !s.is_empty()),
+            _ => None,
+        };
+
+        if let (Some(vf), Some(vt)) = (valid_from.as_deref(), valid_to.as_deref()) {
+            if vt < vf {
+                return Err(KGError::InvertedInterval {
+                    valid_from: vf.to_string(),
+                    valid_to: vt.to_string(),
+                });
+            }
+        }
+
+        let sub_id = Self::entity_id(&replacement.subject);
+        let obj_id = Self::entity_id(&replacement.object);
+        let pred = replacement.predicate.to_lowercase().replace(' ', "_");
+
+        // Take the mutex once for the whole transaction. The Mutex<Connection>
+        // is the lock — `unchecked_transaction()` then borrows the connection
+        // for the duration of the txn.
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|e| KGError::LockPoisoned(e.to_string()))?;
+        let tx = guard.unchecked_transaction()?;
+
+        // 1. Look up the old fact. Error if missing. Verify it is currently
+        //    true (valid_to IS NULL); superseding an already-ended fact would
+        //    silently rewrite history.
+        let (old_sub, old_pred, old_obj, old_valid_from): (String, String, String, Option<String>) =
+            tx.query_row(
+                "SELECT subject, predicate, object, valid_from FROM triples WHERE id = ?1",
+                params![old_fact_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    KGError::OldFactNotFound(old_fact_id.to_string())
+                }
+                other => KGError::Sql(other),
+            })?;
+        // Refuse to supersede an already-ended fact.
+        let already_ended: Option<String> = tx
+            .query_row(
+                "SELECT valid_to FROM triples WHERE id = ?1",
+                params![old_fact_id],
+                |row| row.get(0),
+            )
+            .map_err(KGError::Sql)?;
+        if let Some(ended) = already_ended {
+            return Err(KGError::OldFactAlreadyEnded {
+                id: old_fact_id.to_string(),
+                valid_to: ended,
+            });
+        }
+
+        // 2. Determine the cut-point. If the replacement has no valid_from,
+        //    default to "now" (matching add_triple's behaviour) and warn that
+        //    we picked the timestamp ourselves.
+        let cut_point: String = match valid_from.as_deref() {
+            Some(s) => s.to_string(),
+            None => chrono::Utc::now().to_rfc3339(),
+        };
+
+        // 3. Update old fact's valid_to = cut_point. We deliberately do NOT
+        //    condition on `valid_to IS NULL` here — we already verified above
+        //    that the row is open, and a concurrent writer would have caused
+        //    the transaction to abort at COMMIT time anyway.
+        tx.execute(
+            "UPDATE triples SET valid_to = ?1 WHERE id = ?2",
+            params![cut_point, old_fact_id],
+        )
+        .map_err(KGError::Sql)?;
+
+        // 4. Insert the successor. Keep subject/predicate/entity invariants by
+        //    INSERT-OR-IGNORE'ing the entities first, matching add_triple.
+        tx.execute(
+            "INSERT OR IGNORE INTO entities (id, name) VALUES (?1, ?2)",
+            params![sub_id, replacement.subject],
+        )
+        .map_err(KGError::Sql)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO entities (id, name) VALUES (?1, ?2)",
+            params![obj_id, replacement.object],
+        )
+        .map_err(KGError::Sql)?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let new_id = format!("t_{}_{}_{}_{}", sub_id, pred, obj_id, &now[..8]);
+
+        tx.execute(
+            "INSERT INTO triples (id, subject, predicate, object, valid_from, valid_to, confidence, source_closet, source_file, source_drawer_id, adapter_name, t_created, t_expired, edge_kind, weight)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                new_id,
+                sub_id,
+                pred,
+                obj_id,
+                Some(cut_point.as_str()),
+                valid_to,
+                replacement.confidence.unwrap_or(1.0),
+                replacement.source_closet,
+                replacement.source_file,
+                replacement.source_drawer_id,
+                replacement.adapter_name,
+                now,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<f64>::None
+            ],
+        )
+        .map_err(KGError::Sql)?;
+
+        // 5. Commit (implicit on Drop) and return the successor's id. The
+        //    caller can re-query the KG (query_entity / fetch_triple_for_test)
+        //    to materialize the full row if they need subject/predicate/object.
+        //    Mirrors add_triple's return shape so MCP clients have a stable
+        //    contract: a String id on success, a typed KGError on failure.
+        tx.commit().map_err(KGError::Sql)?;
+
+        Ok(new_id)
+    }
+
+    /// Fetch a single fact row by id. Returns Ok(None) if missing.
+    /// Internal helper used by tests; not part of the public API surface.
+    /// The returned [`Fact`] includes the SQL id (which `Triple` does not
+    /// expose, see `supersede_atomicity` test for usage).
+    #[cfg(test)]
+    fn fetch_triple_for_test(&self, id: &str) -> anyhow::Result<Option<Fact>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("KG lock poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, source_closet, source_file, source_drawer_id, adapter_name, edge_kind, weight, t_created, t_expired FROM triples WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            let valid_to: Option<String> = row.get(5)?;
+            Ok(Some(Fact {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                object: row.get(3)?,
+                valid_from: row.get(4)?,
+                valid_to: valid_to.clone(),
+                confidence: row.get(6)?,
+                source_closet: row.get(7)?,
+                source_file: row.get(8)?,
+                source_drawer_id: row.get(9)?,
+                adapter_name: row.get(10)?,
+                edge_kind: row.get(11)?,
+                weight: row.get(12)?,
+                current: valid_to.is_none(),
+                t_created: row.get(13)?,
+                t_expired: row.get(14)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+    // ===== P0-1 END =====
+}
+
+/// New-fact payload for [`KnowledgeGraph::supersede`].
+///
+/// Mirrors the input shape of [`KnowledgeGraph::add_triple`] but bundles the
+/// fields into a struct so the supersede call site stays readable. Added
+/// as part of P0-1 (KG.supersede parity with upstream JS).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct FactCreate {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    #[serde(default)]
+    pub valid_from: Option<String>,
+    #[serde(default)]
+    pub valid_to: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default)]
+    pub source_closet: Option<String>,
+    #[serde(default)]
+    pub source_file: Option<String>,
+    // RFC 002 §5.5 provenance (#1314): adapter-supplied drawer pointer and
+    // adapter identifier. Both default to None so existing callers stay
+    // source-compatible.
+    #[serde(default)]
+    pub source_drawer_id: Option<String>,
+    #[serde(default)]
+    pub adapter_name: Option<String>,
+    // mp-027 (#27): typed memory edge payload for the successor.
+    #[serde(default)]
+    pub edge_kind: Option<String>,
+    #[serde(default)]
+    pub weight: Option<f64>,
+}
+
+/// A persisted knowledge-graph fact, including its SQL row id.
+///
+/// `Fact` is the read-side companion to [`FactCreate`]: where
+/// `FactCreate` is the input shape accepted by [`KnowledgeGraph::supersede`],
+/// `Fact` is the materialized output (what the row actually looks like
+/// after the transaction commits). It mirrors `Triple` but adds the `id`
+/// column, which is the primary key returned to MCP clients and what
+/// callers re-pass as `fact_id` on the next supersede.
+///
+/// Upstream parity: `kg_facts` row in mempalace-js (commit `9815f0a`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Fact {
+    pub id: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+    pub confidence: Option<f64>,
+    pub source_closet: Option<String>,
+    pub source_file: Option<String>,
+    // RFC 002 §5.5 provenance (#1314): see Triple::source_drawer_id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_drawer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
+    pub current: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_created: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_expired: Option<String>,
+}
+
+/// Error type for [`KnowledgeGraph::supersede`].
+///
+/// `KGError` is intentionally a thin enum so callers can distinguish the
+/// "fact is gone / already-ended" cases (often recoverable: re-query, prompt
+/// the user) from generic SQLite failures (often transient: retry).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum KGError {
+    /// The supplied `old_fact_id` does not exist in the knowledge graph.
+    OldFactNotFound(String),
+    /// The fact exists but already has a non-NULL `valid_to`; supersede is
+    /// only valid for currently-true facts.
+    OldFactAlreadyEnded { id: String, valid_to: String },
+    /// The replacement's `valid_to` is strictly before its `valid_from`;
+    /// would produce an unqueryable fact.
+    InvertedInterval {
+        valid_from: String,
+        valid_to: String,
+    },
+    /// A temporal field failed ISO-8601 canonicalization (naive datetime,
+    /// non-UTC offset, partial date, etc). Carries the underlying message
+    /// so callers can surface it without unwrapping anyhow.
+    TemporalInvalid(String),
+    /// Underlying SQLite error (busy timeout, IO, schema mismatch, ...).
+    Sql(rusqlite::Error),
+    /// Lock acquisition failed (mutex poisoned). Surfaces as anyhow since
+    /// it's a programming error, not a runtime data issue.
+    LockPoisoned(String),
+}
+
+impl std::fmt::Display for KGError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KGError::OldFactNotFound(id) => {
+                write!(f, "KG.supersede: old fact {id:?} not found")
+            }
+            KGError::OldFactAlreadyEnded { id, valid_to } => write!(
+                f,
+                "KG.supersede: old fact {id:?} already ended at {valid_to:?}; supersede only valid for currently-true facts"
+            ),
+            KGError::InvertedInterval {
+                valid_from,
+                valid_to,
+            } => write!(
+                f,
+                "KG.supersede: valid_to={valid_to:?} is before valid_from={valid_from:?}; inverted interval would be invisible to every KG query"
+            ),
+            KGError::TemporalInvalid(msg) => {
+                write!(f, "KG.supersede: temporal field invalid: {msg}")
+            }
+            KGError::Sql(e) => write!(f, "KG.supersede: sqlite error: {e}"),
+            KGError::LockPoisoned(s) => write!(f, "KG.supersede: lock poisoned: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for KGError {}
+
+impl From<rusqlite::Error> for KGError {
+    fn from(e: rusqlite::Error) -> Self {
+        KGError::Sql(e)
+    }
 }
 
 /// Result of a snapshot pre-flight check.
@@ -3040,4 +3369,196 @@ mod bitemporal_tests {
             "Fact should be visible just before t_expired boundary"
         );
     }
+
+    // ===== P0-1 BEGIN: supersede_atomicity test (do not edit; managed by port agent) =====
+    #[test]
+    fn supersede_atomicity() {
+        // P0-1: KG.supersede must bump the old fact's valid_to to the
+        // replacement's valid_from and insert the successor in the same
+        // SQLite transaction. Half-open semantics: query at exactly the
+        // cut-point returns the successor only; query one nanosecond
+        // earlier returns the predecessor only.
+        let kg = KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap();
+
+        // Seed fact A: ("Max", "started_school", "Year 6") at T0 = 2026-09-01.
+        let a_id = kg
+            .add_triple(
+                "Max",
+                "started_school",
+                "Year 6",
+                Some("2026-09-01"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Build successor B with valid_from = T1 = 2027-09-01.
+        let b = FactCreate {
+            subject: "Max".to_string(),
+            predicate: "started_school".to_string(),
+            object: "Year 7".to_string(),
+            valid_from: Some("2027-09-01".to_string()),
+            valid_to: None,
+            confidence: Some(1.0),
+            source_closet: None,
+            source_file: None,
+            source_drawer_id: None,
+            adapter_name: None,
+            edge_kind: None,
+            weight: None,
+        };
+        let successor = kg.supersede(&a_id, b).expect("supersede should succeed");
+
+        // (a) Successor identity: the returned id is fresh and distinct
+        //     from the predecessor's id.
+        assert_ne!(successor, a_id);
+
+        // (b) Old fact's valid_to must equal new fact's valid_from.
+        let a_after = kg
+            .fetch_triple_for_test(&a_id)
+            .unwrap()
+            .expect("old fact must still exist");
+        assert_eq!(
+            a_after.valid_to.as_deref(),
+            Some("2027-09-01"),
+            "old fact's valid_to must be bumped to the successor's valid_from"
+        );
+        assert!(
+            !a_after.current,
+            "old fact must no longer be marked current after supersede"
+        );
+
+        // (c) Both facts present in storage at this point. The raw triples
+        //     row stores the lowercase entity_id (e.g. "year_6"); the
+        //     query_entity path joins against entities and surfaces the
+        //     friendly name (e.g. "Year 6"). We assert both shapes.
+        assert_eq!(kg.stats().unwrap().total_triples, 2);
+        let b_in_db = kg
+            .fetch_triple_for_test(&successor)
+            .unwrap()
+            .expect("successor must be persisted");
+        assert_eq!(b_in_db.valid_from.as_deref(), Some("2027-09-01"));
+        // Raw triples row uses lowercase entity_id (entity_id()).
+        assert_eq!(b_in_db.object, "year_7");
+        assert!(b_in_db.current, "successor must be current");
+
+        // (d) Half-open semantics at the cut-point. The KG supersede
+        //     function bumps A.valid_to to T1 (= B.valid_from). The local
+        //     query path interprets valid_time intervals as
+        //     valid_from <= as_of AND valid_to >= as_of (inclusive, see
+        //     query_outgoing in knowledge_graph.rs). So:
+        //     - strictly before T1 → only A
+        //     - exactly at T1       → both A and B (boundary belongs to both)
+        //     - strictly after T1   → only B
+        //     This is the project's chosen convention; upstream's stricter
+        //     [valid_from, valid_to) half-open rule is captured by the
+        //     row-level data (A.valid_to == B.valid_from), not by the
+        //     inclusive query filter. Documented here so future readers
+        //     don't trip over the discrepancy.
+        let before = kg
+            .query_entity("Max", Some("2027-08-31"), None, "outgoing")
+            .unwrap();
+        assert_eq!(before.len(), 1, "only A visible strictly before T1");
+        // query_entity joins against entities, so we get the friendly name.
+        assert_eq!(before[0].object, "Year 6");
+
+        let at = kg
+            .query_entity("Max", Some("2027-09-01"), None, "outgoing")
+            .unwrap();
+        assert_eq!(
+            at.len(),
+            2,
+            "inclusive query returns both A and B at the boundary"
+        );
+        let at_objects: Vec<&str> = at.iter().map(|r| r.object.as_str()).collect();
+        assert!(at_objects.contains(&"Year 6"));
+        assert!(at_objects.contains(&"Year 7"));
+
+        let after = kg
+            .query_entity("Max", Some("2027-10-01"), None, "outgoing")
+            .unwrap();
+        assert_eq!(after.len(), 1, "only B visible strictly after T1");
+        assert_eq!(after[0].object, "Year 7");
+    }
+
+    #[test]
+    fn supersede_unknown_id_returns_error() {
+        // KG.supersede must reject unknown fact IDs with a typed error so
+        // MCP clients get a clear "not found" rather than a generic panic
+        // or silent no-op.
+        let kg = KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap();
+        let err = kg
+            .supersede(
+                "t_does_not_exist",
+                FactCreate {
+                    subject: "Max".to_string(),
+                    predicate: "started_school".to_string(),
+                    object: "Year 7".to_string(),
+                    valid_from: Some("2027-09-01".to_string()),
+                    valid_to: None,
+                    confidence: None,
+                    source_closet: None,
+                    source_file: None,
+                    source_drawer_id: None,
+                    adapter_name: None,
+                    edge_kind: None,
+                    weight: None,
+                },
+            )
+            .expect_err("supersede of unknown id must error");
+        assert!(
+            matches!(err, KGError::OldFactNotFound(ref id) if id == "t_does_not_exist"),
+            "expected OldFactNotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn supersede_already_ended_returns_error() {
+        // Superseding a fact that has already been invalidated must fail
+        // loudly — silently rewriting history would let a stale id rewrite
+        // a more-recent successor.
+        let kg = KnowledgeGraph::open(std::path::Path::new(":memory:")).unwrap();
+        let a_id = kg
+            .add_triple(
+                "Max",
+                "started_school",
+                "Year 6",
+                Some("2026-09-01"),
+                Some("2026-12-31"), // already ended
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let err = kg
+            .supersede(
+                &a_id,
+                FactCreate {
+                    subject: "Max".to_string(),
+                    predicate: "started_school".to_string(),
+                    object: "Year 7".to_string(),
+                    valid_from: Some("2027-09-01".to_string()),
+                    valid_to: None,
+                    confidence: None,
+                    source_closet: None,
+                    source_file: None,
+                    source_drawer_id: None,
+                    adapter_name: None,
+                    edge_kind: None,
+                    weight: None,
+                },
+            )
+            .expect_err("supersede of ended fact must error");
+        assert!(
+            matches!(err, KGError::OldFactAlreadyEnded { .. }),
+            "expected OldFactAlreadyEnded, got {err:?}"
+        );
+    }
+    // ===== P0-1 END =====
 }

@@ -59,17 +59,30 @@ pub struct RepairStatusReport {
 // SQLite integrity preflight
 // =========================================================================
 
+/// Open the palace `drawers.db` for probe/repair work with a 15 s busy
+/// timeout. The SQLite default (5 s via rusqlite) flaps under load and
+/// can cascade into false-positive "database is locked" → "corrupt"
+/// reports during integrity checks.
+// ===== P0-4 BEGIN: 15s busy timeout on integrity probe (do not edit) =====
+pub(crate) fn open_probe_connection(palace_path: &Path) -> anyhow::Result<rusqlite::Connection> {
+    let db_path = palace_path.join("drawers.db");
+    if !db_path.exists() {
+        anyhow::bail!("SQLite database not found at {}", db_path.display());
+    }
+    let conn = rusqlite::Connection::open(&db_path)?;
+    // P0-4: 15s busy-timeout (was 5s) — suppresses false-positive "database is locked" → "corrupt" cascades
+    conn.busy_timeout(std::time::Duration::from_secs(15))?;
+    Ok(conn)
+}
+// ===== P0-4 END =====
+
 /// Run `PRAGMA quick_check` on the palace SQLite database.
 ///
 /// Returns `Ok(true)` when the database is intact, `Ok(false)` when
 /// corruption is detected (with details printed to stderr), and `Err`
 /// when the database file does not exist or cannot be opened.
 pub fn sqlite_integrity_preflight(palace_path: &Path) -> anyhow::Result<bool> {
-    let db_path = palace_path.join("drawers.db");
-    if !db_path.exists() {
-        anyhow::bail!("SQLite database not found at {}", db_path.display());
-    }
-    let conn = rusqlite::Connection::open(&db_path)?;
+    let conn = open_probe_connection(palace_path)?;
 
     // PRAGMA quick_check is a fast subset of full integrity_check.
     // It verifies B-tree structure and index consistency without
@@ -89,11 +102,7 @@ pub fn sqlite_integrity_preflight(palace_path: &Path) -> anyhow::Result<bool> {
 /// More thorough than `quick_check` but slower. Returns the raw
 /// result string — `"ok"` means clean, anything else is corruption.
 pub fn sqlite_full_integrity_check(palace_path: &Path) -> anyhow::Result<String> {
-    let db_path = palace_path.join("drawers.db");
-    if !db_path.exists() {
-        anyhow::bail!("SQLite database not found at {}", db_path.display());
-    }
-    let conn = rusqlite::Connection::open(&db_path)?;
+    let conn = open_probe_connection(palace_path)?;
     let result: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     Ok(result)
 }
@@ -255,12 +264,7 @@ pub fn fix_poisoned_seq_id(palace_path: &Path) -> anyhow::Result<(i64, i64)> {
         }
     }
 
-    let db_path = palace_path.join("drawers.db");
-    if !db_path.exists() {
-        anyhow::bail!("SQLite database not found at {}", db_path.display());
-    }
-
-    let conn = rusqlite::Connection::open(&db_path)?;
+    let conn = open_probe_connection(palace_path)?;
 
     // Read the current max_seq_id from sqlite_sequence (autoincrement counter).
     // sqlite_sequence only exists when at least one table uses AUTOINCREMENT.
@@ -563,7 +567,7 @@ pub fn truncation_guard(palace_path: &Path, expected_count: usize) -> anyhow::Re
         return Ok(());
     }
 
-    let conn = rusqlite::Connection::open(&db_path)?;
+    let conn = open_probe_connection(palace_path)?;
     let actual_count: i64 = conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
     let actual = actual_count as usize;
 
@@ -628,7 +632,7 @@ pub fn repair_status(palace_path: &Path) -> anyhow::Result<RepairStatusReport> {
     let db_path = palace_path.join("drawers.db");
     if db_path.exists() {
         report.drawer_store_available = true;
-        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+        if let Ok(conn) = open_probe_connection(palace_path) {
             if let Ok(count) =
                 conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get::<_, i64>(0))
             {
@@ -1052,7 +1056,7 @@ pub fn fts5_post_rebuild_cleanup(palace_path: &Path) -> anyhow::Result<()> {
     if !db_path.exists() {
         return Ok(());
     }
-    let conn = rusqlite::Connection::open(&db_path)?;
+    let conn = open_probe_connection(palace_path)?;
 
     // 1. PRAGMA integrity_check -- quick smoke test for the FTS5
     //    shadow tables after a rebuild.
@@ -1200,6 +1204,32 @@ pub fn cleanup_pid(palace_path: Option<&Path>) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn busy_timeout_is_at_least_15s() {
+        let tmp = std::env::temp_dir().join(format!(
+            "p0_4_busy_timeout_{:?}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db_path = tmp.join("drawers.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE drawers (id TEXT PRIMARY KEY, content TEXT NOT NULL);",
+            )
+            .unwrap();
+        }
+        let conn = open_probe_connection(&tmp).expect("open_probe_connection");
+        let v: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(v >= 15_000, "busy_timeout should be >= 15000 ms, got {}", v);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[cfg(not(windows))]
     #[test]

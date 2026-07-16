@@ -28,11 +28,24 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use tracing::info;
 
+use crate::normalize::sanitize_for_fts5;
 use crate::palace_db::DocumentEntry;
 
 /// SQLite-backed drawer store with FTS5 search.
 pub struct DrawerStore {
     conn: Mutex<Connection>,
+}
+
+/// Metadata-only row returned by [`DrawerStore::list_filtered`].
+///
+/// Intentionally omits the drawer body so list endpoints stay cheap.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DrawerRow {
+    pub id: String,
+    pub title: String,
+    pub source_file: Option<String>,
+    pub filed_at: String,
+    pub wing: String,
 }
 
 impl DrawerStore {
@@ -331,6 +344,15 @@ impl DrawerStore {
         source_file: Option<&str>,
         source_mtime: Option<f64>,
     ) -> Result<()> {
+        // ===== P0-3 BEGIN: NUL sanitization (do not edit) =====
+        // P0-3: strip NUL bytes / lone surrogates before FTS5 indexing
+        // (would corrupt the inverted index via the AFTER INSERT trigger
+        // that mirrors content into drawers_fts).
+        let content = sanitize_for_fts5(content).into_owned();
+        let wing = sanitize_for_fts5(wing).into_owned();
+        let room = sanitize_for_fts5(room).into_owned();
+        // ===== P0-3 END =====
+
         let metadata_json = serde_json::to_string(metadata)?;
 
         // Strip wing/room from metadata JSON to avoid duplication
@@ -378,6 +400,13 @@ impl DrawerStore {
             )?;
 
             for &(id, content, metadata, wing, room, source_file, source_mtime) in items {
+                // ===== P0-3 BEGIN: NUL sanitization (do not edit) =====
+                // P0-3: strip NUL bytes / lone surrogates before FTS5 indexing.
+                let content = sanitize_for_fts5(content).into_owned();
+                let wing = sanitize_for_fts5(wing).into_owned();
+                let room = sanitize_for_fts5(room).into_owned();
+                // ===== P0-3 END =====
+
                 let mut clean_meta = metadata.clone();
                 clean_meta.remove("wing");
                 clean_meta.remove("room");
@@ -662,6 +691,97 @@ impl DrawerStore {
         } else {
             Ok(None)
         }
+    }
+
+    // ===== P0-5 BEGIN: list_filtered with date filter (do not edit) =====
+    /// List drawers with optional `filed_at` date range and wing filter.
+    ///
+    /// Date bounds are half-open on the calendar day:
+    /// - `since` is inclusive (`filed_at >= since`)
+    /// - `before` is exclusive (`filed_at < before`)
+    ///
+    /// Results are ordered by `filed_at DESC`, then paginated with
+    /// `limit` / `offset`. Returns metadata only (no drawer body).
+    pub fn list_filtered(
+        &self,
+        since: Option<chrono::NaiveDate>,
+        before: Option<chrono::NaiveDate>,
+        wing: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<DrawerRow>> {
+        let mut sql = String::from(
+            "SELECT id, content, metadata, source_file, filed_at, wing \
+             FROM drawers WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        // Stable bind order: since, before, wing, limit, offset.
+        if let Some(d) = since {
+            sql.push_str(" AND filed_at >= ?");
+            param_values.push(Box::new(d.format("%Y-%m-%d").to_string()));
+        }
+        if let Some(d) = before {
+            sql.push_str(" AND filed_at < ?");
+            param_values.push(Box::new(d.format("%Y-%m-%d").to_string()));
+        }
+        if let Some(w) = wing {
+            sql.push_str(" AND wing = ?");
+            param_values.push(Box::new(w.to_string()));
+        }
+        sql.push_str(" ORDER BY filed_at DESC");
+        sql.push_str(" LIMIT ? OFFSET ?");
+        param_values.push(Box::new(limit as i64));
+        param_values.push(Box::new(offset as i64));
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let guard = self.conn.lock().expect("conn");
+        let mut stmt = guard.prepare(&sql)?;
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            let id: String = row.get(0)?;
+            let content: String = row.get(1)?;
+            let metadata_str: String = row.get(2)?;
+            let source_file: Option<String> = row.get(3)?;
+            let filed_at: String = row.get(4)?;
+            let wing: String = row.get(5)?;
+
+            let title = title_from_metadata_or_content(&metadata_str, &content);
+
+            Ok(DrawerRow {
+                id,
+                title,
+                source_file,
+                filed_at,
+                wing,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+    // ===== P0-5 END =====
+}
+
+/// Derive a short list title from metadata `title` or the first line of content.
+fn title_from_metadata_or_content(metadata_str: &str, content: &str) -> String {
+    if let Ok(meta) = serde_json::from_str::<HashMap<String, Value>>(metadata_str) {
+        if let Some(t) = meta.get("title").and_then(|v| v.as_str()) {
+            let t = t.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    let first_line = content.lines().next().unwrap_or("").trim();
+    if first_line.chars().count() > 80 {
+        first_line.chars().take(80).collect()
+    } else {
+        first_line.to_string()
     }
 }
 
@@ -958,6 +1078,66 @@ mod tests {
         assert_eq!(specific.len(), 1);
     }
 
+    /// P0-5: date-range filter on `filed_at` is half-open and ordered DESC.
+    #[test]
+    fn list_filtered_date_range() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = DrawerStore::open(temp.path()).unwrap();
+
+        // Seed 5 drawers with filed_at spread across 3 different days.
+        // day1: d1, d2  |  day2: d3, d4  |  day3: d5
+        let seeds: &[(&str, &str)] = &[
+            ("d1", "2026-04-01 10:00:00"),
+            ("d2", "2026-04-01 18:00:00"),
+            ("d3", "2026-04-02 09:00:00"),
+            ("d4", "2026-04-02 15:30:00"),
+            ("d5", "2026-04-03 12:00:00"),
+        ];
+        for (id, filed_at) in seeds {
+            store
+                .insert(
+                    id,
+                    &format!("content of {id}"),
+                    &HashMap::new(),
+                    "wing_a",
+                    "room_a",
+                    Some(&format!("src/{id}.txt")),
+                    None,
+                )
+                .unwrap();
+            // Override filed_at (insert uses datetime('now') default).
+            store
+                .conn
+                .lock()
+                .expect("conn")
+                .execute(
+                    "UPDATE drawers SET filed_at = ?1 WHERE id = ?2",
+                    params![filed_at, id],
+                )
+                .unwrap();
+        }
+
+        let day2 = chrono::NaiveDate::from_ymd_opt(2026, 4, 2).unwrap();
+        let day3 = chrono::NaiveDate::from_ymd_opt(2026, 4, 3).unwrap();
+
+        // since=day2, before=day3 → drawers on day2 only (d3, d4).
+        let rows = store
+            .list_filtered(Some(day2), Some(day3), None, 100, 0)
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "expected 2 drawers in [day2, day3); got {:?}",
+            rows.iter().map(|r| &r.id).collect::<Vec<_>>()
+        );
+        // ORDER BY filed_at DESC → d4 (15:30) before d3 (09:00).
+        assert_eq!(rows[0].id, "d4");
+        assert_eq!(rows[1].id, "d3");
+        assert_eq!(rows[0].wing, "wing_a");
+        assert_eq!(rows[0].source_file.as_deref(), Some("src/d4.txt"));
+        assert!(!rows[0].title.is_empty());
+    }
+
     #[test]
     fn test_load_all_to_hashmap() {
         let temp = tempfile::tempdir().unwrap();
@@ -1082,5 +1262,54 @@ mod tests {
         // Second migration should be a no-op
         let count2 = store.migrate_from_json(&json_path).unwrap();
         assert_eq!(count2, 0);
+    }
+
+    /// P0-3: A drawer whose content contains a NUL byte must still be
+    /// retrievable via FTS5 MATCH after sanitization strips the NUL.
+    #[test]
+    fn nul_byte_does_not_corrupt_fts5() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = DrawerStore::open(temp.path()).unwrap();
+
+        // Insert a drawer whose content has an embedded NUL byte.
+        // Spaces around the NULs keep the tokens distinct after strip.
+        let dirty = "hello\0 world\0 rust";
+        store
+            .insert(
+                "nul-1",
+                dirty,
+                &HashMap::new(),
+                "wing\0bad",
+                "room\0bad",
+                None,
+                None,
+            )
+            .expect("insert should accept dirty input");
+
+        // The NUL-stripped content must be present in `drawers.content`.
+        let (stored_content, _) = store.get_by_id("nul-1").unwrap().unwrap();
+        assert_eq!(stored_content, "hello world rust");
+        assert!(!stored_content.contains('\0'));
+
+        // The same wing/room columns should be sanitized.
+        let guard = store.conn.lock().expect("conn");
+        let (wing, room): (String, String) = guard
+            .query_row(
+                "SELECT wing, room FROM drawers WHERE id = ?1",
+                params!["nul-1"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        drop(guard);
+        assert_eq!(wing, "wingbad");
+        assert_eq!(room, "roombad");
+
+        // Search for "world" — must find the drawer via FTS5 MATCH.
+        let hits = store.search("world", 10).unwrap();
+        assert!(
+            hits.iter().any(|(id, _, _)| id == "nul-1"),
+            "expected FTS5 hit for sanitized drawer; got: {:?}",
+            hits
+        );
     }
 }

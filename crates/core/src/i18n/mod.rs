@@ -147,6 +147,8 @@ impl LocaleManager {
             "ja.json",
             "ko.json",
             "be.json",
+            "it.json",
+            "id.json",
         ];
 
         for file_name in locale_files {
@@ -185,6 +187,8 @@ impl LocaleManager {
             "ja.json" => Ok(include_str!("ja.json").to_string()),
             "ko.json" => Ok(include_str!("ko.json").to_string()),
             "be.json" => Ok(include_str!("be.json").to_string()),
+            "it.json" => Ok(include_str!("it.json").to_string()),
+            "id.json" => Ok(include_str!("id.json").to_string()),
             _ => Err(LocaleError::NotFound(file_name.to_string())),
         }
     }

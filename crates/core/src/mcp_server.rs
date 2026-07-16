@@ -429,6 +429,11 @@ const MUTATION_TOOLS: &[&str] = &[
     "mempalace_slot_append",
     "mempalace_slot_replace",
     "mempalace_slot_delete",
+    // ===== P2-2 BEGIN =====
+    // Long-running mine mutates the palace; must be hidden in --read-only
+    // and refuse peer-writer promotion the same way as add/delete.
+    "mempalace_mine",
+    // ===== P2-2 END =====
 ];
 
 /// Whether a tool mutates state and should be excluded from `tools/list` in
@@ -915,7 +920,7 @@ pub(crate) fn make_tools() -> Vec<rmcp::model::Tool> {
             "mempalace_search",
             "Search",
             "Semantic search. Returns verbatim drawer content with similarity scores. Supports metadata filtering via where_filter.",
-            serde_json::json!({ "type": "object", "properties": { "query": { "type": "string", "description": "What to search for" }, "limit": { "type": "integer", "description": "Max results (default 5)" }, "wing": { "type": "string", "description": "Filter by wing (optional)" }, "room": { "type": "string", "description": "Filter by room (optional)" }, "context": { "type": "string", "description": "Optional caller context for transparency metadata" }, "where_filter": { "type": "object", "description": "Filter by custom metadata fields (e.g., {\"priority\": \"high\", \"status\": \"open\"})" }, "max_per_session": { "type": "integer", "description": "Max results per session/source_file (default 3, post-RRF filter)" } }, "required": ["query"] }),
+            serde_json::json!({ "type": "object", "properties": { "query": { "type": "string", "description": "What to search for" }, "limit": { "type": "integer", "description": "Max results (default 5)" }, "wing": { "type": "string", "description": "Filter by wing (optional)" }, "room": { "type": "string", "description": "Filter by room (optional)" }, "context": { "type": "string", "description": "Optional caller context for transparency metadata" }, "where_filter": { "type": "object", "description": "Filter by custom metadata fields (e.g., {\"priority\": \"high\", \"status\": \"open\"})" }, "max_per_session": { "type": "integer", "description": "Max results per session/source_file (default 3, post-RRF filter)" }, "source_file": { "type": "string", "description": "Filter results to drawers mined from this source file (optional)" } }, "required": ["query"] }),
         ),
         tool(
             "mempalace_check_duplicate",
@@ -2275,6 +2280,9 @@ fn tool_search(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
         context: Option<String>,
         where_filter: Option<serde_json::Value>,
         max_per_session: Option<usize>,
+        // ===== P1-6 BEGIN =====
+        source_file: Option<String>,
+        // ===== P1-6 END =====
     }
     let input: Input = parse_args_with_integer_coercion(args, &["limit", "max_per_session"])?;
     let sanitized = crate::query_sanitizer::sanitize_query(&input.query);
@@ -2329,11 +2337,32 @@ fn tool_search(state: &AppState, args: JsonObject) -> Result<CallToolResult, Err
         query_results
     };
 
+    // ===== P1-6 BEGIN =====
+    let filtered_results = if let Some(ref source_file) = input.source_file {
+        filtered_results
+            .into_iter()
+            .filter(|r| {
+                r.metadatas.iter().any(|m| {
+                    m.get("source_file")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s == source_file)
+                        .unwrap_or(false)
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        filtered_results
+    };
+    // ===== P1-6 END =====
+
     let mut response = serde_json::to_value(crate::searcher::SearchResponse {
         query: sanitized.clean_query.clone(),
         filters: crate::searcher::SearchFilters {
             wing: input.wing.clone(),
             room: input.room.clone(),
+            // ===== P1-6 BEGIN =====
+            source_file: input.source_file.clone(),
+            // ===== P1-6 END =====
         },
         results: filtered_results
             .into_iter()
@@ -6902,6 +6931,9 @@ async fn tool_mine(state: &AppState, args: JsonObject) -> Result<CallToolResult,
             None,
             false,
             None,
+            // ===== P1-1 BEGIN =====
+            &[],
+            // ===== P1-1 END =====
         )
     })
     .await
@@ -7469,6 +7501,9 @@ fn kg_path(state: &AppState) -> std::path::PathBuf {
 // ---------------------------------------------------------------------------
 
 pub fn run_server(palace_override: Option<&str>, read_only: bool) -> anyhow::Result<()> {
+    // ===== P2-6 BEGIN =====
+    crate::logging::try_init_tracing();
+    // ===== P2-6 END =====
     let mut config = crate::Config::load()?;
     if let Some(p) = palace_override {
         config.palace_path = resolve_palace_override(p);
@@ -7618,6 +7653,29 @@ mod tests {
         assert!(!is_mutation_tool("mempalace_status"));
         assert!(!is_mutation_tool("mempalace_kg_query"));
     }
+
+    // ===== P2-2 BEGIN =====
+    #[test]
+    fn test_p2_2_mutation_tools_include_mine_and_kg() {
+        // Completeness gate: write tools that land after P0/P1 must stay on
+        // the mutation list so --read-only actually hides them.
+        for required in [
+            "mempalace_mine",
+            "mempalace_kg_supersede",
+            "mempalace_checkpoint",
+            "mempalace_delete_by_source",
+            "mempalace_add_drawer",
+            "mempalace_delete_drawer",
+        ] {
+            assert!(
+                is_mutation_tool(required),
+                "{required} must be in MUTATION_TOOLS"
+            );
+        }
+        // list_drawers is read-only (date-filtered listing); must NOT mutate.
+        assert!(!is_mutation_tool("mempalace_list_drawers"));
+    }
+    // ===== P2-2 END =====
 
     #[test]
     fn test_read_only_mode_hides_mutation_tools_from_list() {
@@ -10035,4 +10093,21 @@ mod tests {
         );
         assert!(result.is_err(), "lease should be blocked in read-only mode");
     }
+
+    // ===== P1-6 BEGIN =====
+    #[test]
+    fn test_p1_6_search_schema_includes_source_file() {
+        let tools = make_tools();
+        let search = tools.iter().find(|t| t.name == "mempalace_search").unwrap();
+        assert!(
+            search
+                .input_schema
+                .get("properties")
+                .unwrap()
+                .get("source_file")
+                .is_some(),
+            "mempalace_search schema must accept source_file filter"
+        );
+    }
+    // ===== P1-6 END =====
 }

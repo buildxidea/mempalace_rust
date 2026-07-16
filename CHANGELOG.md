@@ -1,15 +1,47 @@
 # Changelog
 
-## Unreleased — 0.6.7
+## Unreleased — 0.7.0
 
-### Fixed (upstream sync 2026-07-16)
+### Added (upstream sync P1/P2 — 2026-07-16)
+- **P1-1** `Config.exclude_patterns` + `mpr mine --exclude` (repeatable globs merged with config); `scan_project_with_excludes`.
+- **P1-2** Drawer `authored_at` column (nullable) with COALESCE recency ordering; convo mine stamps max JSONL timestamp; `migrate_authored_at` backfill.
+- **P1-3** `mpr serve --host --token --tls-cert --tls-key`; optional `http-tls` feature (`axum-server` + rustls).
+- **P1-4** Embedder identity enforcement on palace open via three-state `classify_against` (match / mismatch refuse / unknown write sidecar); `MEMPALACE_SKIP_MANIFEST_CHECK=1` force path.
+- **P1-5** `delete_by_source` also purges `closets` by `source_file`.
+- **P1-6** `mempalace_search` `source_file` filter (schema + `SearchFilters` + MCP tool).
+- **P1-8** `mpr repair from-sqlite` alias for `rebuild-from-sqlite`.
+- **P1-9** Tilde expansion + path normalize for file-sourced `palace_path` in `Config::load()`.
+- **P1-10** Fail-closed HTTP bearer auth: `MEMPALACE_HTTP_TOKEN` / legacy `MEMPALACE_MCP_HTTP_TOKEN`; non-loopback requires token (auto-gen UUID or hard-error).
+- **P2-1** SQLite magic-header check in `DrawerStore::open` (rejects empty/garbage `drawers.db`).
+- **P2-2** `mempalace_mine` added to `MUTATION_TOOLS` (read-only gate).
+- **P2-3** Mid-mine FTS5 auto-heal on insert error path (rebuild + single retry).
+- **P2-4** Convo miner mtime re-mine (`check_mtime=true`).
+- **P2-5** `repair::is_fts5_corruption` matcher + `maybe_autoheal_fts5` helper.
+- **P2-6** `logging::try_init_tracing()` wired from CLI + MCP entrypoints.
+- **P2-7** `MEMPALACE_MCP_IDLE_EXIT_SECONDS` idle watchdog on MCP HTTP transport.
+- **P2-8** `.tex`/`.bib` readable extensions; locales `pt-BR`/`it`/`id`/`zh-TW`/`be`; i18n `it`/`id`.
+- **P2-11** Plugin marketplace manifests: `.cursor-plugin`, `.antigravity-plugin`, `.copilot-plugin`.
+- **P2-13** Five high-value skills added (`mine`/`search`/`status`/`doctor`/`entities`) — skills dir 21/35 (partial).
+- **P2-14** `mpr entities` / `mpr hallways` CLI commands.
+- **P2-16** SIGINT mid-mine lock-release stress test.
+- **P2-17** Peer-exit lease self-heal recovery test.
+- **P2-19** `docs/upstream-sync-audit-2026-07.md` scoreboard.
+
+### Fixed (upstream sync P0 — prior on branch base)
 - **P0-1** Atomic `KG.supersede()` + new `mempalace_kg_supersede` MCP tool — half-open `[valid_from, valid_to)` intervals at supersede boundary; successor + predecessor both queryable without overlap.
 - **P0-2** `MEMPALACE_STARTUP_INTEGRITY_MAX_MB` gate (default 512 MB) + async preflight — `ServerHandler::initialize` returns immediately; probe runs on `tokio::spawn`. Avoids 60s stalls on large palaces.
 - **P0-3** NUL-byte + lone-surrogate sanitization before FTS5 indexing (new `normalize::sanitize_for_fts5`). Prevents inverted-index corruption from `Bash` tool output containing `\0`.
 - **P0-4** SQLite `busy_timeout` bumped to 15s on every probe/repair path. Eliminates false-positive "corrupt" reports under load.
 - **P0-5** New `mempalace_list_drawers` MCP tool with `since` / `before` / `wing` / `limit` / `offset` filters; backed by `DrawerStore::list_filtered`.
 
-Upstream sources: [mempalace v3.6.0](https://github.com/mempalace/mempalace/commit/ec8788c), [agentmemory v0.9.27+](https://github.com/rohitg00/agentmemory/commit/93ae9bc). Plan: `docs/upstream-sync-action-plan-2026-07-16.md`.
+### Deferred
+- **P1-7** Milvus backend (SKIP_TOO_LARGE).
+- **P2-9** COCA content-word list (no wire point; would bloat binary).
+- **P2-10** PDF/DOCX/PPTX extract feature (SKIP_TOO_LARGE).
+- **P2-12** README translations (SKIP_TOO_LARGE).
+- **P2-18** graphNameIndex tables (measure-first; not profiled).
+
+Upstream sources: [mempalace v3.6.0](https://github.com/mempalace/mempalace/commit/ec8788c), [agentmemory v0.9.27+](https://github.com/rohitg00/agentmemory/commit/93ae9bc). Plan: `docs/upstream-sync-action-plan-2026-07-16.md`. Audit: `docs/upstream-sync-audit-2026-07.md`.
 
 ## v0.6.6 (2026-06-27)
 

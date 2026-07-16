@@ -29,10 +29,20 @@ fn test_config_load_round_trip_all_fields() {
     let xdg = temp.path().to_str().unwrap();
     std::env::set_var("XDG_CONFIG_HOME", xdg);
 
+    // Platform-absolute palace path: on Windows a Unix-style `/custom/palace`
+    // is relative (no drive), so Config::load's P1-9 normalize_pathbuf would
+    // prefix the current drive (e.g. `D:\custom\palace`). Use an absolute
+    // path that is valid on every host.
+    let palace_path = if cfg!(windows) {
+        r"C:\custom\palace".to_string()
+    } else {
+        "/custom/palace".to_string()
+    };
+
     // Build a JSON string with EVERY field set to a NON-default value.
     // We use the JSON approach because Config may be #[non_exhaustive].
     let json = serde_json::json!({
-        "palace_path": "/custom/palace",
+        "palace_path": palace_path,
         "collection_name": "custom_collection",
         "people_map": { "alice": "Alice", "bob": "Robert" },
         "topic_wings": ["wing_a", "wing_b"],
@@ -76,7 +86,7 @@ fn test_config_load_round_trip_all_fields() {
     let loaded = mempalace_core::Config::load().unwrap();
 
     // Verify EVERY field
-    assert_eq!(loaded.palace_path.to_str().unwrap(), "/custom/palace");
+    assert_eq!(loaded.palace_path.to_str().unwrap(), palace_path);
     assert_eq!(loaded.collection_name, "custom_collection");
     assert_eq!(loaded.people_map.get("alice").unwrap(), "Alice");
     assert_eq!(loaded.people_map.get("bob").unwrap(), "Robert");

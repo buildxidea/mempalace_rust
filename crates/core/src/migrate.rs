@@ -311,6 +311,68 @@ mod tests {
         let meta3: serde_json::Value = serde_json::from_str(&rows[2].2).unwrap();
         assert!(meta3.get("wing_legacy").is_none());
     }
+
+    // ===== P1-2 BEGIN =====
+    #[test]
+    fn test_migrate_authored_at_backfills_from_session_jsonl() {
+        use crate::drawer_store::DrawerStore;
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        let sessions = temp.path().join("sessions");
+        std::fs::create_dir_all(&palace).unwrap();
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        // Source transcript with known timestamps.
+        let transcript = sessions.join("chat.jsonl");
+        std::fs::write(
+            &transcript,
+            r#"{"type":"user","timestamp":"2022-04-01T10:00:00.000Z","message":"hi"}
+{"type":"assistant","timestamp":"2022-04-01T10:05:00.000Z","message":"hello"}
+"#,
+        )
+        .unwrap();
+
+        // Seed a convo drawer without authored_at (pre-P1-2 shape).
+        let store = DrawerStore::open(&palace).unwrap();
+        let mut meta = HashMap::new();
+        meta.insert(
+            "ingest_mode".to_string(),
+            serde_json::Value::String("convos".to_string()),
+        );
+        meta.insert(
+            "filed_at".to_string(),
+            serde_json::Value::String("2025-01-01T00:00:00Z".to_string()),
+        );
+        store
+            .insert(
+                "d1",
+                "conversation content",
+                &meta,
+                "wing",
+                "room",
+                Some(transcript.to_str().unwrap()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(store.get_authored_at("d1").unwrap(), None);
+
+        let stats = migrate_authored_at(Some(&palace), &[sessions.clone()], false).unwrap();
+        assert_eq!(stats.scanned, 1);
+        assert_eq!(stats.updated, 1);
+        assert_eq!(stats.resolved_files, 1);
+        assert_eq!(
+            store.get_authored_at("d1").unwrap().as_deref(),
+            Some("2022-04-01T10:05:00.000Z")
+        );
+
+        // Idempotent: second run skips already-set.
+        let stats2 = migrate_authored_at(Some(&palace), &[sessions], false).unwrap();
+        assert_eq!(stats2.updated, 0);
+        assert_eq!(stats2.skipped_already_set, 1);
+    }
+    // ===== P1-2 END =====
 }
 
 // ---------------------------------------------------------------------------
@@ -441,3 +503,161 @@ fn upsert_legacy_wing(metadata_json: &Option<String>, legacy: &str) -> String {
         .or_insert(serde_json::Value::String(legacy.to_string()));
     serde_json::to_string(&obj).unwrap_or_else(|_| "{}".to_string())
 }
+
+// ===== P1-2 BEGIN =====
+// ---------------------------------------------------------------------------
+// P1-2: `migrate authored-at` — backfill authored_at from source transcripts.
+// ---------------------------------------------------------------------------
+
+/// Stats from an authored-at backfill run.
+#[derive(Debug, Clone, Serialize, Default)]
+#[non_exhaustive]
+pub struct MigrateAuthoredAtStats {
+    pub scanned: usize,
+    pub updated: usize,
+    pub resolved_files: usize,
+    pub unresolved_files: usize,
+    pub skipped_already_set: usize,
+}
+
+/// Stamp `authored_at` on conversation drawers from their source transcript
+/// timestamps (upstream `scripts/backfill_authored_at.py`).
+///
+/// Only touches drawers with `ingest_mode == "convos"`. Metadata + column
+/// are updated in place; embeddings are left untouched. Idempotent: drawers
+/// already carrying the correct `authored_at` are skipped.
+///
+/// `session_dirs` are roots that still hold the original `.jsonl` transcripts
+/// (e.g. `~/.claude`, `~/.codex`). Basename match is used to resolve a
+/// drawer’s `source_file` against those trees.
+///
+/// `dry_run=true` reports what *would* change without writing.
+pub fn migrate_authored_at(
+    palace_path: Option<&Path>,
+    session_dirs: &[PathBuf],
+    dry_run: bool,
+) -> anyhow::Result<MigrateAuthoredAtStats> {
+    use crate::convo_miner::extract_authored_at;
+    use crate::drawer_store::DrawerStore;
+    use std::collections::{HashMap, HashSet};
+    use walkdir::WalkDir;
+
+    let palace_path = match palace_path {
+        Some(p) => p.to_path_buf(),
+        None => Config::load()?.palace_path,
+    };
+
+    // Index basename.jsonl -> real path under the provided session dirs.
+    let mut index: HashMap<String, PathBuf> = HashMap::new();
+    for root in session_dirs {
+        let root = if let Some(stripped) = root.to_string_lossy().strip_prefix("~/") {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("~"))
+                .join(stripped)
+        } else {
+            root.to_path_buf()
+        };
+        if !root.exists() {
+            eprintln!("  warning: session dir not found: {}", root.display());
+            continue;
+        }
+        for entry in WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_lowercase();
+            if ext != "jsonl" {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                index
+                    .entry(name.to_string())
+                    .or_insert_with(|| path.to_path_buf());
+            }
+        }
+    }
+
+    let store = DrawerStore::open(&palace_path)?;
+    let rows = store.list_convo_drawers_for_authored_at_backfill()?;
+
+    let mut stats = MigrateAuthoredAtStats::default();
+    let mut cache: HashMap<String, Option<String>> = HashMap::new();
+    let mut unresolved: HashSet<String> = HashSet::new();
+
+    for (id, source_file, col_authored, meta_json) in rows {
+        stats.scanned += 1;
+
+        let basename = source_file
+            .as_deref()
+            .and_then(|s| Path::new(s).file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let authored = if basename.is_empty() {
+            None
+        } else if let Some(cached) = cache.get(&basename) {
+            cached.clone()
+        } else {
+            let path = index.get(&basename);
+            let extracted = path.and_then(|p| extract_authored_at(p));
+            if path.is_none() {
+                unresolved.insert(basename.clone());
+            }
+            cache.insert(basename.clone(), extracted.clone());
+            extracted
+        };
+
+        let Some(authored) = authored else {
+            continue;
+        };
+
+        // Already correct? Check column first, then metadata JSON.
+        let meta_authored = serde_json::from_str::<serde_json::Value>(&meta_json)
+            .ok()
+            .and_then(|v| {
+                v.get("authored_at")
+                    .and_then(|a| a.as_str())
+                    .map(|s| s.to_string())
+            });
+        let current = col_authored.filter(|s| !s.is_empty()).or(meta_authored);
+        if current.as_deref() == Some(authored.as_str()) {
+            stats.skipped_already_set += 1;
+            continue;
+        }
+
+        if !dry_run {
+            store.update_authored_at(&id, &authored)?;
+        }
+        stats.updated += 1;
+    }
+
+    stats.resolved_files = cache.values().filter(|v| v.is_some()).count();
+    stats.unresolved_files = unresolved.len();
+
+    let mode = if dry_run {
+        "DRY-RUN (would update)"
+    } else {
+        "APPLIED"
+    };
+    println!(
+        "  {mode}: scanned={} updated={} resolved_files={} unresolved_files={} already_set={}",
+        stats.scanned,
+        stats.updated,
+        stats.resolved_files,
+        stats.unresolved_files,
+        stats.skipped_already_set
+    );
+    Ok(stats)
+}
+// ===== P1-2 END =====

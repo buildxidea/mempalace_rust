@@ -24,6 +24,7 @@ vision = ["mempalace-core/vision"]
 rerank = ["mempalace-core/rerank"]
 health = ["mempalace-core/health"]
 http-server = ["mempalace-core/http-server"]
+http-tls = ["mempalace-core/http-tls"]
 
 [dependencies]
 mempalace-core = { path = "../core", default-features = false }

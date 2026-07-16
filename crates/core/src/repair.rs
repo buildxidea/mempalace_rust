@@ -107,6 +107,94 @@ pub fn sqlite_full_integrity_check(palace_path: &Path) -> anyhow::Result<String>
     Ok(result)
 }
 
+// ===== P2-5 BEGIN =====
+/// True when a SQLite / FTS5 error string describes inverted-index
+/// corruption (recoverable by rebuild) or a malformed disk image that
+/// commonly accompanies it.
+///
+/// Matches both legacy and modern SQLite wordings:
+/// * `"malformed inverted index for FTS5 table ..."` (older SQLite)
+/// * `"fts5: corruption found reading blob N ..."` (SQLite >= ~3.5x)
+/// * `"database disk image is malformed"` (page-level wording that often
+///   co-occurs with FTS5 shadow-table damage)
+///
+/// Used by mid-mine auto-heal (P2-3) and by repair preflight.
+pub fn is_fts5_corruption(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("malformed inverted index")
+        || lower.contains("fts5: corruption found")
+        || lower.contains("fts5: corruption")
+        || lower.contains("database disk image is malformed")
+        || lower.contains("disk image is malformed")
+}
+
+/// True when every reported integrity error is an isolated FTS5
+/// inverted-index failure that is safe to auto-heal in place.
+pub fn errors_are_isolated_fts5(errors: &[String]) -> bool {
+    !errors.is_empty() && errors.iter().all(|e| is_fts5_corruption(e))
+}
+
+/// Rebuild a malformed FTS5 inverted index in place; return remaining errors.
+///
+/// When `errors` are isolated FTS5 failures, issue the documented
+/// `INSERT INTO drawers_fts(drawers_fts) VALUES('rebuild')` command and
+/// re-run `PRAGMA quick_check`. Returns the remaining errors (empty when
+/// the heal succeeded). Broader corruption or a rebuild failure leaves
+/// `errors` unchanged so the caller still aborts.
+pub fn maybe_autoheal_fts5(palace_path: &Path, errors: Vec<String>) -> anyhow::Result<Vec<String>> {
+    if !errors_are_isolated_fts5(&errors) {
+        return Ok(errors);
+    }
+    let db_path = palace_path.join("drawers.db");
+    if !db_path.exists() {
+        return Ok(errors);
+    }
+    eprintln!(
+        "  Isolated FTS5 inverted-index corruption detected; attempting          in-place rebuild from intact content before aborting."
+    );
+    let conn = match open_probe_connection(palace_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("  FTS5 rebuild skipped (cannot open db): {}", e);
+            return Ok(errors);
+        }
+    };
+    if let Err(e) = rebuild_fts5_if_present(&conn, "drawers_fts", "drawers") {
+        eprintln!("  FTS5 rebuild failed (leaving palace untouched): {}", e);
+        return Ok(errors);
+    }
+    // Re-run quick_check
+    let remaining = match sqlite_integrity_errors(palace_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  post-heal integrity probe failed: {}", e);
+            return Ok(errors);
+        }
+    };
+    if remaining.is_empty() {
+        eprintln!("  FTS5 index rebuilt from intact content; quick_check is clean.");
+    } else {
+        eprintln!("  FTS5 rebuild did not clear quick_check; aborting for safety.");
+    }
+    Ok(remaining)
+}
+
+/// Collect `PRAGMA quick_check` error strings (empty when clean).
+pub fn sqlite_integrity_errors(palace_path: &Path) -> anyhow::Result<Vec<String>> {
+    let conn = open_probe_connection(palace_path)?;
+    let mut stmt = conn.prepare("PRAGMA quick_check")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let s = row?;
+        if s != "ok" {
+            out.push(s);
+        }
+    }
+    Ok(out)
+}
+// ===== P2-5 END =====
+
 // =========================================================================
 // Mode 1: Rebuild vector index from SQLite ground truth
 // =========================================================================
@@ -1570,4 +1658,40 @@ mod tests {
         assert_eq!(new, 0);
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // ===== P2-5 BEGIN =====
+    #[test]
+    fn test_p2_5_is_fts5_corruption_wordings() {
+        assert!(is_fts5_corruption(
+            "malformed inverted index for FTS5 table main.drawers_fts"
+        ));
+        assert!(is_fts5_corruption(
+            "Page 4 of B-tree 12345: database disk image is malformed"
+        ));
+        assert!(is_fts5_corruption(
+            "fts5: corruption found reading blob 3 from table \"drawers_fts\""
+        ));
+        assert!(is_fts5_corruption("FTS5: Corruption Found reading blob"));
+        assert!(!is_fts5_corruption("database is locked"));
+        assert!(!is_fts5_corruption("no such table: drawers"));
+        assert!(!is_fts5_corruption(""));
+    }
+
+    #[test]
+    fn test_p2_5_errors_are_isolated_fts5() {
+        assert!(errors_are_isolated_fts5(&[
+            "malformed inverted index for FTS5 table main.drawers_fts".into()
+        ]));
+        assert!(errors_are_isolated_fts5(&[
+            "malformed inverted index for FTS5 table".into(),
+            "fts5: corruption found reading blob 1".into(),
+        ]));
+        // Mixed with non-FTS damage is NOT isolated.
+        assert!(!errors_are_isolated_fts5(&[
+            "malformed inverted index for FTS5 table".into(),
+            "row 9 missing from index".into(),
+        ]));
+        assert!(!errors_are_isolated_fts5(&[]));
+    }
+    // ===== P2-5 END =====
 }

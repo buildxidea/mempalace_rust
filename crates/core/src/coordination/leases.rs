@@ -273,4 +273,36 @@ mod tests {
         let expected = lease.acquired_at + Duration::minutes(MAX_TTL_MINUTES);
         assert!((lease.expires_at - expected).num_seconds().abs() < 2);
     }
+
+    // ===== P2-17 BEGIN =====
+    /// Peer-exit self-heal: when the previous holder dies without releasing,
+    /// its lease expires; cleanup() + acquire() by a new agent must succeed
+    /// without manual intervention (upstream MCP writer-lock self-heal parity).
+    #[test]
+    fn test_p2_17_peer_exit_self_heal_recovery() {
+        let store = test_store();
+        // Agent-1 holds the lease, then "dies" without release — force expiry.
+        store.acquire("action-peer", "agent-dead", Some(1)).unwrap();
+        let expired = Utc::now() - Duration::minutes(5);
+        store
+            .conn
+            .execute(
+                "UPDATE leases SET expires_at = ?1 WHERE action_id = ?2",
+                params![expired.to_rfc3339(), "action-peer"],
+            )
+            .unwrap();
+
+        // Self-heal path: cleanup expired, then a live peer acquires.
+        let cleaned = store.cleanup().unwrap();
+        assert_eq!(cleaned, 1, "expired peer lease must be reaped");
+        let lease = store
+            .acquire("action-peer", "agent-live", Some(5))
+            .expect("live agent must acquire after peer-exit cleanup");
+        assert_eq!(lease.agent_id, "agent-live");
+        assert_eq!(lease.action_id, "action-peer");
+
+        // Active lease still blocks a third agent (no false healing of live holds).
+        assert!(store.acquire("action-peer", "agent-other", None).is_err());
+    }
+    // ===== P2-17 END =====
 }

@@ -9,24 +9,158 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use regex::Regex;
 
 use crate::palace_db::MemorySlot;
 use rmcp::model::{
-    CallToolResult, Content, GetPromptResult, Implementation, InitializeResult, JsonObject,
-    ListPromptsResult, ListResourcesResult, ListToolsResult, PromptArgument,
-    ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
-    ServerInfo as McpServerInfo,
+    CallToolResult, Content, GetPromptResult, Implementation, InitializeRequestParams,
+    InitializeResult, JsonObject, ListPromptsResult, ListResourcesResult, ListToolsResult,
+    PromptArgument, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo as McpServerInfo,
 };
-use rmcp::service::MaybeSendFuture;
+use rmcp::service::{MaybeSendFuture, RequestContext};
 use rmcp::transport::stdio;
 use rmcp::{handler::server::ServerHandler, ErrorData, RoleServer, ServiceExt};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::json;
 use tokio::runtime::Runtime;
+use tokio::sync::Notify;
 use tracing::warn;
+
+// ===== P0-2 BEGIN: startup integrity gate (do not edit) =====
+//
+// MemPalace STARTUP INTEGRITY GATE
+// --------------------------------
+// On large palaces (>=4.6 GB observed in the wild), a synchronous
+// `PRAGMA quick_check` inside `ServerHandler::initialize` can stall the
+// MCP `initialize` handshake for 60+ seconds, blocking every client
+// that connects. To keep startup latency bounded, this gate:
+//
+//   1. Reads `MEMPALACE_STARTUP_INTEGRITY_MAX_MB` (default `512`).
+//   2. Sums the byte size of the palace directory. If it exceeds the
+//      configured budget, the probe is skipped with a warning — large
+//      palaces get checked lazily via the existing `mempalace_repair`
+//      / `mempalace_sqlite_integrity` tools instead.
+//   3. Otherwise the probe is wrapped in `tokio::spawn` so the MCP
+//      `initialize` reply returns immediately while the probe runs in
+//      the background. The result is stashed on `MempalaceServer` and
+//      exposed via `wait_integrity_probe` so health checks and the
+//      `mempalace_status` tool can join on it.
+
+/// Default palace size budget (MB) for the synchronous startup probe.
+const DEFAULT_STARTUP_INTEGRITY_MAX_MB: u64 = 512;
+/// Hard upper bound on the parsed env var (TB) — guards against
+/// pathological values like `0` or accidentally-set bits.
+const STARTUP_INTEGRITY_MAX_MB_CEILING: u64 = 1024 * 1024; // 1 PiB
+
+/// Outcome of the startup SQLite-integrity probe.
+#[derive(Debug, Clone)]
+pub enum IntegrityStatus {
+    /// Probe was skipped because the palace exceeded the size budget.
+    Skipped { palace_mb: u64, limit_mb: u64 },
+    /// Probe completed and the database is intact.
+    Ok,
+    /// Probe ran and reported corruption (or an error).
+    Failed(String),
+}
+
+/// Read `MEMPALACE_STARTUP_INTEGRITY_MAX_MB` from the environment,
+/// falling back to [`DEFAULT_STARTUP_INTEGRITY_MAX_MB`]. Returns MB.
+pub fn startup_integrity_max_mb() -> u64 {
+    match std::env::var("MEMPALACE_STARTUP_INTEGRITY_MAX_MB") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(n) if n > 0 && n <= STARTUP_INTEGRITY_MAX_MB_CEILING => n,
+            _ => DEFAULT_STARTUP_INTEGRITY_MAX_MB,
+        },
+        Err(_) => DEFAULT_STARTUP_INTEGRITY_MAX_MB,
+    }
+}
+
+/// Sum the byte size of every regular file under `palace_path`
+/// (recursive, follows the existing layout used by `palace_db`).
+/// Returns `0` when the directory does not exist yet.
+fn palace_path_size_bytes(palace_path: &Path) -> u64 {
+    let mut total: u64 = 0;
+    let entries = match fs::read_dir(palace_path) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let md = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if md.is_file() {
+            total = total.saturating_add(md.len());
+        } else if md.is_dir() {
+            total = total.saturating_add(palace_path_size_bytes(&p));
+        }
+    }
+    total
+}
+
+/// Synchronous wrapper around `crate::repair::sqlite_integrity_preflight`
+/// that converts the result into an `IntegrityStatus`. Cheap to spawn —
+/// never blocks the runtime scheduler.
+fn run_integrity_probe_blocking(palace_path: PathBuf) -> IntegrityStatus {
+    match crate::repair::sqlite_integrity_preflight(&palace_path) {
+        Ok(true) => IntegrityStatus::Ok,
+        Ok(false) => IntegrityStatus::Failed("PRAGMA quick_check reported issues".to_string()),
+        Err(e) => IntegrityStatus::Failed(format!("integrity probe error: {e}")),
+    }
+}
+
+/// Decide whether the probe should run for `palace_path`, and either
+/// record a `Skipped` status or spawn the probe and return immediately.
+fn spawn_integrity_probe(
+    palace_path: PathBuf,
+    shared: Arc<std::sync::RwLock<Option<IntegrityStatus>>>,
+    notify: Arc<Notify>,
+) {
+    let limit_mb = startup_integrity_max_mb();
+    let bytes = palace_path_size_bytes(&palace_path);
+    let palace_mb = bytes / (1024 * 1024);
+
+    if palace_mb > limit_mb {
+        warn!(
+            "skipping sqlite-integrity probe at startup (palace={} MB > limit={} MB)",
+            palace_mb, limit_mb
+        );
+        if let Ok(mut guard) = shared.write() {
+            *guard = Some(IntegrityStatus::Skipped {
+                palace_mb,
+                limit_mb,
+            });
+        }
+        notify.notify_waiters();
+        return;
+    }
+
+    // Spawn the probe so `ServerHandler::initialize` returns immediately.
+    // The probe may take seconds on slow disks, but the MCP client only
+    // needs the ServerInfo — not the probe verdict.
+    let shared_for_task = shared.clone();
+    let notify_for_task = notify.clone();
+    tokio::spawn(async move {
+        // `sqlite_integrity_preflight` opens a fresh rusqlite connection
+        // and runs a single PRAGMA — fast in absolute terms but blocks
+        // the executor, so delegate to `spawn_blocking` to keep the
+        // runtime responsive for other startup tasks.
+        let result = tokio::task::spawn_blocking(move || run_integrity_probe_blocking(palace_path))
+            .await
+            .unwrap_or_else(|e| IntegrityStatus::Failed(format!("probe task panicked: {e}")));
+
+        if let Ok(mut guard) = shared_for_task.write() {
+            *guard = Some(result);
+        }
+        notify_for_task.notify_waiters();
+    });
+}
+// ===== P0-2 END =====
 
 fn short_hash(input: &str, len: usize) -> String {
     use sha2::{Digest, Sha256};
@@ -261,6 +395,10 @@ const MUTATION_TOOLS: &[&str] = &[
     "mempalace_delete_by_source",
     "mempalace_kg_add",
     "mempalace_kg_invalidate",
+    // P0-1: atomic supersede — bumps the old fact's valid_to and inserts the
+    // successor in one transaction. Same invalidation surface as
+    // mempalace_kg_add.
+    "mempalace_kg_supersede",
     "mempalace_diary_write",
     "mempalace_heal",
     "mempalace_governance_delete",
@@ -373,6 +511,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "mempalace_status" => tool_status(&state, args),
                 "mempalace_list_wings" => tool_list_wings(&state, args),
                 "mempalace_list_rooms" => tool_list_rooms(&state, args),
+                "mempalace_list_drawers" => tool_list_drawers(&state, args),
                 "mempalace_get_taxonomy" => tool_get_taxonomy(&state, args),
                 "mempalace_get_aaak_spec" => tool_get_aaak_spec(&state, args),
                 "mempalace_search" => tool_search(&state, args),
@@ -383,6 +522,7 @@ pub(crate) fn make_dispatch(state: Arc<AppState>) -> impl Fn(String, JsonObject)
                 "mempalace_kg_query" => tool_kg_query(&state, args),
                 "mempalace_kg_add" => tool_kg_add(&state, args),
                 "mempalace_kg_invalidate" => tool_kg_invalidate(&state, args),
+                "mempalace_kg_supersede" => tool_kg_supersede(&state, args),
                 "mempalace_kg_timeline" => tool_kg_timeline(&state, args),
                 "mempalace_kg_stats" => tool_kg_stats(&state, args),
                 "mempalace_kg_snapshot_rebuild" => tool_kg_snapshot_rebuild(&state, args),
@@ -639,6 +779,23 @@ pub(crate) fn make_tools() -> Vec<rmcp::model::Tool> {
             "List rooms within a wing (or all rooms if no wing given)",
             serde_json::json!({ "type": "object", "properties": { "wing": { "type": "string", "description": "Wing to list rooms for (optional)" } } }),
         ),
+        // ===== P0-5 BEGIN: mempalace_list_drawers tool schema (do not edit) =====
+        tool(
+            "mempalace_list_drawers",
+            "List Drawers",
+            "List drawers with optional date range and wing filter. Returns metadata only (no drawer body).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "since":  { "type": "string", "description": "ISO date YYYY-MM-DD; inclusive" },
+                    "before": { "type": "string", "description": "ISO date YYYY-MM-DD; exclusive" },
+                    "wing":   { "type": "string" },
+                    "limit":  { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
+                    "offset": { "type": "integer", "minimum": 0, "default": 0 }
+                }
+            }),
+        ),
+        // ===== P0-5 END =====
         tool(
             "mempalace_get_taxonomy",
             "Get Taxonomy",
@@ -668,6 +825,37 @@ pub(crate) fn make_tools() -> Vec<rmcp::model::Tool> {
             "KG Invalidate",
             "Mark a fact as no longer true. E.g. ankle injury resolved, job ended, moved house.",
             serde_json::json!({ "type": "object", "properties": { "subject": { "type": "string", "description": "Entity" }, "predicate": { "type": "string", "description": "Relationship" }, "object": { "type": "string", "description": "Connected entity" }, "ended": { "type": "string", "description": "When it stopped being true (YYYY-MM-DD, default: today)" } }, "required": ["subject", "predicate", "object"] }),
+        ),
+        tool(
+            // P0-1: atomic supersede. Bumps the old fact's valid_to to the
+            // replacement's valid_from (half-open interval), then inserts
+            // the successor in the same SQLite transaction. Returns the
+            // new (successor) fact with its generated id.
+            "mempalace_kg_supersede",
+            "KG Supersede",
+            "Atomically supersede a knowledge-graph fact. Bumps the old fact's valid_to to the replacement's valid_from, then inserts the successor in one transaction. Returns the new fact.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "fact_id": { "type": "string", "description": "ID of the fact to supersede" },
+                    "replacement": {
+                        "type": "object",
+                        "properties": {
+                            "subject": { "type": "string" },
+                            "predicate": { "type": "string" },
+                            "object": { "type": "string" },
+                            "valid_from": { "type": "string", "description": "ISO-8601 timestamp (YYYY-MM-DD or full RFC3339). Boundary: this becomes the old fact's new valid_to." },
+                            "valid_to": { "type": "string", "description": "Optional explicit end for the successor fact (YYYY-MM-DD)." },
+                            "confidence": { "type": "number" },
+                            "source_closet": { "type": "string" },
+                            "source_file": { "type": "string" },
+                            "source_drawer_id": { "type": "string" }
+                        },
+                        "required": ["subject", "predicate", "object", "valid_from"]
+                    }
+                },
+                "required": ["fact_id", "replacement"]
+            }),
         ),
         tool(
             "mempalace_kg_timeline",
@@ -1185,14 +1373,66 @@ pub(crate) fn make_tools() -> Vec<rmcp::model::Tool> {
 #[non_exhaustive]
 pub struct MempalaceServer {
     state: Arc<AppState>,
+    // ===== P0-2 BEGIN: startup integrity gate (do not edit) =====
+    /// Result of the async startup integrity probe (or `None` until it
+    /// completes). Populated by the background `tokio::spawn` kicked off
+    /// in `ServerHandler::initialize`. Read via
+    /// [`MempalaceServer::wait_integrity_probe`] by health checks.
+    integrity_result: Arc<std::sync::RwLock<Option<IntegrityStatus>>>,
+    /// Fired when the background probe finishes (or skips). Used by
+    /// `wait_integrity_probe` so callers can join instead of polling.
+    integrity_notify: Arc<Notify>,
+    /// `true` once we've handed the probe off to `tokio::spawn`.
+    /// Prevents a reconnect-driven second `initialize` from
+    /// double-spawning.
+    integrity_probe_started: Arc<std::sync::atomic::AtomicBool>,
+    // ===== P0-2 END =====
 }
 
 impl MempalaceServer {
     pub fn new(state: AppState) -> Self {
         Self {
             state: Arc::new(state),
+            // ===== P0-2 BEGIN: startup integrity gate (do not edit) =====
+            integrity_result: Arc::new(std::sync::RwLock::new(None)),
+            integrity_notify: Arc::new(Notify::new()),
+            integrity_probe_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            // ===== P0-2 END =====
         }
     }
+
+    // ===== P0-2 BEGIN: startup integrity gate (do not edit) =====
+    /// Block (up to `timeout`) for the background startup-integrity probe
+    /// to finish. Returns `IntegrityStatus::Skipped` if the probe never
+    /// ran (still pending after the timeout) — callers should treat that
+    /// as "unknown, not yet verified" rather than a clean bill of health.
+    pub async fn wait_integrity_probe(&self, timeout: Duration) -> IntegrityStatus {
+        // Fast path: already finished.
+        if let Some(status) = self.integrity_result.read().ok().and_then(|g| g.clone()) {
+            return status;
+        }
+
+        // Otherwise wait for the notify (with a timeout).
+        let notified = self.integrity_notify.notified();
+        tokio::time::timeout(timeout, notified).await.ok();
+
+        // Re-read after wait — the spawned task may have raced past us.
+        self.integrity_result
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or(IntegrityStatus::Skipped {
+                palace_mb: 0,
+                limit_mb: startup_integrity_max_mb(),
+            })
+    }
+
+    /// Synchronous accessor — used by tests and CLI tooling that wants
+    /// the current snapshot without awaiting.
+    pub fn integrity_status_snapshot(&self) -> Option<IntegrityStatus> {
+        self.integrity_result.read().ok().and_then(|g| g.clone())
+    }
+    // ===== P0-2 END =====
 }
 
 impl ServerHandler for MempalaceServer {
@@ -1201,6 +1441,45 @@ impl ServerHandler for MempalaceServer {
             .with_server_info(Implementation::new("mempalace", env!("CARGO_PKG_VERSION")))
             .with_instructions("MemPalace - AI memory palace. Search, mine, and manage memories.")
     }
+
+    // ===== P0-2 BEGIN: startup integrity gate (do not edit) =====
+    /// `ServerHandler::initialize` override: returns `ServerInfo`
+    /// immediately while the SQLite-integrity probe runs in the
+    /// background. The probe is gated by
+    /// `MEMPALACE_STARTUP_INTEGRITY_MAX_MB` — palaces above the budget
+    /// are skipped with a warning (use `mempalace_repair` /
+    /// `mempalace_sqlite_integrity` for explicit checks).
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<InitializeResult, rmcp::ErrorData>>
+           + MaybeSendFuture
+           + '_ {
+        // Fire-and-forget: kick off the probe once per server lifetime.
+        // `compare_exchange` ensures a reconnect-driven second
+        // `initialize` doesn't double-spawn the probe.
+        use std::sync::atomic::Ordering;
+        if self
+            .integrity_probe_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            spawn_integrity_probe(
+                self.state.palace_path.clone(),
+                self.integrity_result.clone(),
+                self.integrity_notify.clone(),
+            );
+        }
+
+        // Mirror the default rmcp behavior: cache peer info, then return
+        // ServerInfo immediately.
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+        std::future::ready(Ok(self.get_info()))
+    }
+    // ===== P0-2 END =====
 
     fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
         // In read-only mode, hide mutation tools from `tools/get` so well-behaved
@@ -1893,6 +2172,65 @@ fn tool_list_rooms(state: &AppState, args: JsonObject) -> Result<CallToolResult,
     )
 }
 
+// ===== P0-5 BEGIN: tool_list_drawers handler (do not edit) =====
+fn tool_list_drawers(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    if collection_missing(state) {
+        return ok_json(no_palace());
+    }
+    #[derive(Deserialize)]
+    struct Input {
+        since: Option<String>,
+        before: Option<String>,
+        wing: Option<String>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    }
+    let input: Input = parse_args_with_integer_coercion(args, &["limit", "offset"])?;
+
+    let since = match input.since.as_deref() {
+        Some(s) => Some(
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+                ErrorData::invalid_params(format!("since must be YYYY-MM-DD: {e}"), None)
+            })?,
+        ),
+        None => None,
+    };
+    let before = match input.before.as_deref() {
+        Some(s) => Some(
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+                ErrorData::invalid_params(format!("before must be YYYY-MM-DD: {e}"), None)
+            })?,
+        ),
+        None => None,
+    };
+    if let (Some(s), Some(b)) = (since, before) {
+        if s >= b {
+            return Err(ErrorData::invalid_params(
+                format!("since ({s}) must be earlier than before ({b})"),
+                None,
+            ));
+        }
+    }
+
+    let mut limit = input.limit.unwrap_or(100);
+    if limit == 0 {
+        limit = 1;
+    }
+    if limit > 1000 {
+        limit = 1000;
+    }
+    let offset = input.offset.unwrap_or(0);
+
+    let store = crate::drawer_store::DrawerStore::open(&state.palace_path)
+        .map_err(|e| internal_error_safe(&e))?;
+    let drawers = store
+        .list_filtered(since, before, input.wing.as_deref(), limit, offset)
+        .map_err(|e| internal_error_safe(&e))?;
+
+    ok_json(serde_json::json!({ "drawers": drawers }))
+}
+// ===== P0-5 END =====
+
 fn tool_get_taxonomy(state: &AppState, _args: JsonObject) -> Result<CallToolResult, ErrorData> {
     if collection_missing(state) {
         return ok_json(no_palace());
@@ -2353,6 +2691,104 @@ fn tool_kg_invalidate(state: &AppState, args: JsonObject) -> Result<CallToolResu
         serde_json::json!({ "success": true, "fact": format!("{} → {} → {}", input.subject, input.predicate, input.object), "ended": resolved_ended }),
     )
 }
+
+// ===== P0-1 BEGIN: tool_kg_supersede handler (do not edit; managed by port agent) =====
+fn tool_kg_supersede(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
+    read_only_guard(state)?;
+    #[derive(Deserialize)]
+    struct ReplacementInput {
+        subject: String,
+        predicate: String,
+        object: String,
+        valid_from: String,
+        // Optional metadata that flows through to the successor's row
+        // (mirrors mempalace_kg_add fields, same provenance rules #1314).
+        #[serde(default)]
+        valid_to: Option<String>,
+        #[serde(default)]
+        confidence: Option<f64>,
+        #[serde(default)]
+        source_closet: Option<String>,
+        #[serde(default)]
+        source_file: Option<String>,
+        #[serde(default)]
+        source_drawer_id: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Input {
+        fact_id: String,
+        replacement: ReplacementInput,
+    }
+    let input: Input = parse_args(args)?;
+
+    // Validate ISO-8601 dates at MCP boundary (#1164) so malformed dates
+    // fail fast before opening the KG file.
+    let valid_from =
+        crate::config::sanitize_iso_temporal(Some(&input.replacement.valid_from), "valid_from")
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
+            .ok_or_else(|| ErrorData::invalid_params("replacement.valid_from is required", None))?;
+    let valid_to =
+        crate::config::sanitize_iso_temporal(input.replacement.valid_to.as_deref(), "valid_to")
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+
+    let mut kg = crate::knowledge_graph::KnowledgeGraph::open(&kg_path(state))
+        .map_err(|e| internal_error_safe(&e))?;
+    let replacement = crate::knowledge_graph::FactCreate {
+        subject: input.replacement.subject.clone(),
+        predicate: input.replacement.predicate.clone(),
+        object: input.replacement.object.clone(),
+        valid_from: Some(valid_from.clone()),
+        valid_to: valid_to.clone(),
+        confidence: input.replacement.confidence,
+        source_closet: input.replacement.source_closet.clone(),
+        source_file: input.replacement.source_file.clone(),
+        source_drawer_id: input.replacement.source_drawer_id.clone(),
+        adapter_name: None,
+        edge_kind: None,
+        weight: None,
+    };
+    let successor_id = kg
+        .supersede(&input.fact_id, replacement)
+        .map_err(|e| match e {
+            crate::knowledge_graph::KGError::OldFactNotFound(id) => ErrorData::invalid_params(
+                format!("old fact {id:?} not found in knowledge graph"),
+                None,
+            ),
+            crate::knowledge_graph::KGError::OldFactAlreadyEnded { id, valid_to } => {
+                ErrorData::invalid_params(
+                    format!(
+                        "old fact {id:?} already ended at {valid_to:?}; supersede only valid for currently-true facts"
+                    ),
+                    None,
+                )
+            }
+            crate::knowledge_graph::KGError::InvertedInterval {
+                valid_from,
+                valid_to,
+            } => ErrorData::invalid_params(
+                format!(
+                    "replacement.valid_to={valid_to:?} is before replacement.valid_from={valid_from:?}; inverted intervals would be invisible"
+                ),
+                None,
+            ),
+            crate::knowledge_graph::KGError::TemporalInvalid(msg) => {
+                ErrorData::invalid_params(format!("replacement: {msg}"), None)
+            }
+            crate::knowledge_graph::KGError::Sql(sql_err) => internal_error_safe(&sql_err),
+            crate::knowledge_graph::KGError::LockPoisoned(msg) => internal_error_safe(&msg),
+        })?;
+    crate::palace_graph::invalidate_cache(&state.palace_path);
+    ok_json(serde_json::json!({
+        "success": true,
+        "superseded_fact_id": input.fact_id,
+        "new_fact_id": successor_id,
+        "fact": format!("{} → {} → {}",
+            input.replacement.subject,
+            input.replacement.predicate,
+            input.replacement.object),
+    }))
+}
+// ===== P0-1 END =====
 
 fn tool_kg_timeline(state: &AppState, args: JsonObject) -> Result<CallToolResult, ErrorData> {
     #[derive(Deserialize)]
@@ -7247,6 +7683,110 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// P0-5: `mempalace_list_drawers` honours half-open since/before date filter.
+    #[test]
+    fn list_drawers_date_filter() {
+        // Keep TempDir alive — test_state() drops it on return, which deletes
+        // the palace path before DrawerStore can open drawers.db.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = crate::Config {
+            palace_path: temp_dir.path().join("palace"),
+            collection_name: "test_collection".to_string(),
+            people_map: Default::default(),
+            topic_wings: vec!["emotions".to_string()],
+            hall_keywords: Default::default(),
+            embedding_model: "naive".to_string(),
+            languages: vec![],
+            ..Default::default()
+        };
+        std::fs::create_dir_all(&config.palace_path).unwrap();
+        let state = AppState::new(config, false).unwrap();
+
+        // Seed 5 drawers across 3 days via DrawerStore so filed_at is controllable.
+        let store = crate::drawer_store::DrawerStore::open(&state.palace_path).unwrap();
+        let seeds: &[(&str, &str)] = &[
+            ("d1", "2026-04-01 10:00:00"),
+            ("d2", "2026-04-01 18:00:00"),
+            ("d3", "2026-04-02 09:00:00"),
+            ("d4", "2026-04-02 15:30:00"),
+            ("d5", "2026-04-03 12:00:00"),
+        ];
+        for (id, filed_at) in seeds {
+            let mut meta = std::collections::HashMap::new();
+            meta.insert(
+                "title".to_string(),
+                serde_json::Value::String(format!("Title {id}")),
+            );
+            store
+                .insert(
+                    id,
+                    &format!("body of {id}"),
+                    &meta,
+                    "wing_a",
+                    "room_a",
+                    Some(&format!("src/{id}.txt")),
+                    None,
+                )
+                .unwrap();
+            // Direct SQL to pin filed_at (insert uses datetime('now')).
+            // Access via a fresh connection on the same db file.
+            let db_path = state.palace_path.join("drawers.db");
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute(
+                "UPDATE drawers SET filed_at = ?1 WHERE id = ?2",
+                rusqlite::params![filed_at, id],
+            )
+            .unwrap();
+        }
+
+        // Also ensure collection_missing is false by seeding PalaceDb.
+        {
+            let mut db = crate::palace_db::PalaceDb::open(&state.palace_path).unwrap();
+            db.add(
+                &[("seed", "seed content")],
+                &[&[("wing", "wing_a"), ("room", "room_a")]],
+            )
+            .unwrap();
+            db.flush().unwrap();
+        }
+
+        let result = dispatch(
+            &state,
+            "mempalace_list_drawers",
+            json!({
+                "since": "2026-04-02",
+                "before": "2026-04-03",
+                "limit": 100
+            }),
+        )
+        .expect("list_drawers should succeed");
+        let text = serde_json::to_value(&result.content[0])
+            .unwrap()
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        let drawers = parsed
+            .get("drawers")
+            .and_then(|v| v.as_array())
+            .expect("drawers array");
+        assert_eq!(
+            drawers.len(),
+            2,
+            "expected 2 drawers in [2026-04-02, 2026-04-03); got {parsed}"
+        );
+        // ORDER BY filed_at DESC → d4 then d3.
+        assert_eq!(drawers[0].get("id").and_then(|v| v.as_str()), Some("d4"));
+        assert_eq!(drawers[1].get("id").and_then(|v| v.as_str()), Some("d3"));
+        assert_eq!(
+            drawers[0].get("wing").and_then(|v| v.as_str()),
+            Some("wing_a")
+        );
+        // No body field — metadata only.
+        assert!(drawers[0].get("content").is_none());
+    }
+
     #[test]
     fn test_search_empty() {
         let state = test_state();
@@ -8235,11 +8775,15 @@ mod tests {
             "mempalace_status",
             "mempalace_list_wings",
             "mempalace_list_rooms",
+            // P0-5: list_drawers with since/before/wing/limit/offset
+            "mempalace_list_drawers",
             "mempalace_get_taxonomy",
             "mempalace_get_aaak_spec",
             "mempalace_kg_query",
             "mempalace_kg_add",
             "mempalace_kg_invalidate",
+            // P0-1: atomic KG.supersede()
+            "mempalace_kg_supersede",
             "mempalace_kg_timeline",
             "mempalace_kg_stats",
             "mempalace_kg_snapshot_rebuild",

@@ -58,6 +58,37 @@ pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Strip characters that corrupt the FTS5 inverted index or BM25 tokenization.
+///
+/// Currently removes:
+/// - U+0000 NUL bytes (would terminate the FTS5 tokenizer early)
+/// - Lone surrogate halves (U+D800..U+DFFF) when unpaired
+///
+/// Returns `Cow::Borrowed` when no change is needed (zero allocation).
+pub fn sanitize_for_fts5<'a>(t: &'a str) -> std::borrow::Cow<'a, str> {
+    // Note: we can't write `\u{D800}` as a char literal (Rust rejects
+    // surrogate code points), so we compare against the integer range.
+    if !t.as_bytes().contains(&0)
+        && !t
+            .chars()
+            .any(|c| (c as u32) >= 0xD800 && (c as u32) <= 0xDFFF)
+    {
+        return std::borrow::Cow::Borrowed(t);
+    }
+    let mut out = String::with_capacity(t.len());
+    for c in t.chars() {
+        let cp = c as u32;
+        if cp == 0 {
+            continue;
+        }
+        if (0xD800..=0xDFFF).contains(&cp) {
+            continue;
+        }
+        out.push(c);
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 fn strip_noise(text: &str) -> String {
     let mut result = text.to_string();
 
@@ -2139,6 +2170,33 @@ pub fn detect_format(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
+
+    #[test]
+    fn sanitize_for_fts5_strips_nul() {
+        assert_eq!(sanitize_for_fts5("hello\0world"), "helloworld");
+    }
+
+    #[test]
+    fn sanitize_for_fts5_preserves_multibyte_utf8() {
+        // Valid non-ASCII / multi-byte UTF-8 must pass through unchanged.
+        // (Lone surrogates U+D800..U+DFFF cannot appear in a Rust &str —
+        // they are not valid UTF-8 — so the surrogate filter is defensive
+        // only and cannot be exercised via a safe string literal.)
+        let s = "hello 世界 🚀 café";
+        assert_eq!(sanitize_for_fts5(s), s);
+        assert!(matches!(sanitize_for_fts5(s), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn sanitize_for_fts5_no_alloc_when_clean() {
+        assert!(matches!(sanitize_for_fts5("clean text"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn sanitize_for_fts5_strips_multiple_nuls() {
+        assert_eq!(sanitize_for_fts5("\0a\0b\0"), "ab");
+    }
 
     #[test]
     fn test_plain_text_pass_through() {

@@ -375,13 +375,17 @@ impl HealthCheck for KvLatencyCheck {
 
     fn run(&self) -> CheckResult {
         let start = Instant::now();
+        // ===== P0-4 BEGIN: 15s busy timeout on integrity probe (do not edit) =====
         let ok = rusqlite::Connection::open(&self.palace_db_path)
             .and_then(|conn| {
+                // P0-4: 15s busy-timeout (was 5s) — suppresses false-positive "database is locked" → "corrupt" cascades
+                conn.busy_timeout(std::time::Duration::from_secs(15))?;
                 let mut stmt = conn.prepare("SELECT 1")?;
                 let _ = stmt.execute([]);
                 Ok(())
             })
             .is_ok();
+        // ===== P0-4 END =====
         let elapsed_ms = start.elapsed().as_millis() as f64;
 
         let value = elapsed_ms;

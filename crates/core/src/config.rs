@@ -578,6 +578,13 @@ pub struct Config {
     /// WAL audit trail: days to retain entries (default 90).
     #[serde(default)]
     pub wal_retention_days: Option<usize>,
+
+    // ===== P1-1 BEGIN =====
+    /// Glob patterns to skip during project mining (e.g. `*.log`, `node_modules/**`).
+    /// Merged with any `--exclude` flags passed to `mpr mine`.
+    #[serde(default)]
+    pub exclude_patterns: Vec<String>,
+    // ===== P1-1 END =====
 }
 
 #[cfg(unix)]
@@ -694,6 +701,9 @@ impl Default for Config {
             obsidian_date_format: None,
             obsidian_export_dir: None,
             wal_retention_days: None,
+            // ===== P1-1 BEGIN =====
+            exclude_patterns: Vec::new(),
+            // ===== P1-1 END =====
         }
     }
 }
@@ -707,6 +717,15 @@ impl Config {
         } else {
             Config::default()
         };
+
+        // ===== P1-9 BEGIN =====
+        // Expand `~` and normalize palace_path from the config file *before*
+        // applying env overrides, so a file value like `~/my-palace` works.
+        {
+            let raw = config.palace_path.to_string_lossy();
+            config.palace_path = normalize_pathbuf(expand_path(&raw));
+        }
+        // ===== P1-9 END =====
 
         // env override for palace_path takes priority over config file value
         if let Some(env_val) = std::env::var_os("MEMPALACE_PALACE_PATH")
@@ -1066,6 +1085,9 @@ mod tests {
             eval_enabled: true,
             eval_threshold: None,
             eval_max_per_function: None,
+            // ===== P1-1 BEGIN =====
+            exclude_patterns: Vec::new(),
+            // ===== P1-1 END =====
         };
         let people_map = config.load_people_map().unwrap();
         assert_eq!(people_map.get("bob"), Some(&"Robert".to_string()));
@@ -1139,6 +1161,9 @@ mod tests {
             eval_enabled: true,
             eval_threshold: None,
             eval_max_per_function: None,
+            // ===== P1-1 BEGIN =====
+            exclude_patterns: Vec::new(),
+            // ===== P1-1 END =====
         };
         assert_eq!(
             cfg.tunnel_file(),
@@ -1365,4 +1390,74 @@ mod tests {
         std::env::remove_var("MEMPALACE_INSTANCE");
         std::env::remove_var("XDG_CONFIG_HOME");
     }
+
+    // ===== P1-1 BEGIN =====
+    #[test]
+    fn test_p1_1_exclude_patterns_default_empty() {
+        let cfg = Config::default();
+        assert!(cfg.exclude_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_p1_1_exclude_patterns_deserializes_from_json() {
+        let json = r#"{"exclude_patterns":["*.log","node_modules/**"]}"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            cfg.exclude_patterns,
+            vec!["*.log".to_string(), "node_modules/**".to_string()]
+        );
+    }
+    // ===== P1-1 END =====
+
+    // ===== P1-9 BEGIN =====
+    #[test]
+    fn test_p1_9_expand_path_tilde() {
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_str().unwrap();
+        std::env::set_var("HOME", home_str);
+        let expanded = expand_path("~/my-palace");
+        assert_eq!(expanded, PathBuf::from(home_str).join("my-palace"));
+        // bare path without tilde is unchanged
+        assert_eq!(expand_path("/abs/path"), PathBuf::from("/abs/path"));
+        std::env::remove_var("HOME");
+    }
+
+    #[test]
+    fn test_p1_9_load_expands_tilde_palace_path_from_file() {
+        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let xdg = temp.path().join("xdg");
+        std::fs::create_dir_all(&xdg).unwrap();
+        let xdg_str = xdg.to_str().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", xdg_str);
+        // Clear env palace override so file value wins
+        std::env::remove_var("MEMPALACE_PALACE_PATH");
+        std::env::remove_var("MEMPAL_PALACE_PATH");
+
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let home_str = home.to_str().unwrap();
+        std::env::set_var("HOME", home_str);
+
+        let cfg_dir = Config::config_dir().unwrap();
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg_path = cfg_dir.join("config.json");
+        std::fs::write(
+            &cfg_path,
+            r#"{"palace_path":"~/tilted-palace","collection_name":"mempalace_drawers"}"#,
+        )
+        .unwrap();
+
+        let loaded = Config::load().unwrap();
+        assert_eq!(
+            loaded.palace_path,
+            normalize_pathbuf(home.join("tilted-palace")),
+            "file palace_path with ~ must expand"
+        );
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("HOME");
+    }
+    // ===== P1-9 END =====
 }

@@ -1024,6 +1024,9 @@ mod tests {
             filters: SearchFilters {
                 wing: None,
                 room: None,
+                // ===== P1-6 BEGIN =====
+                source_file: None,
+                // ===== P1-6 END =====
             },
             results: vec![],
         };

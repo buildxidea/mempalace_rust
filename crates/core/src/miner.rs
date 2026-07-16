@@ -202,6 +202,8 @@ static READABLE_EXTENSIONS: &[&str] = &[
     ".jsonl",
     ".ndjson",
     ".lock",
+    ".tex",
+    ".bib",
 ];
 
 static SKIP_DIRS: &[&str] = &[
@@ -563,6 +565,51 @@ fn normalize_include_paths(include_ignored: Option<&[String]>) -> HashSet<String
         .collect()
 }
 
+// ===== P1-1 BEGIN =====
+fn normalize_exclude_patterns(exclude_patterns: Option<&[String]>) -> Vec<String> {
+    exclude_patterns
+        .unwrap_or(&[])
+        .iter()
+        .flat_map(|raw| raw.split(','))
+        .map(|raw| raw.trim().replace('\\', "/"))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Return true when `path` (relative to `project_path`) matches any exclude glob.
+///
+/// Patterns support `*` / `?` wildcards and optional `**/` prefixes. A bare
+/// basename pattern like `*.log` matches any path whose final component matches.
+fn is_excluded(path: &Path, project_path: &Path, exclude_globs: &[String]) -> bool {
+    if exclude_globs.is_empty() {
+        return false;
+    }
+    let Some(relative) = relative_posix(path, project_path) else {
+        return false;
+    };
+    if relative.is_empty() {
+        return false;
+    }
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    exclude_globs.iter().any(|pat| {
+        let pat = pat.trim_matches('/');
+        if pat.is_empty() {
+            return false;
+        }
+        let pat = pat.strip_prefix("**/").unwrap_or(pat);
+        if pat.ends_with("/**") {
+            let prefix = pat.trim_end_matches("/**");
+            return relative == prefix || relative.starts_with(&format!("{prefix}/"));
+        }
+        if pat.contains('/') {
+            glob_matches(pat, &relative)
+        } else {
+            glob_matches(pat, file_name) || glob_matches(pat, &relative)
+        }
+    })
+}
+// ===== P1-1 END =====
+
 fn relative_posix(path: &Path, project_path: &Path) -> Option<String> {
     path.strip_prefix(project_path).ok().map(|p| {
         p.to_string_lossy()
@@ -612,13 +659,29 @@ pub fn scan_project(
     respect_gitignore: bool,
     include_ignored: Option<&[String]>,
 ) -> Vec<std::path::PathBuf> {
+    // ===== P1-1 BEGIN =====
+    scan_project_with_excludes(project_dir, respect_gitignore, include_ignored, None)
+    // ===== P1-1 END =====
+}
+
+// ===== P1-1 BEGIN =====
+/// Scan with optional exclude globs. Relative paths matching any pattern are
+/// dropped before the miner sees them.
+pub fn scan_project_with_excludes(
+    project_dir: &Path,
+    respect_gitignore: bool,
+    include_ignored: Option<&[String]>,
+    exclude_patterns: Option<&[String]>,
+) -> Vec<std::path::PathBuf> {
     scan_project_with_log(
         project_dir,
         respect_gitignore,
         include_ignored,
+        exclude_patterns,
         &mut std::io::stderr(),
     )
 }
+// ===== P1-1 END =====
 
 /// Same as [`scan_project`] but routes the skipped-symlink diagnostic to an
 /// arbitrary writer. Lets unit tests assert the log fires without having to
@@ -627,6 +690,9 @@ fn scan_project_with_log<W: Write>(
     project_dir: &Path,
     respect_gitignore: bool,
     include_ignored: Option<&[String]>,
+    // ===== P1-1 BEGIN =====
+    exclude_patterns: Option<&[String]>,
+    // ===== P1-1 END =====
     skip_log: &mut W,
 ) -> Vec<std::path::PathBuf> {
     let project_path = match project_dir.canonicalize() {
@@ -635,6 +701,9 @@ fn scan_project_with_log<W: Write>(
     };
 
     let include_paths = normalize_include_paths(include_ignored);
+    // ===== P1-1 BEGIN =====
+    let exclude_globs = normalize_exclude_patterns(exclude_patterns);
+    // ===== P1-1 END =====
     let mut files = Vec::new();
     let mut active_matchers: Vec<GitignoreMatcher> = Vec::new();
     let mut matcher_cache: HashMap<std::path::PathBuf, Option<GitignoreMatcher>> = HashMap::new();
@@ -734,6 +803,12 @@ fn scan_project_with_log<W: Write>(
         if metadata.len() > MAX_FILE_SIZE {
             continue;
         }
+
+        // ===== P1-1 BEGIN =====
+        if is_excluded(&path, &project_path, &exclude_globs) {
+            continue;
+        }
+        // ===== P1-1 END =====
 
         files.push(path);
     }
@@ -1207,7 +1282,10 @@ pub async fn mine_with_options(
         .await?
         .with_max_chunks_per_file(max_chunks_per_file);
 
-    let file_paths = scan_project(project_dir, true, exclude_patterns);
+    // ===== P1-1 BEGIN =====
+    // exclude_patterns filters paths out; include_ignored is a separate force-include list.
+    let file_paths = scan_project_with_excludes(project_dir, true, None, exclude_patterns);
+    // ===== P1-1 END =====
     let mut files_processed = 0;
     let mut chunks_created = 0;
     let mut files_skipped_chunk_cap = 0;
@@ -1520,7 +1598,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, root.join("link.py")).unwrap();
 
         let mut log = Vec::new();
-        let files = scan_project_with_log(root, false, None, &mut log);
+        let files = scan_project_with_log(root, false, None, None, &mut log);
         let rel: Vec<String> = files
             .iter()
             .map(|p| {
@@ -1553,7 +1631,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, root.join("a/b/link.py")).unwrap();
 
         let mut log = Vec::new();
-        let files = scan_project_with_log(root, false, None, &mut log);
+        let files = scan_project_with_log(root, false, None, None, &mut log);
         let rel: Vec<String> = files
             .iter()
             .map(|p| {
@@ -1584,7 +1662,7 @@ mod tests {
         std::os::unix::fs::symlink(root.join("missing.py"), root.join("dangling.py")).unwrap();
 
         let mut log = Vec::new();
-        let files = scan_project_with_log(root, false, None, &mut log);
+        let files = scan_project_with_log(root, false, None, None, &mut log);
         let rel: Vec<String> = files
             .iter()
             .map(|p| {
@@ -1612,7 +1690,7 @@ mod tests {
         std::fs::write(root.join("b.py"), "print('b')\n".repeat(20)).unwrap();
 
         let mut log = Vec::new();
-        let files = scan_project_with_log(root, false, None, &mut log);
+        let files = scan_project_with_log(root, false, None, None, &mut log);
         assert_eq!(files.len(), 2);
         let log = String::from_utf8(log).unwrap();
         assert!(
@@ -2031,4 +2109,59 @@ mod tests {
             assert!(chunk.is_char_boundary(chunk.len()));
         }
     }
+
+    // ===== P1-1 BEGIN =====
+    #[test]
+    fn test_p1_1_scan_project_honors_exclude_patterns() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        let canonical_root = root.canonicalize().unwrap();
+        std::fs::write(root.join("keep.md"), "keep me").unwrap();
+        std::fs::write(root.join("noise.log"), "skip me").unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), "skip").unwrap();
+        std::fs::write(root.join("notes.txt"), "also keep").unwrap();
+
+        let excludes = vec!["*.log".to_string(), "node_modules/**".to_string()];
+        let files = scan_project_with_excludes(root, false, None, Some(&excludes));
+        let rel: Vec<String> = files
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&canonical_root)
+                    .unwrap_or(p.as_path())
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert!(
+            rel.iter().any(|r| r == "keep.md"),
+            "keep.md should remain: {rel:?}"
+        );
+        assert!(
+            rel.iter().any(|r| r == "notes.txt"),
+            "notes.txt should remain: {rel:?}"
+        );
+        assert!(
+            !rel.iter().any(|r| r.ends_with(".log")),
+            "logs excluded: {rel:?}"
+        );
+        assert!(
+            !rel.iter().any(|r| r.contains("node_modules")),
+            "node_modules excluded: {rel:?}"
+        );
+    }
+
+    #[test]
+    fn test_p1_1_is_excluded_basename_and_prefix() {
+        let project = Path::new("/proj");
+        let log = Path::new("/proj/deep/out.log");
+        let src = Path::new("/proj/src/main.rs");
+        let nm = Path::new("/proj/node_modules/x/a.js");
+        let globs = vec!["*.log".to_string(), "node_modules/**".to_string()];
+        assert!(is_excluded(log, project, &globs));
+        assert!(!is_excluded(src, project, &globs));
+        assert!(is_excluded(nm, project, &globs));
+        assert!(!is_excluded(src, project, &[]));
+    }
+    // ===== P1-1 END =====
 }

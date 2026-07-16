@@ -2009,28 +2009,25 @@ impl PalaceDb {
         Ok(())
     }
 
-    /// Embedder-aware open path (mp-016 / ADR-8).
+    /// Embedder-aware open path (mp-016 / ADR-8 / P1-4).
     ///
     /// Performs the same work as [`Self::open`] **plus** the
-    /// `embedding.json` manifest dance:
+    /// `embedding.json` identity-sidecar dance (P1-4 three-state):
     ///
-    /// * If a manifest exists on disk, validate it against `embedder`'s
-    ///   `dim()` and `fingerprint()`. A mismatch returns
-    ///   [`crate::embed::ManifestMismatch`] wrapped in
-    ///   [`crate::error::MempalaceError::ManifestMismatch`] whose
-    ///   message points at `mpr migrate --re-embed`.
-    /// * If absent and the palace has zero drawers (fresh install),
-    ///   write a manifest from `embedder`.
-    /// * If absent but drawers already exist (legacy palace from before
-    ///   mp-015 landed), emit a `tracing::warn!` and write a
-    ///   best-effort manifest. We can't validate the *existing* vectors
-    ///   against this manifest after the fact, but we can at least
-    ///   ensure subsequent opens are checked.
+    /// * **Match** — runtime embedder matches the recorded sidecar.
+    ///   Open proceeds.
+    /// * **Mismatch** — fingerprint or dim differs. Dim mismatches are
+    ///   always fatal. Fingerprint mismatches are fatal when
+    ///   [`crate::config::Config::embedder_identity_strict`] is `true`
+    ///   (the default); when `false`, open continues with a
+    ///   `tracing::warn!`. Recovery: `mpr migrate --re-embed` or
+    ///   `mpr repair rebuild-from-sqlite` / `mpr repair from-sqlite`.
+    /// * **Unknown** — no sidecar yet. Emit a one-shot warning and write
+    ///   the sidecar from the live embedder (locks identity for later
+    ///   opens). Legacy palaces with drawers take the same path.
     ///
-    /// Override: `MEMPALACE_SKIP_MANIFEST_CHECK=1` skips validation.
-    /// This is a deliberate test-and-migration backdoor; production
-    /// code paths must not set it. The override emits a `warn!` so it
-    /// shows up in logs.
+    /// Override: `MEMPALACE_SKIP_MANIFEST_CHECK=1` skips validation
+    /// (test / forced rebuild only). The override emits a `warn!`.
     ///
     /// `model_name` is supplied by the caller because [`Embedder`]
     /// deliberately keeps the human-readable model name out of its
@@ -3221,19 +3218,42 @@ fn naive_similarity(query: &str, content: &str) -> f64 {
 /// shows up in logs.
 pub const SKIP_MANIFEST_CHECK_ENV: &str = "MEMPALACE_SKIP_MANIFEST_CHECK";
 
-/// Read-or-write the embedding manifest as part of an embedder-aware
-/// `PalaceDb::open` call. See [`PalaceDb::open_with_embedder`] for the
-/// full contract.
+// ===== P1-4 BEGIN =====
+/// Resolve whether embedder-identity fingerprint mismatches are
+/// hard-fatal. Prefers `Config.embedder_identity_strict` (default
+/// `true`); falls back to `true` when no config is loadable so a
+/// missing config file never silently loosens identity checks.
+fn resolve_embedder_identity_strict() -> bool {
+    crate::config::Config::load()
+        .map(|c| c.embedder_identity_strict)
+        .unwrap_or(true)
+}
+
+/// Read-or-write the embedding-identity sidecar (`embedding.json`) as
+/// part of an embedder-aware `PalaceDb::open` call (P1-4 / mp-016 /
+/// ADR-8). See [`PalaceDb::open_with_embedder`] for the full contract.
+///
+/// Three-state identity machine (wired via
+/// [`EmbeddingManifest::classify_against`]):
+///
+/// * **Match** — open proceeds.
+/// * **Mismatch** — refuse with an actionable error (dim always; fingerprint
+///   when `Config.embedder_identity_strict`, the default). Non-strict
+///   fingerprint mismatches warn and continue so the next re-embed can
+///   catch up.
+/// * **Unknown** (no sidecar) — emit a one-shot warning and write the
+///   sidecar from the live embedder, locking identity for subsequent opens.
 fn validate_or_write_manifest(
     palace_path: &std::path::Path,
     embedder: &dyn crate::embed::Embedder,
     model_name: &str,
     drawer_count: usize,
 ) -> anyhow::Result<()> {
-    use crate::embed::EmbeddingManifest;
+    use crate::embed::{EmbedderIdentity, EmbeddingManifest, ManifestMismatch};
 
     // Check the override first so we can warn and bail before touching
-    // the disk.
+    // the disk. This is the force/migration backdoor (mirrors the
+    // planned `--force-embedder-rebuild` semantics without a parallel CLI).
     if std::env::var(SKIP_MANIFEST_CHECK_ENV)
         .map(|v| !v.is_empty() && v != "0")
         .unwrap_or(false)
@@ -3248,32 +3268,65 @@ fn validate_or_write_manifest(
 
     match EmbeddingManifest::read(palace_path)? {
         Some(manifest) => {
-            // mp-016: present → validate. Any mismatch is fatal and
-            // surfaces as `MempalaceError::ManifestMismatch` once it
-            // bubbles through the `?`-driven anyhow chain (the wrapper
-            // `From<ManifestMismatch> for MempalaceError` is what makes
-            // the typed error available to library callers; CLI users
-            // see the same actionable message either way).
-            manifest
-                .validate_against(embedder)
-                .map_err(crate::error::MempalaceError::ManifestMismatch)?;
-            Ok(())
+            // P1-4: three-state classify (Match / MismatchBlocking /
+            // MismatchDimension) honours `embedder_identity_strict`.
+            let identity = manifest.classify_against(embedder);
+            let strict = resolve_embedder_identity_strict();
+            match &identity {
+                EmbedderIdentity::Match => Ok(()),
+                EmbedderIdentity::MismatchDimension { recorded, runtime } => {
+                    // Dim is always blocking — HNSW schema hard-depends on it.
+                    Err(
+                        crate::error::MempalaceError::ManifestMismatch(ManifestMismatch::Dim {
+                            recorded: *recorded,
+                            runtime: *runtime,
+                        })
+                        .into(),
+                    )
+                }
+                EmbedderIdentity::MismatchBlocking { recorded, runtime } => {
+                    if identity.is_blocking(strict) {
+                        Err(crate::error::MempalaceError::ManifestMismatch(
+                            ManifestMismatch::Fingerprint {
+                                recorded: recorded.clone(),
+                                runtime: runtime.clone(),
+                            },
+                        )
+                        .into())
+                    } else {
+                        // Lenient: warn and proceed. Callers that care
+                        // about vector quality should re-embed.
+                        tracing::warn!(
+                            target: "mempalace::manifest",
+                            palace = %palace_path.display(),
+                            recorded = %recorded,
+                            runtime = %runtime,
+                            "embedder fingerprint mismatch (strict=false); opening anyway. Run `mpr migrate --re-embed` (or `mpr repair rebuild-from-sqlite`) to rebuild vectors."
+                        );
+                        Ok(())
+                    }
+                }
+            }
         }
         None => {
-            // mp-015 / mp-016: absent. Two cases:
-            //   1. Fresh palace (no drawers yet) → silently write the
-            //      manifest so the next open is validated.
-            //   2. Legacy palace (drawers exist, no manifest) → warn
-            //      and write best-effort. We can't retrofit-validate
-            //      the existing vectors but at least we lock in the
-            //      identity going forward.
+            // Unknown identity: always warn once, then write the sidecar
+            // so the next open is Match/Mismatch rather than Unknown.
             if drawer_count > 0 {
                 tracing::warn!(
                     target: "mempalace::manifest",
                     palace = %palace_path.display(),
                     drawers = drawer_count,
                     fingerprint = %embedder.fingerprint(),
-                    "legacy palace has drawers but no embedding.json; writing best-effort manifest from active embedder. If this is the wrong embedder, run `mpr migrate --re-embed`."
+                    "legacy palace has drawers but no embedding.json identity sidecar; writing best-effort manifest from active embedder. If this is the wrong embedder, run `mpr migrate --re-embed`."
+                );
+            } else {
+                tracing::warn!(
+                    target: "mempalace::manifest",
+                    palace = %palace_path.display(),
+                    fingerprint = %embedder.fingerprint(),
+                    dim = embedder.dim(),
+                    "no embedding.json identity sidecar; writing from active embedder (model={})",
+                    model_name
                 );
             }
             let manifest = EmbeddingManifest::from_embedder(embedder, model_name);
@@ -3282,6 +3335,7 @@ fn validate_or_write_manifest(
         }
     }
 }
+// ===== P1-4 END =====
 
 #[cfg(test)]
 mod tests {
@@ -3630,5 +3684,173 @@ mod tests {
             .unwrap();
         assert_eq!(manifest.dim, 384);
         assert_eq!(manifest.fingerprint, "null:384");
+    }
+
+    // -----------------------------------------------------------------
+    // P1-4: three-state embedder-identity enforcement on open.
+    // -----------------------------------------------------------------
+
+    /// P1-4 Match: open twice with the same embedder succeeds and leaves
+    /// the identity sidecar unchanged.
+    #[test]
+    fn test_p1_4_identity_match_open_ok() {
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via test_env_lock.
+        unsafe { std::env::remove_var(SKIP_MANIFEST_CHECK_ENV) };
+
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        let embedder = crate::embed::NullEmbedder::new(384);
+        let _ =
+            PalaceDb::open_with_embedder(&palace, Arc::new(embedder.clone()), "null-test").unwrap();
+        let original = crate::embed::EmbeddingManifest::read(&palace)
+            .unwrap()
+            .expect("sidecar written on first open");
+
+        let _ = PalaceDb::open_with_embedder(&palace, Arc::new(embedder), "null-test")
+            .expect("Match must open");
+        let after = crate::embed::EmbeddingManifest::read(&palace)
+            .unwrap()
+            .unwrap();
+        assert_eq!(original, after, "Match must not rewrite sidecar");
+    }
+
+    /// P1-4 Mismatch (fingerprint, strict default): refuse with an
+    /// actionable recovery message.
+    #[test]
+    fn test_p1_4_identity_fingerprint_mismatch_refuses() {
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via test_env_lock.
+        unsafe {
+            std::env::remove_var(SKIP_MANIFEST_CHECK_ENV);
+            // Ensure no stray config forces non-strict for this test.
+            // Isolate XDG so Config::load() sees a clean default (strict=true).
+            let xdg = tempfile::tempdir().unwrap();
+            std::env::set_var("XDG_CONFIG_HOME", xdg.path());
+            // Keep xdg alive for the duration of the open calls below by
+            // writing a default-strict config explicitly.
+            let cfg_dir = xdg.path().join("mempalace");
+            std::fs::create_dir_all(&cfg_dir).unwrap();
+            std::fs::write(
+                cfg_dir.join("config.json"),
+                r#"{"embedder_identity_strict": true}"#,
+            )
+            .unwrap();
+
+            let temp = tempfile::tempdir().unwrap();
+            let palace = temp.path().join("palace");
+            std::fs::create_dir_all(&palace).unwrap();
+
+            // Record identity via open (null:384).
+            let recorded = crate::embed::NullEmbedder::new(384);
+            let _ = PalaceDb::open_with_embedder(&palace, Arc::new(recorded), "null-test").unwrap();
+
+            // Rewrite sidecar fingerprint to simulate a different model
+            // at the same dim (e.g. BGE-Small → E5-Small).
+            let mut manifest = crate::embed::EmbeddingManifest::read(&palace)
+                .unwrap()
+                .unwrap();
+            manifest.fingerprint = "fastembed:e5-small:384".to_string();
+            crate::embed::EmbeddingManifest::write(&palace, &manifest).unwrap();
+
+            let runtime = crate::embed::NullEmbedder::new(384);
+            let err = match PalaceDb::open_with_embedder(&palace, Arc::new(runtime), "null-test") {
+                Ok(_) => panic!("fingerprint mismatch must refuse under strict=true"),
+                Err(e) => e,
+            };
+            let msg = err.to_string();
+            assert!(
+                msg.contains("mpr migrate --re-embed"),
+                "error must be actionable: {msg}"
+            );
+            assert!(
+                msg.contains("fingerprint") || msg.contains("fastembed:e5-small:384"),
+                "error must mention fingerprint mismatch: {msg}"
+            );
+
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    /// P1-4 Mismatch (fingerprint, strict=false): open proceeds with a
+    /// warning rather than a hard error.
+    #[test]
+    fn test_p1_4_identity_fingerprint_mismatch_lenient_opens() {
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via test_env_lock.
+        unsafe {
+            std::env::remove_var(SKIP_MANIFEST_CHECK_ENV);
+            let xdg = tempfile::tempdir().unwrap();
+            std::env::set_var("XDG_CONFIG_HOME", xdg.path());
+            let cfg_dir = xdg.path().join("mempalace");
+            std::fs::create_dir_all(&cfg_dir).unwrap();
+            std::fs::write(
+                cfg_dir.join("config.json"),
+                r#"{"embedder_identity_strict": false}"#,
+            )
+            .unwrap();
+
+            let temp = tempfile::tempdir().unwrap();
+            let palace = temp.path().join("palace");
+            std::fs::create_dir_all(&palace).unwrap();
+
+            let recorded = crate::embed::NullEmbedder::new(384);
+            let _ = PalaceDb::open_with_embedder(&palace, Arc::new(recorded), "null-test").unwrap();
+
+            let mut manifest = crate::embed::EmbeddingManifest::read(&palace)
+                .unwrap()
+                .unwrap();
+            manifest.fingerprint = "fastembed:e5-small:384".to_string();
+            crate::embed::EmbeddingManifest::write(&palace, &manifest).unwrap();
+
+            let runtime = crate::embed::NullEmbedder::new(384);
+            let res = PalaceDb::open_with_embedder(&palace, Arc::new(runtime), "null-test");
+            assert!(
+                res.is_ok(),
+                "strict=false must allow fingerprint mismatch: {:?}",
+                res.err()
+            );
+
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    /// P1-4 Unknown: first open with no sidecar writes identity and
+    /// succeeds (fresh palace, zero drawers).
+    #[test]
+    fn test_p1_4_identity_unknown_writes_sidecar() {
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via test_env_lock.
+        unsafe { std::env::remove_var(SKIP_MANIFEST_CHECK_ENV) };
+
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        assert!(
+            !crate::embed::EmbeddingManifest::path(&palace).is_file(),
+            "precondition: no identity sidecar"
+        );
+
+        let embedder = crate::embed::NullEmbedder::new(384);
+        let _ = PalaceDb::open_with_embedder(&palace, Arc::new(embedder), "null-test")
+            .expect("Unknown must open and write sidecar");
+
+        let manifest = crate::embed::EmbeddingManifest::read(&palace)
+            .unwrap()
+            .expect("Unknown must write embedding.json sidecar");
+        assert_eq!(manifest.fingerprint, "null:384");
+        assert_eq!(manifest.dim, 384);
+        assert_eq!(manifest.model_name, "null-test");
     }
 }

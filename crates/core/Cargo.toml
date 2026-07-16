@@ -52,6 +52,8 @@ health = ["dep:sysinfo"]
 source-adapter = []
 # HTTP REST API server (axum-based, `mpr serve --http`).
 http-server = ["dep:axum", "dep:tower-http"]
+# Optional TLS for HTTP/MCP HTTP transports (`--tls-cert` / `--tls-key`).
+http-tls = ["http-server", "dep:axum-server"]
 # PostgreSQL + pgvector backend. Production vector store with
 # multi-process access, HNSW/IVFFlat index, and ANN search.
 backend-pgvector = ["dep:tokio-postgres", "dep:deadpool-postgres"]
@@ -67,6 +69,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = { workspace = true }
 walkdir = { workspace = true }
 uuid = { workspace = true }
@@ -84,6 +87,7 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 axum = { version = "0.8", optional = true }
 tower-http = { version = "0.6", features = ["cors"], optional = true }
+axum-server = { workspace = true, optional = true }
 dirs = { workspace = true }
 filetime = { workspace = true }
 bm25 = { version = "2.3", default-features = false, features = ["default_tokenizer"] }

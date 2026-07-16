@@ -32,6 +32,11 @@ static JA_JSON: &str = include_str!("ja.json");
 static ZH_CN_JSON: &str = include_str!("zh-CN.json");
 static KO_JSON: &str = include_str!("ko.json");
 static RU_JSON: &str = include_str!("ru.json");
+static PT_BR_JSON: &str = include_str!("pt-BR.json");
+static IT_JSON: &str = include_str!("it.json");
+static ID_JSON: &str = include_str!("id.json");
+static ZH_TW_JSON: &str = include_str!("zh-TW.json");
+static BE_JSON: &str = include_str!("be.json");
 
 /// Ordered list of all embedded locale sources.
 static LOCALE_SOURCES: &[(&str, &str)] = &[
@@ -43,6 +48,11 @@ static LOCALE_SOURCES: &[(&str, &str)] = &[
     ("zh-CN", ZH_CN_JSON),
     ("ko", KO_JSON),
     ("ru", RU_JSON),
+    ("pt-BR", PT_BR_JSON),
+    ("it", IT_JSON),
+    ("id", ID_JSON),
+    ("zh-TW", ZH_TW_JSON),
+    ("be", BE_JSON),
 ];
 
 // ─── Data structures ─────────────────────────────────────────────────
@@ -128,11 +138,14 @@ pub fn resolve(code: &str) -> &LocaleData {
     if let Some(locale) = LOCALE_REGISTRY.get(&lower) {
         return locale;
     }
-    // Try primary sub-tag (e.g. "pt" from "pt-BR").
+    // Try primary sub-tag (e.g. "pt" from "pt-BR"). Prefer registration
+    // order from LOCALE_SOURCES so "zh" resolves to zh-CN before zh-TW.
     if let Some(primary) = lower.split('-').next() {
-        for (key, locale) in LOCALE_REGISTRY.iter() {
-            if key.starts_with(primary) {
-                return locale;
+        for &(registered, _) in LOCALE_SOURCES {
+            if registered.to_lowercase().starts_with(primary) {
+                if let Some(locale) = LOCALE_REGISTRY.get(registered) {
+                    return locale;
+                }
             }
         }
     }
@@ -360,7 +373,7 @@ mod tests {
     #[test]
     fn test_available_locales_count() {
         let locales = available_locales();
-        assert_eq!(locales.len(), 8);
+        assert_eq!(locales.len(), 13);
         assert!(locales.contains(&"en"));
         assert!(locales.contains(&"fr"));
         assert!(locales.contains(&"de"));
@@ -369,6 +382,11 @@ mod tests {
         assert!(locales.contains(&"zh-CN"));
         assert!(locales.contains(&"ko"));
         assert!(locales.contains(&"ru"));
+        assert!(locales.contains(&"pt-BR"));
+        assert!(locales.contains(&"it"));
+        assert!(locales.contains(&"id"));
+        assert!(locales.contains(&"zh-TW"));
+        assert!(locales.contains(&"be"));
     }
 
     #[test]

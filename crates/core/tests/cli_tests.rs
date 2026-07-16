@@ -344,6 +344,15 @@ fn test_cli_repair_rebuild_from_sqlite() {
     assert!(Cli::try_parse_from(["mpr", "repair", "rebuild-from-sqlite"]).is_ok());
 }
 
+// ===== P1-8 BEGIN =====
+#[test]
+fn test_cli_repair_from_sqlite_alias() {
+    // Upstream-style `repair --mode from-sqlite` analog: local UX is a
+    // subcommand alias so both spellings reach rebuild_from_sqlite.
+    assert!(Cli::try_parse_from(["mpr", "repair", "from-sqlite"]).is_ok());
+}
+// ===== P1-8 END =====
+
 #[test]
 fn test_cli_repair_status() {
     assert!(Cli::try_parse_from(["mpr", "repair", "status"]).is_ok());

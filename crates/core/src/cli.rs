@@ -186,6 +186,13 @@ pub enum Commands {
         /// batches on Windows.
         #[arg(long, value_name = "N")]
         max_chunks_per_file: Option<usize>,
+
+        // ===== P1-1 BEGIN =====
+        /// Glob patterns to exclude from mining (repeatable). Merged with
+        /// `exclude_patterns` from config.
+        #[arg(long = "exclude", value_name = "GLOB", action = clap::ArgAction::Append)]
+        exclude: Vec<String>,
+        // ===== P1-1 END =====
     },
 
     /// Find anything, exact words.
@@ -320,6 +327,28 @@ pub enum Commands {
         /// Disable background maintenance tasks (auto-forget, consolidation, etc.).
         #[arg(long)]
         no_background: bool,
+
+        // ===== P1-3 BEGIN =====
+        /// Bind host/IP for HTTP transports (default: 127.0.0.1).
+        /// Non-loopback binds require a bearer token (fail-closed).
+        /// Also honoured via MEMPALACE_MCP_HTTP_BIND_ADDR / MEMPALACE_HTTP_HOST.
+        #[arg(long)]
+        host: Option<String>,
+
+        /// Bearer token for HTTP auth. Also accepted via MEMPALACE_HTTP_TOKEN
+        /// (or legacy MEMPALACE_MCP_HTTP_TOKEN). Required when --host is
+        /// non-loopback; auto-generated and printed if omitted.
+        #[arg(long)]
+        token: Option<String>,
+
+        /// TLS certificate PEM path (requires --tls-key; needs `http-tls` feature).
+        #[arg(long, requires = "tls_key")]
+        tls_cert: Option<PathBuf>,
+
+        /// TLS private key PEM path (requires --tls-cert; needs `http-tls` feature).
+        #[arg(long, requires = "tls_cert")]
+        tls_key: Option<PathBuf>,
+        // ===== P1-3 END =====
     },
 
     /// Re-ingest a file or directory of mined drawers into the palace (idempotent).
@@ -659,6 +688,29 @@ pub enum Commands {
         data: Option<String>,
     },
 
+    // ===== P2-14 BEGIN =====
+    /// List or inspect entities from the entity registry.
+    Entities {
+        /// Optional wing filter (reserved; currently unused).
+        #[arg(long)]
+        wing: Option<String>,
+
+        /// Output as JSON.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
+
+    /// List hallways (cross-wing tunnels) in the palace graph.
+    Hallways {
+        /// Filter to hallways involving this wing.
+        #[arg(long)]
+        wing: Option<String>,
+
+        /// Output as JSON.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
+    // ===== P2-14 END =====
     /// Evaluate quality: record scores, view summaries, check thresholds.
     Eval {
         #[command(subcommand)]
@@ -741,8 +793,11 @@ pub enum RepairCommands {
     RebuildVectorIndex,
     /// Fix poisoned max_seq_id counters (pirk mode 2)
     FixPoisonedSeqId,
-    /// Full rebuild of palace from SQLite metadata (pirk mode 3)
+    /// Full rebuild of palace from SQLite metadata (pirk mode 3 / from-sqlite)
+    // ===== P1-8 BEGIN =====
+    #[command(name = "rebuild-from-sqlite", alias = "from-sqlite")]
     RebuildFromSqlite,
+    // ===== P1-8 END =====
     /// Show HNSW vector index health status
     Status,
     /// Clean up stale PID file from interrupted mine operations
@@ -1261,6 +1316,9 @@ fn cmd_init(
             None,
             false,
             None,
+            // ===== P1-1 BEGIN =====
+            &[],
+            // ===== P1-1 END =====
         ) {
             eprintln!("Warning: auto-mine failed: {}", err);
         }
@@ -1366,6 +1424,9 @@ pub fn cmd_mine(
     extract: Option<&str>,
     redetect_origin: bool,
     max_chunks_per_file: Option<usize>,
+    // ===== P1-1 BEGIN =====
+    exclude: &[String],
+    // ===== P1-1 END =====
 ) -> Result<()> {
     let palace_path = resolve_palace_path(palace_arg)?;
 
@@ -1409,6 +1470,23 @@ pub fn cmd_mine(
         .map(|part| part.to_string())
         .collect();
 
+    // ===== P1-1 BEGIN =====
+    let mut exclude_flat: Vec<String> = exclude
+        .iter()
+        .flat_map(|raw| raw.split(','))
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_string())
+        .collect();
+    if let Ok(cfg) = Config::load() {
+        for pat in cfg.exclude_patterns {
+            if !exclude_flat.iter().any(|e| e == &pat) {
+                exclude_flat.push(pat);
+            }
+        }
+    }
+    // ===== P1-1 END =====
+
     if dry_run && !matches!(mode, MiningMode::Convos) {
         println!("\n  [DRY RUN] Would mine: {:?}", dir);
         println!("  Palace: {:?}", palace_path);
@@ -1422,22 +1500,31 @@ pub fn cmd_mine(
         if !include_ignored_flat.is_empty() {
             println!("  Include ignored: {:?}", include_ignored_flat);
         }
+        // ===== P1-1 BEGIN =====
+        if !exclude_flat.is_empty() {
+            println!("  Exclude: {:?}", exclude_flat);
+        }
+        // ===== P1-1 END =====
         return Ok(());
     }
 
     match mode {
         MiningMode::Projects => {
+            // ===== P1-1 BEGIN =====
+            // include_ignored is force-include (not yet plumbed into mine_with_options);
+            // exclude_flat is the real exclude list for scan_project_with_excludes.
             let result = runtime().block_on(miner::mine_with_options(
                 dir,
                 &palace_path,
                 wing,
-                if include_ignored_flat.is_empty() {
+                if exclude_flat.is_empty() {
                     None
                 } else {
-                    Some(include_ignored_flat.as_slice())
+                    Some(exclude_flat.as_slice())
                 },
                 max_chunks_per_file,
             ));
+            // ===== P1-1 END =====
             match result {
                 Ok(mining_result) => {
                     let mining_result = apply_mine_limit(mining_result, limit);
@@ -1478,17 +1565,19 @@ pub fn cmd_mine(
             println!("  Auto-detected mode: {:?}", detected);
             match detected {
                 MiningMode::Projects | MiningMode::Auto => {
+                    // ===== P1-1 BEGIN =====
                     let result = runtime().block_on(miner::mine_with_options(
                         dir,
                         &palace_path,
                         wing,
-                        if include_ignored_flat.is_empty() {
+                        if exclude_flat.is_empty() {
                             None
                         } else {
-                            Some(include_ignored_flat.as_slice())
+                            Some(exclude_flat.as_slice())
                         },
                         max_chunks_per_file,
                     ));
+                    // ===== P1-1 END =====
                     match result {
                         Ok(mining_result) => {
                             print_mining_result(&apply_mine_limit(mining_result, limit))
@@ -1761,12 +1850,22 @@ pub fn cmd_mcp(palace_arg: Option<&str>) {
 /// (from `--instance`) for multi-instance port management. When both are
 /// `None`, the port is resolved from env var `MEMPALACE_HTTP_PORT`, then
 /// config file, then default 3111.
+///
+/// P1-3 / P1-10: `--host` / `--token` / `--tls-cert` / `--tls-key` are
+/// threaded into the REST transport. Non-loopback binds fail-closed without
+/// a bearer token (auto-generated + printed when omitted).
 #[cfg(feature = "http-server")]
 fn cmd_serve_http(
     palace_override: Option<&str>,
     read_only: bool,
     port_override: Option<u16>,
     instance_override: Option<u16>,
+    // ===== P1-3 BEGIN =====
+    host: Option<&str>,
+    token: Option<&str>,
+    tls_cert: Option<&PathBuf>,
+    tls_key: Option<&PathBuf>,
+    // ===== P1-3 END =====
 ) -> Result<()> {
     let mut config = crate::Config::load()?;
     if let Some(p) = palace_override {
@@ -1787,28 +1886,57 @@ fn cmd_serve_http(
     let port = crate::rest_api::get_http_port(port_override, Some(effective_instance))
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    let stream_port = crate::rest_api::get_stream_port(Some(port));
-    let engine_port = crate::rest_api::get_engine_port(Some(port));
+    // ===== P1-3 / P1-10 BEGIN =====
+    // Fail-closed: non-loopback host requires a bearer token.
+    let auth = crate::mcp::http_transport::resolve_http_auth(
+        host,
+        Some(port),
+        token,
+        /* auto_generate_token */ true,
+    )?;
+    crate::mcp::http_transport::validate_tls_pair(tls_cert, tls_key)?;
+    // ===== P1-3 / P1-10 END =====
+
+    let stream_port = crate::rest_api::get_stream_port(Some(auth.port));
+    let engine_port = crate::rest_api::get_engine_port(Some(auth.port));
     eprintln!(
-        "  Starting HTTP server. REST: {}, Stream: {}, Engine: {}",
-        port, stream_port, engine_port
+        "  Starting HTTP server on {}:{} (TLS={}). Stream: {}, Engine: {}",
+        auth.host,
+        auth.port,
+        tls_cert.is_some(),
+        stream_port,
+        engine_port
     );
 
     let app_state = std::sync::Arc::new(crate::mcp_server::AppState::new(config, read_only)?);
+
+    let serve_opts = crate::rest_api::HttpServeBind {
+        host: auth.host,
+        port: auth.port,
+        token: auth.token,
+        tls_cert: tls_cert.cloned(),
+        tls_key: tls_key.cloned(),
+        enforce_loopback_host: auth.is_loopback_bind,
+    };
 
     #[cfg(feature = "health")]
     {
         let embedder = std::sync::Arc::from(crate::embed::embedder_from_env()?);
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
-            crate::rest_api::run_http_server(app_state, read_only, port, embedder).await
+            crate::rest_api::run_http_server_with_options(
+                app_state, read_only, serve_opts, embedder,
+            )
+            .await
         })?;
     }
 
     #[cfg(not(feature = "health"))]
     {
         let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async { crate::rest_api::run_http_server(app_state, read_only, port).await })?;
+        rt.block_on(async {
+            crate::rest_api::run_http_server_with_options(app_state, read_only, serve_opts).await
+        })?;
     }
 
     Ok(())
@@ -1820,6 +1948,12 @@ fn cmd_serve_http(
     _read_only: bool,
     _port_override: Option<u16>,
     _instance_override: Option<u16>,
+    // ===== P1-3 BEGIN =====
+    _host: Option<&str>,
+    _token: Option<&str>,
+    _tls_cert: Option<&PathBuf>,
+    _tls_key: Option<&PathBuf>,
+    // ===== P1-3 END =====
 ) -> Result<()> {
     Err(anyhow::anyhow!(
         "HTTP server not available. Rebuild with --features http-server or use the default stdio MCP server (mpr serve without --http)."
@@ -1828,17 +1962,31 @@ fn cmd_serve_http(
 
 /// Start the MCP HTTP transport server (POST /mcp JSON-RPC).
 ///
-/// Reads `MEMPALACE_MCP_HTTP_PORT` (default 3112) and binds to `127.0.0.1`.
-/// The axum-based server lives in `mcp::http_transport` and exposes a
-/// single `POST /mcp` endpoint for JSON-RPC over HTTP, reusing the
-/// existing `mcp_server::make_dispatch` handler.
+/// Reads `MEMPALACE_MCP_HTTP_PORT` (default 3112) and binds to `127.0.0.1`
+/// unless `--host` is provided. Bearer token / TLS options follow P1-3/P1-10.
 #[cfg(feature = "http-server")]
 fn cmd_serve_mcp_http(
     palace_override: Option<&str>,
     read_only: bool,
     port_override: Option<u16>,
+    // ===== P1-3 BEGIN =====
+    host: Option<&str>,
+    token: Option<&str>,
+    tls_cert: Option<&PathBuf>,
+    tls_key: Option<&PathBuf>,
+    // ===== P1-3 END =====
 ) -> Result<()> {
-    crate::mcp::http_transport::run_mcp_http(palace_override, read_only, port_override)
+    crate::mcp::http_transport::run_mcp_http_with_options(
+        palace_override,
+        read_only,
+        crate::mcp::http_transport::HttpServeOptions {
+            host: host.map(|s| s.to_string()),
+            token: token.map(|s| s.to_string()),
+            tls_cert: tls_cert.cloned(),
+            tls_key: tls_key.cloned(),
+            port: port_override,
+        },
+    )
 }
 
 #[cfg(not(feature = "http-server"))]
@@ -1846,6 +1994,12 @@ fn cmd_serve_mcp_http(
     _palace_override: Option<&str>,
     _read_only: bool,
     _port_override: Option<u16>,
+    // ===== P1-3 BEGIN =====
+    _host: Option<&str>,
+    _token: Option<&str>,
+    _tls_cert: Option<&PathBuf>,
+    _tls_key: Option<&PathBuf>,
+    // ===== P1-3 END =====
 ) -> Result<()> {
     Err(anyhow::anyhow!(
         "MCP HTTP transport not available. Rebuild with --features http-server or use the default stdio MCP server (mpr serve without --mcp-http)."
@@ -3286,6 +3440,11 @@ fn runtime() -> tokio::runtime::Runtime {
 // ---------------------------------------------------------------------------
 
 pub fn run() -> Result<()> {
+    // ===== P2-6 BEGIN =====
+    // Prefer try_init so nested library hosts (tests, MCP embeds) do not panic
+    // when a subscriber is already installed.
+    crate::logging::try_init_tracing();
+    // ===== P2-6 END =====
     // Setup signal handler for graceful shutdown
     let _signal_guard = crate::signal_handler::setup_signal_handler();
 
@@ -3337,6 +3496,9 @@ pub fn run() -> Result<()> {
             extract,
             redetect_origin,
             max_chunks_per_file,
+            // ===== P1-1 BEGIN =====
+            exclude,
+            // ===== P1-1 END =====
         } => {
             let palace_path = resolve_palace_path(palace_arg)?;
             // mr-oy1m: acquire the lock and remember its path so we
@@ -3379,6 +3541,9 @@ pub fn run() -> Result<()> {
                 extract.as_deref(),
                 *redetect_origin,
                 *max_chunks_per_file,
+                // ===== P1-1 BEGIN =====
+                exclude,
+                // ===== P1-1 END =====
             );
             // Always release the lock, even on error. mr-jecs
             // guarantees the release only succeeds when the PID
@@ -3432,11 +3597,34 @@ pub fn run() -> Result<()> {
             instance,
             port,
             no_background,
+            // ===== P1-3 BEGIN =====
+            host,
+            token,
+            tls_cert,
+            tls_key,
+            // ===== P1-3 END =====
         } => {
             if *mcp_http {
-                cmd_serve_mcp_http(palace_arg, *read_only, *port)?;
+                cmd_serve_mcp_http(
+                    palace_arg,
+                    *read_only,
+                    *port,
+                    host.as_deref(),
+                    token.as_deref(),
+                    tls_cert.as_ref(),
+                    tls_key.as_ref(),
+                )?;
             } else if *http {
-                cmd_serve_http(palace_arg, *read_only, *port, *instance)?;
+                cmd_serve_http(
+                    palace_arg,
+                    *read_only,
+                    *port,
+                    *instance,
+                    host.as_deref(),
+                    token.as_deref(),
+                    tls_cert.as_ref(),
+                    tls_key.as_ref(),
+                )?;
             } else {
                 // Compute the REST port: env MEMPALACE_HTTP_PORT > --port > --instance > config -> default 3111.
                 let config = Config::load().unwrap_or_default();
@@ -3727,6 +3915,14 @@ pub fn run() -> Result<()> {
         } => {
             cmd_hook(hook, session_id, project, cwd, data.as_deref())?;
         }
+        // ===== P2-14 BEGIN =====
+        Commands::Entities { wing, json } => {
+            cmd_entities(wing.as_deref(), *json, palace_arg)?;
+        }
+        Commands::Hallways { wing, json } => {
+            cmd_hallways(wing.as_deref(), *json, palace_arg)?;
+        }
+        // ===== P2-14 END =====
         Commands::Eval { eval_cmd } => {
             cmd_eval(eval_cmd)?;
         }
@@ -3736,6 +3932,95 @@ pub fn run() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+
+// ===== P2-14 BEGIN =====
+fn cmd_entities(wing: Option<&str>, json_output: bool, _palace_arg: Option<&str>) -> Result<()> {
+    let registry_path = Config::registry_file_path()?;
+    let registry = EntityRegistry::load(&registry_path)?;
+    let people: Vec<serde_json::Value> = registry
+        .people()
+        .iter()
+        .map(|(name, entry)| {
+            serde_json::json!({
+                "name": name,
+                "confidence": entry.confidence,
+                "source": entry.source,
+                "aliases": entry.aliases,
+                "relationship": entry.relationship,
+                "contexts": entry.contexts,
+            })
+        })
+        .collect();
+    let projects: Vec<String> = registry.projects().to_vec();
+    let payload = serde_json::json!({
+        "mode": registry.mode(),
+        "people": people,
+        "projects": projects,
+        "wing_filter": wing,
+        "registry_path": registry_path.display().to_string(),
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!("Entity registry: {}", registry_path.display());
+        println!("Mode: {}", registry.mode());
+        if let Some(w) = wing {
+            println!("Wing filter: {} (informational)", w);
+        }
+        println!("People ({}):", people.len());
+        for person in &people {
+            let name = person.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let conf = person
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            println!("  - {} (confidence={:.2})", name, conf);
+        }
+        println!("Projects ({}):", projects.len());
+        for project in &projects {
+            println!("  - {}", project);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_hallways(wing: Option<&str>, json_output: bool, palace_arg: Option<&str>) -> Result<()> {
+    let palace_path = resolve_palace_path(palace_arg)?;
+    // Explicit tunnels (persisted hallways)
+    let explicit = crate::palace_graph::list_tunnels(wing);
+    // Derived graph tunnels (multi-wing rooms)
+    let graph = crate::palace_graph::cached_graph(&palace_path);
+    let derived = graph.find_tunnels(wing, None);
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "palace": palace_path.display().to_string(),
+                "explicit_hallways": explicit,
+                "derived_hallways": derived,
+            }))?
+        );
+    } else {
+        println!("Hallways for palace: {}", palace_path.display());
+        if let Some(w) = wing {
+            println!("Wing filter: {}", w);
+        }
+        println!("Explicit ({}):", explicit.len());
+        for t in &explicit {
+            println!(
+                "  - {} : {} <-> {} ({})",
+                t.id, t.source_wing, t.target_wing, t.label
+            );
+        }
+        println!("Derived ({}):", derived.len());
+        for t in &derived {
+            println!("  - room={} wings={:?} count={}", t.room, t.wings, t.count);
+        }
+    }
+    Ok(())
+}
+// ===== P2-14 END =====
+
 // Eval Command
 // ---------------------------------------------------------------------------
 
@@ -5182,6 +5467,9 @@ mod tests {
             Some("exchange"),
             false,
             None,
+            // ===== P1-1 BEGIN =====
+            &["*.log".to_string()],
+            // ===== P1-1 END =====
         );
 
         if let Err(e) = &result {
@@ -5287,4 +5575,105 @@ mod tests {
         assert_eq!(get_stream_port(rest), 8112);
         assert_eq!(get_engine_port(rest), 54134);
     }
+
+    // ===== P1-1 BEGIN =====
+    #[test]
+    fn test_p1_1_cli_mine_exclude_flag_parses() {
+        let args = Cli::try_parse_from([
+            "mpr",
+            "mine",
+            "/tmp/proj",
+            "--exclude",
+            "*.log",
+            "--exclude",
+            "node_modules/**",
+        ])
+        .expect("mine --exclude should parse");
+        match args.command {
+            Commands::Mine { exclude, .. } => {
+                assert_eq!(exclude, vec!["*.log", "node_modules/**"]);
+            }
+            _ => panic!("expected Mine"),
+        }
+    }
+    // ===== P1-1 END =====
+
+    // ===== P2-14 BEGIN =====
+    #[test]
+    fn test_p2_14_cli_entities_and_hallways_parse() {
+        let args = Cli::try_parse_from(["mpr", "entities", "--json"]).expect("entities");
+        assert!(matches!(
+            args.command,
+            Commands::Entities { json: true, .. }
+        ));
+        let args = Cli::try_parse_from(["mpr", "hallways", "--wing", "alpha", "--json"])
+            .expect("hallways");
+        match args.command {
+            Commands::Hallways { wing, json } => {
+                assert_eq!(wing.as_deref(), Some("alpha"));
+                assert!(json);
+            }
+            _ => panic!("expected Hallways"),
+        }
+    }
+
+    // ===== P1-3 BEGIN =====
+    #[test]
+    fn test_p1_3_cli_serve_host_token_tls_flags_parse() {
+        let args = Cli::try_parse_from([
+            "mpr",
+            "serve",
+            "--http",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8443",
+            "--token",
+            "s3cret",
+            "--tls-cert",
+            "cert.pem",
+            "--tls-key",
+            "key.pem",
+        ])
+        .expect("serve host/token/tls flags should parse");
+        match args.command {
+            Commands::Serve {
+                host,
+                token,
+                tls_cert,
+                tls_key,
+                http,
+                port,
+                ..
+            } => {
+                assert!(http);
+                assert_eq!(host.as_deref(), Some("0.0.0.0"));
+                assert_eq!(token.as_deref(), Some("s3cret"));
+                assert_eq!(port, Some(8443));
+                assert_eq!(
+                    tls_cert.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    Some("cert.pem".into())
+                );
+                assert_eq!(
+                    tls_key.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    Some("key.pem".into())
+                );
+            }
+            _ => panic!("expected Serve command"),
+        }
+    }
+
+    #[test]
+    fn test_p1_3_cli_serve_tls_cert_requires_key() {
+        let parsed = Cli::try_parse_from(["mpr", "serve", "--http", "--tls-cert", "cert.pem"]);
+        assert!(parsed.is_err(), "tls-cert without tls-key must fail");
+        let msg = parsed.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            msg.contains("tls-key") || msg.contains("tls_key") || msg.contains("required"),
+            "unexpected clap error: {msg}"
+        );
+    }
+    // ===== P1-3 END =====
+
+    // ===== P2-14 END =====
 }

@@ -56,6 +56,13 @@ impl DrawerStore {
     /// concurrent-read performance.
     pub fn open(palace_path: &Path) -> Result<Self> {
         let db_path = palace_path.join("drawers.db");
+        // ===== P2-1 BEGIN =====
+        // Reject empty / garbage files before rusqlite opens them. A bare
+        // Connection::open on a non-SQLite file can leave a confusing error
+        // (or a 0-byte stub from a previous failed create). Verify the
+        // 16-byte "SQLite format 3\0" magic when the file already exists.
+        verify_sqlite_magic_header(&db_path)?;
+        // ===== P2-1 END =====
         let conn = Connection::open(&db_path)
             .with_context(|| format!("failed to open drawer store at {}", db_path.display()))?;
 
@@ -72,8 +79,25 @@ impl DrawerStore {
                 room TEXT NOT NULL DEFAULT '',
                 source_file TEXT,
                 filed_at TEXT NOT NULL DEFAULT (datetime('now')),
-                source_mtime REAL
+                source_mtime REAL,
+                -- ===== P1-2 BEGIN =====
+                authored_at TEXT
+                -- ===== P1-2 END =====
             );
+
+            -- ===== P1-5 BEGIN =====
+            -- AAAK closet summaries keyed by source_file so delete_by_source
+            -- can purge them alongside drawers (upstream 5ae2315).
+            CREATE TABLE IF NOT EXISTS closets (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                source_file TEXT,
+                wing TEXT NOT NULL DEFAULT '',
+                room TEXT NOT NULL DEFAULT '',
+                filed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_closets_source_file ON closets(source_file);
+            -- ===== P1-5 END =====
 
             CREATE VIRTUAL TABLE IF NOT EXISTS drawers_fts USING fts5(
                 content, wing, room,
@@ -99,6 +123,13 @@ impl DrawerStore {
                 VALUES (new.rowid, new.content, new.wing, new.room);
             END;",
         )?;
+
+        // ===== P1-2 BEGIN =====
+        // Existing palaces created before authored_at was introduced need a
+        // nullable column added in place. CREATE TABLE IF NOT EXISTS is a
+        // no-op on those DBs, so ALTER TABLE is the non-breaking migration.
+        ensure_authored_at_column(&conn)?;
+        // ===== P1-2 END =====
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -127,13 +158,19 @@ impl DrawerStore {
     /// Returns `id → DocumentEntry` mappings suitable for direct use.
     pub fn load_all_to_hashmap(&self) -> Result<HashMap<String, DocumentEntry>> {
         let guard = self.conn.lock().expect("conn");
-        let mut stmt = guard.prepare("SELECT id, content, metadata, wing, room FROM drawers")?;
+        // ===== P1-2 BEGIN =====
+        let mut stmt =
+            guard.prepare("SELECT id, content, metadata, wing, room, authored_at FROM drawers")?;
+        // ===== P1-2 END =====
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let content: String = row.get(1)?;
             let metadata_str: String = row.get(2)?;
             let wing: String = row.get(3)?;
             let room: String = row.get(4)?;
+            // ===== P1-2 BEGIN =====
+            let authored_at: Option<String> = row.get(5)?;
+            // ===== P1-2 END =====
 
             // Parse metadata JSON, add wing/room
             let mut metadata: HashMap<String, Value> =
@@ -144,6 +181,17 @@ impl DrawerStore {
             if !room.is_empty() {
                 metadata.insert("room".to_string(), Value::String(room));
             }
+            // ===== P1-2 BEGIN =====
+            // Prefer the dedicated column when present so searcher recency
+            // tie-break sees authored_at even if older metadata JSON lacked it.
+            if let Some(ts) = authored_at {
+                if !ts.is_empty() {
+                    metadata
+                        .entry("authored_at".to_string())
+                        .or_insert(Value::String(ts));
+                }
+            }
+            // ===== P1-2 END =====
 
             Ok((id, DocumentEntry { content, metadata }))
         })?;
@@ -177,7 +225,10 @@ impl DrawerStore {
             sql.push_str(" AND room = ?");
             param_values.push(Box::new(r.to_string()));
         }
-        sql.push_str(" ORDER BY filed_at DESC");
+        // ===== P1-2 BEGIN =====
+        // Prefer original transcript time when present; fall back to mine time.
+        sql.push_str(" ORDER BY COALESCE(authored_at, filed_at) DESC, filed_at DESC");
+        // ===== P1-2 END =====
         sql.push_str(&format!(" LIMIT {}", limit));
 
         let params_refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -353,18 +404,31 @@ impl DrawerStore {
         let room = sanitize_for_fts5(room).into_owned();
         // ===== P0-3 END =====
 
-        let metadata_json = serde_json::to_string(metadata)?;
+        let _metadata_json = serde_json::to_string(metadata)?;
 
         // Strip wing/room from metadata JSON to avoid duplication
         // (they're stored as separate columns)
         let mut clean_meta = metadata.clone();
         clean_meta.remove("wing");
         clean_meta.remove("room");
+        // ===== P1-2 BEGIN =====
+        // authored_at is a first-class column; keep a copy in metadata JSON
+        // for consumers that only read the JSON blob.
+        let authored_at = clean_meta
+            .get("authored_at")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        // ===== P1-2 END =====
         let clean_meta_json = serde_json::to_string(&clean_meta)?;
 
         let guard = self.conn.lock().expect("conn");
-        guard.execute("INSERT OR REPLACE INTO drawers (id, content, metadata, wing, room, source_file, source_mtime)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        // ===== P1-2 / P2-3 BEGIN =====
+        // Mid-mine auto-heal: if the FTS5 inverted index is corrupted
+        // (common after a killed-mid-write mine), rebuild it from the
+        // intact content table and retry the insert once.
+        let insert_sql = "INSERT OR REPLACE INTO drawers              (id, content, metadata, wing, room, source_file, source_mtime, authored_at)              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+        let first = guard.execute(
+            insert_sql,
             params![
                 id,
                 content,
@@ -373,9 +437,43 @@ impl DrawerStore {
                 room,
                 source_file,
                 source_mtime,
+                authored_at,
             ],
-        )?;
-        Ok(())
+        );
+        match first {
+            Ok(_) => Ok(()),
+            Err(e) if is_fts5_corruption_error(&e) => {
+                tracing::warn!(
+                    target: "mempalace::drawer_store",
+                    error = %e,
+                    "FTS5 corruption on insert; attempting in-place rebuild"
+                );
+                if let Err(heal_err) = rebuild_drawers_fts(&guard) {
+                    tracing::warn!(
+                        target: "mempalace::drawer_store",
+                        error = %heal_err,
+                        "FTS5 auto-heal failed"
+                    );
+                    return Err(e.into());
+                }
+                guard.execute(
+                    insert_sql,
+                    params![
+                        id,
+                        content,
+                        clean_meta_json,
+                        wing,
+                        room,
+                        source_file,
+                        source_mtime,
+                        authored_at,
+                    ],
+                )?;
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
+        // ===== P1-2 / P2-3 END =====
     }
 
     /// Batch-insert multiple drawers in a single transaction.
@@ -394,10 +492,13 @@ impl DrawerStore {
         let guard_tx = self.conn.lock().expect("conn");
         let tx = guard_tx.unchecked_transaction()?;
         {
+            // ===== P1-2 BEGIN =====
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO drawers (id, content, metadata, wing, room, source_file, source_mtime)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT OR REPLACE INTO drawers \
+                 (id, content, metadata, wing, room, source_file, source_mtime, authored_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
+            // ===== P1-2 END =====
 
             for &(id, content, metadata, wing, room, source_file, source_mtime) in items {
                 // ===== P0-3 BEGIN: NUL sanitization (do not edit) =====
@@ -410,6 +511,12 @@ impl DrawerStore {
                 let mut clean_meta = metadata.clone();
                 clean_meta.remove("wing");
                 clean_meta.remove("room");
+                // ===== P1-2 BEGIN =====
+                let authored_at = clean_meta
+                    .get("authored_at")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                // ===== P1-2 END =====
                 let clean_meta_json = serde_json::to_string(&clean_meta)?;
 
                 stmt.execute(params![
@@ -420,12 +527,85 @@ impl DrawerStore {
                     room,
                     source_file,
                     source_mtime,
+                    // ===== P1-2 BEGIN =====
+                    authored_at,
+                    // ===== P1-2 END =====
                 ])?;
             }
         }
         tx.commit()?;
         Ok(())
     }
+
+    // ===== P1-2 BEGIN =====
+    /// Update the `authored_at` column and metadata JSON for a drawer.
+    ///
+    /// Used by the authored-at backfill migration. Embeddings are untouched.
+    pub fn update_authored_at(&self, id: &str, authored_at: &str) -> Result<bool> {
+        let guard = self.conn.lock().expect("conn");
+        let meta_str: Option<String> = guard
+            .query_row(
+                "SELECT metadata FROM drawers WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok();
+        let Some(meta_str) = meta_str else {
+            return Ok(false);
+        };
+        let mut meta: HashMap<String, Value> = serde_json::from_str(&meta_str).unwrap_or_default();
+        meta.insert(
+            "authored_at".to_string(),
+            Value::String(authored_at.to_string()),
+        );
+        let meta_json = serde_json::to_string(&meta)?;
+        let rows = guard.execute(
+            "UPDATE drawers SET authored_at = ?1, metadata = ?2 WHERE id = ?3",
+            params![authored_at, meta_json, id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Return drawers whose metadata has `ingest_mode = "convos"`.
+    ///
+    /// Yields `(id, source_file, authored_at_column, metadata_json)` for the
+    /// authored-at backfill. `authored_at_column` is the dedicated column
+    /// value (may be NULL on pre-migration rows).
+    pub fn list_convo_drawers_for_authored_at_backfill(
+        &self,
+    ) -> Result<Vec<(String, Option<String>, Option<String>, String)>> {
+        let guard = self.conn.lock().expect("conn");
+        let mut stmt = guard.prepare(
+            "SELECT id, source_file, authored_at, metadata FROM drawers \
+             WHERE json_extract(metadata, '$.ingest_mode') = 'convos'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Read the `authored_at` column for a drawer id (test / diagnostics).
+    pub fn get_authored_at(&self, id: &str) -> Result<Option<String>> {
+        let guard = self.conn.lock().expect("conn");
+        let mut stmt = guard.prepare("SELECT authored_at FROM drawers WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(None)
+        }
+    }
+    // ===== P1-2 END =====
 
     /// Delete a drawer by ID.
     pub fn delete(&self, id: &str) -> Result<bool> {
@@ -438,14 +618,56 @@ impl DrawerStore {
     }
 
     /// Delete all drawers that have a given source_file.
+    ///
+    /// Also purges matching AAAK closet rows (P1-5 / upstream 5ae2315) so
+    /// stale closet index pointers cannot surface after a source purge.
     pub fn delete_by_source(&self, source_file: &str) -> Result<usize> {
         let guard = self.conn.lock().expect("conn");
-        let rows = guard.execute(
+        // ===== P1-5 BEGIN =====
+        let drawer_rows = guard.execute(
             "DELETE FROM drawers WHERE source_file = ?1",
             params![source_file],
         )?;
-        Ok(rows)
+        let _closet_rows = guard.execute(
+            "DELETE FROM closets WHERE source_file = ?1",
+            params![source_file],
+        )?;
+        Ok(drawer_rows)
+        // ===== P1-5 END =====
     }
+
+    // ===== P1-5 BEGIN =====
+    /// Insert a closet (AAAK summary) row. Used by tests and the compress path.
+    pub fn insert_closet(
+        &self,
+        id: &str,
+        content: &str,
+        source_file: Option<&str>,
+        wing: &str,
+        room: &str,
+    ) -> Result<()> {
+        self.conn.lock().expect("conn").execute(
+            "INSERT OR REPLACE INTO closets (id, content, source_file, wing, room)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, content, source_file, wing, room],
+        )?;
+        Ok(())
+    }
+
+    /// Count closet rows, optionally filtered by source_file.
+    pub fn count_closets(&self, source_file: Option<&str>) -> Result<usize> {
+        let guard = self.conn.lock().expect("conn");
+        let n: i64 = match source_file {
+            Some(src) => guard.query_row(
+                "SELECT COUNT(*) FROM closets WHERE source_file = ?1",
+                params![src],
+                |row| row.get(0),
+            )?,
+            None => guard.query_row("SELECT COUNT(*) FROM closets", [], |row| row.get(0))?,
+        };
+        Ok(n as usize)
+    }
+    // ===== P1-5 END =====
 
     /// Get all drawers with full column data for export.
     ///
@@ -729,7 +951,9 @@ impl DrawerStore {
             sql.push_str(" AND wing = ?");
             param_values.push(Box::new(w.to_string()));
         }
-        sql.push_str(" ORDER BY filed_at DESC");
+        // ===== P1-2 BEGIN =====
+        sql.push_str(" ORDER BY COALESCE(authored_at, filed_at) DESC, filed_at DESC");
+        // ===== P1-2 END =====
         sql.push_str(" LIMIT ? OFFSET ?");
         param_values.push(Box::new(limit as i64));
         param_values.push(Box::new(offset as i64));
@@ -785,6 +1009,26 @@ fn title_from_metadata_or_content(metadata_str: &str, content: &str) -> String {
     }
 }
 
+// ===== P1-2 BEGIN =====
+/// Ensure the nullable `authored_at` column exists on `drawers`.
+///
+/// Safe to call on every open: if the column is already present the ALTER
+/// is skipped. Older palaces created before P1-2 only have `filed_at`.
+fn ensure_authored_at_column(conn: &Connection) -> Result<()> {
+    let has_col: bool = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('drawers') WHERE name='authored_at' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !has_col {
+        conn.execute("ALTER TABLE drawers ADD COLUMN authored_at TEXT", [])?;
+    }
+    Ok(())
+}
+// ===== P1-2 END =====
+
 /// Build an FTS5 query string from user input.
 ///
 /// Escapes special FTS5 characters and joins terms with AND for
@@ -808,6 +1052,64 @@ fn build_fts_query(user_query: &str) -> String {
 
     terms.join(" AND ")
 }
+
+// ===== P2-1 BEGIN =====
+/// SQLite on-disk header magic: 16 bytes `"SQLite format 3\0"`.
+const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
+
+/// If `db_path` already exists, require a valid SQLite magic header.
+/// Missing files are fine (rusqlite will create them). Empty / garbage
+/// files fail fast with an actionable error (P2-1 / upstream #1893).
+fn verify_sqlite_magic_header(db_path: &Path) -> Result<()> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let meta = std::fs::metadata(db_path)
+        .with_context(|| format!("failed to stat {}", db_path.display()))?;
+    if meta.len() == 0 {
+        anyhow::bail!(
+            "drawer store at {} is empty (0 bytes); expected a SQLite database.              Delete the file and re-run `mpr init` / `mpr mine`, or restore from backup.",
+            db_path.display()
+        );
+    }
+    let mut f = std::fs::File::open(db_path)
+        .with_context(|| format!("failed to open {} for magic check", db_path.display()))?;
+    use std::io::Read;
+    let mut magic = [0u8; 16];
+    f.read_exact(&mut magic).with_context(|| {
+        format!(
+            "drawer store at {} is too short to be a SQLite database",
+            db_path.display()
+        )
+    })?;
+    if &magic != SQLITE_MAGIC {
+        anyhow::bail!(
+            "drawer store at {} is not a SQLite database (bad magic header). Expected the 16-byte SQLite format 3 magic. Restore from backup or delete and re-mine.",
+            db_path.display()
+        );
+    }
+    Ok(())
+}
+// ===== P2-1 END =====
+
+// ===== P2-3 BEGIN =====
+/// True when a rusqlite error message indicates FTS5 inverted-index
+/// corruption (recoverable by rebuild). Matches both legacy and modern
+/// SQLite wordings (P2-5 strings, reused mid-mine).
+fn is_fts5_corruption_error(err: &rusqlite::Error) -> bool {
+    crate::repair::is_fts5_corruption(&err.to_string())
+}
+
+/// Rebuild the `drawers_fts` virtual table from the intact `drawers`
+/// content. Idempotent; used by mid-mine auto-heal (P2-3).
+fn rebuild_drawers_fts(conn: &Connection) -> Result<()> {
+    // Documented FTS5 rebuild command — regenerates the inverted index
+    // from the content= table without touching drawer rows.
+    conn.execute_batch("INSERT INTO drawers_fts(drawers_fts) VALUES('rebuild')")
+        .context("FTS5 rebuild command failed")?;
+    Ok(())
+}
+// ===== P2-3 END =====
 
 #[cfg(test)]
 mod tests {
@@ -1025,6 +1327,213 @@ mod tests {
         assert_eq!(store.len(), 1);
         assert!(store.get_by_id("c").unwrap().is_some());
     }
+
+    // ===== P1-2 BEGIN =====
+    #[test]
+    fn test_p1_2_insert_stores_authored_at_column() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = DrawerStore::open(temp.path()).unwrap();
+
+        let mut meta = HashMap::new();
+        meta.insert(
+            "authored_at".to_string(),
+            Value::String("2024-03-01T12:00:00Z".to_string()),
+        );
+        meta.insert(
+            "ingest_mode".to_string(),
+            Value::String("convos".to_string()),
+        );
+        store
+            .insert(
+                "d-authored",
+                "hello authored",
+                &meta,
+                "wing",
+                "room",
+                Some("session.jsonl"),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.get_authored_at("d-authored").unwrap().as_deref(),
+            Some("2024-03-01T12:00:00Z")
+        );
+
+        // load_all_to_hashmap surfaces authored_at in metadata.
+        let docs = store.load_all_to_hashmap().unwrap();
+        let entry = docs.get("d-authored").expect("drawer present");
+        assert_eq!(
+            entry.metadata.get("authored_at").and_then(|v| v.as_str()),
+            Some("2024-03-01T12:00:00Z")
+        );
+    }
+
+    #[test]
+    fn test_p1_2_get_all_orders_by_coalesce_authored_at() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = DrawerStore::open(temp.path()).unwrap();
+
+        // Older authored_at, filed later.
+        let mut meta_old = HashMap::new();
+        meta_old.insert(
+            "authored_at".to_string(),
+            Value::String("2020-01-01T00:00:00Z".to_string()),
+        );
+        store
+            .insert("old", "old content", &meta_old, "w", "r", None, None)
+            .unwrap();
+
+        // Newer authored_at.
+        let mut meta_new = HashMap::new();
+        meta_new.insert(
+            "authored_at".to_string(),
+            Value::String("2025-06-01T00:00:00Z".to_string()),
+        );
+        store
+            .insert("new", "new content", &meta_new, "w", "r", None, None)
+            .unwrap();
+
+        // No authored_at — falls back to filed_at (datetime('now')), so it
+        // should sit after the 2025 authored drawer when COALESCE is used
+        // only if filed_at is earlier; pin filed_at to be mid-range.
+        store
+            .insert("mid", "mid content", &HashMap::new(), "w", "r", None, None)
+            .unwrap();
+        {
+            let guard = store.conn.lock().expect("conn");
+            guard
+                .execute(
+                    "UPDATE drawers SET filed_at = ?1 WHERE id = ?2",
+                    params!["2022-01-01 00:00:00", "mid"],
+                )
+                .unwrap();
+            // Also pin the others' filed_at so ORDER is driven by authored_at.
+            guard
+                .execute(
+                    "UPDATE drawers SET filed_at = ?1 WHERE id = ?2",
+                    params!["2024-01-01 00:00:00", "old"],
+                )
+                .unwrap();
+            guard
+                .execute(
+                    "UPDATE drawers SET filed_at = ?1 WHERE id = ?2",
+                    params!["2024-01-02 00:00:00", "new"],
+                )
+                .unwrap();
+        }
+
+        let rows = store.get_all(Some("w"), None, 10).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|(id, _, _)| id.as_str()).collect();
+        // COALESCE(authored_at, filed_at) DESC:
+        //   new  -> 2025-06-01
+        //   mid  -> 2022-01-01 (filed_at only)
+        //   old  -> 2020-01-01
+        assert_eq!(ids, vec!["new", "mid", "old"]);
+    }
+
+    #[test]
+    fn test_p1_2_alter_table_on_legacy_schema() {
+        // Open a pre-P1-2 DB (no authored_at column) and ensure open() adds it.
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("drawers.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE drawers (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    wing TEXT NOT NULL DEFAULT '',
+                    room TEXT NOT NULL DEFAULT '',
+                    source_file TEXT,
+                    filed_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    source_mtime REAL
+                );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO drawers (id, content) VALUES ('legacy', 'hello')",
+                [],
+            )
+            .unwrap();
+        }
+        let store = DrawerStore::open(temp.path()).unwrap();
+        // Column must exist and be nullable (legacy row has NULL).
+        assert_eq!(store.get_authored_at("legacy").unwrap(), None);
+        // Insert with authored_at still works.
+        let mut meta = HashMap::new();
+        meta.insert(
+            "authored_at".to_string(),
+            Value::String("2021-01-01T00:00:00Z".to_string()),
+        );
+        store
+            .insert("fresh", "body", &meta, "w", "r", None, None)
+            .unwrap();
+        assert_eq!(
+            store.get_authored_at("fresh").unwrap().as_deref(),
+            Some("2021-01-01T00:00:00Z")
+        );
+    }
+    // ===== P1-2 END =====
+
+    // ===== P1-5 BEGIN =====
+    #[test]
+    fn test_p1_5_delete_by_source_also_purges_closets() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = DrawerStore::open(temp.path()).unwrap();
+
+        for i in 0..5 {
+            store
+                .insert(
+                    &format!("d{i}"),
+                    &format!("drawer content {i} needle from foo"),
+                    &HashMap::new(),
+                    "wing",
+                    "room",
+                    Some("foo.txt"),
+                    None,
+                )
+                .unwrap();
+        }
+        store
+            .insert(
+                "other",
+                "other drawer",
+                &HashMap::new(),
+                "wing",
+                "room",
+                Some("bar.txt"),
+                None,
+            )
+            .unwrap();
+
+        for i in 0..3 {
+            store
+                .insert_closet(
+                    &format!("c{i}"),
+                    &format!("closet summary {i} needle from foo"),
+                    Some("foo.txt"),
+                    "wing",
+                    "room",
+                )
+                .unwrap();
+        }
+        store
+            .insert_closet("c-other", "closet other", Some("bar.txt"), "wing", "room")
+            .unwrap();
+
+        assert_eq!(store.count_closets(Some("foo.txt")).unwrap(), 3);
+        assert_eq!(store.count_closets(None).unwrap(), 4);
+
+        let deleted = store.delete_by_source("foo.txt").unwrap();
+        assert_eq!(deleted, 5);
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.count_closets(Some("foo.txt")).unwrap(), 0);
+        assert_eq!(store.count_closets(Some("bar.txt")).unwrap(), 1);
+        assert!(store.get_by_id("other").unwrap().is_some());
+    }
+    // ===== P1-5 END =====
 
     #[test]
     fn test_get_all_filtered() {
@@ -1312,4 +1821,70 @@ mod tests {
             hits
         );
     }
+
+    // ===== P2-1 BEGIN =====
+    #[test]
+    fn test_p2_1_rejects_non_sqlite_magic() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("drawers.db");
+        std::fs::write(&db_path, b"this is not a sqlite file!!!!").unwrap();
+        // DrawerStore is not Debug; match instead of unwrap_err().
+        let msg = match DrawerStore::open(temp.path()) {
+            Ok(_) => panic!("expected magic-header rejection"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            msg.contains("not a SQLite database") || msg.contains("bad magic"),
+            "expected magic-header error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_p2_1_rejects_empty_db_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("drawers.db");
+        std::fs::write(&db_path, b"").unwrap();
+        let msg = match DrawerStore::open(temp.path()) {
+            Ok(_) => panic!("expected empty-file rejection"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            msg.contains("empty") || msg.contains("0 bytes"),
+            "expected empty-file error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_p2_1_accepts_valid_sqlite() {
+        let temp = tempfile::tempdir().unwrap();
+        // Create a real SQLite DB first so magic is valid.
+        {
+            let p = temp.path().join("drawers.db");
+            let conn = Connection::open(&p).unwrap();
+            conn.execute_batch("CREATE TABLE t (id INTEGER);").unwrap();
+        }
+        // Opening via DrawerStore should succeed (schema migrate path).
+        match DrawerStore::open(temp.path()) {
+            Ok(store) => assert_eq!(store.len(), 0),
+            Err(e) => panic!("valid sqlite must open: {e:#}"),
+        }
+    }
+    // ===== P2-1 END =====
+
+    // ===== P2-3 BEGIN =====
+    #[test]
+    fn test_p2_3_is_fts5_corruption_error_matches() {
+        // Wire through the shared repair helper.
+        assert!(crate::repair::is_fts5_corruption(
+            "malformed inverted index for FTS5 table main.drawers_fts"
+        ));
+        assert!(crate::repair::is_fts5_corruption(
+            "database disk image is malformed"
+        ));
+        assert!(crate::repair::is_fts5_corruption(
+            "fts5: corruption found reading blob 3"
+        ));
+        assert!(!crate::repair::is_fts5_corruption("database is locked"));
+    }
+    // ===== P2-3 END =====
 }

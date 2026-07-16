@@ -900,7 +900,7 @@ pub struct DetectionResult {
 const PROSE_EXTENSIONS: &[&str] = &["txt", "md", "rst", "csv"];
 const READABLE_EXTENSIONS: &[&str] = &[
     "txt", "md", "py", "js", "ts", "json", "yaml", "yml", "csv", "rst", "toml", "sh", "rb", "go",
-    "rs",
+    "rs", "tex", "bib",
 ];
 const SKIP_DIRS: &[&str] = &[
     ".git",

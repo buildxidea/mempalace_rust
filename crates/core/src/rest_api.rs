@@ -7,9 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse},
+    extract::{Path, Query, Request, State},
+    http::{
+        header::{HeaderMap, AUTHORIZATION},
+        StatusCode,
+    },
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -37,7 +41,26 @@ pub struct HttpServerState {
     pub followup_tracker: Arc<Mutex<FollowupTracker>>,
     #[cfg(feature = "health")]
     pub embedder: std::sync::Arc<dyn crate::embed::Embedder>,
+    // ===== P1-3 / P1-10 BEGIN =====
+    /// Optional bearer token. When set, all routes require Authorization.
+    pub auth_token: Option<String>,
+    // ===== P1-3 / P1-10 END =====
 }
+
+// ===== P1-3 BEGIN =====
+/// Bind / auth / TLS options for the REST HTTP server.
+#[derive(Debug, Clone, Default)]
+pub struct HttpServeBind {
+    pub host: String,
+    pub port: u16,
+    pub token: Option<String>,
+    pub tls_cert: Option<std::path::PathBuf>,
+    pub tls_key: Option<std::path::PathBuf>,
+    /// When true, the DNS-rebinding / loopback host policy is enforced by
+    /// callers; stored for logging.
+    pub enforce_loopback_host: bool,
+}
+// ===== P1-3 END =====
 
 type SharedState = Arc<Mutex<HttpServerState>>;
 
@@ -2729,6 +2752,45 @@ async fn mcp_handler(
 // Server build and run
 // ---------------------------------------------------------------------------
 
+// ===== P1-10 BEGIN =====
+/// Bearer auth middleware for REST routes when a token is configured.
+async fn rest_auth_guard(
+    State(state): State<SharedState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let expected = {
+        let guard = state.lock().await;
+        guard.auth_token.clone()
+    };
+    if let Some(expected) = expected {
+        let auth_header = request.headers().get(AUTHORIZATION);
+        match auth_header {
+            Some(value) => {
+                let value_str = value.to_str().map_err(|_| ApiError {
+                    status: StatusCode::UNAUTHORIZED,
+                    message: "Invalid Authorization header encoding".into(),
+                })?;
+                let token = value_str.strip_prefix("Bearer ").unwrap_or(value_str);
+                if token != expected {
+                    return Err(ApiError {
+                        status: StatusCode::UNAUTHORIZED,
+                        message: "Invalid bearer token".into(),
+                    });
+                }
+            }
+            None => {
+                return Err(ApiError {
+                    status: StatusCode::UNAUTHORIZED,
+                    message: "Bearer token required (set MEMPALACE_HTTP_TOKEN or --token)".into(),
+                });
+            }
+        }
+    }
+    Ok(next.run(request).await)
+}
+// ===== P1-10 END =====
+
 fn build_router(state: SharedState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -2904,15 +2966,45 @@ fn build_router(state: SharedState) -> Router {
         // Diagnostics
         .route("/diagnostics/followup", get(diagnostics_followup_handler))
         .layer(cors)
+        // ===== P1-10 BEGIN =====
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rest_auth_guard,
+        ))
+        // ===== P1-10 END =====
         .with_state(state)
 }
 
-/// Start the HTTP server on the specified port.
+/// Start the HTTP server on the specified port (legacy: binds 0.0.0.0).
 #[cfg(feature = "health")]
 pub async fn run_http_server(
     app_state: Arc<AppState>,
     read_only: bool,
     port: u16,
+    embedder: std::sync::Arc<dyn crate::embed::Embedder>,
+) -> anyhow::Result<()> {
+    run_http_server_with_options(
+        app_state,
+        read_only,
+        HttpServeBind {
+            host: "0.0.0.0".into(),
+            port,
+            token: None,
+            tls_cert: None,
+            tls_key: None,
+            enforce_loopback_host: false,
+        },
+        embedder,
+    )
+    .await
+}
+
+/// Start the HTTP server with host/token/TLS options (P1-3 / P1-10).
+#[cfg(feature = "health")]
+pub async fn run_http_server_with_options(
+    app_state: Arc<AppState>,
+    read_only: bool,
+    bind: HttpServeBind,
     embedder: std::sync::Arc<dyn crate::embed::Embedder>,
 ) -> anyhow::Result<()> {
     crate::health::init_health_monitor(
@@ -2929,16 +3021,10 @@ pub async fn run_http_server(
         disk_size_manager: Arc::new(Mutex::new(disk_size_manager)),
         followup_tracker,
         embedder,
+        auth_token: bind.token.clone(),
     }));
 
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    info!("REST API server listening on http://{}", addr);
-
-    let router = build_router(state);
-    axum::serve(listener, router).await?;
-
-    Ok(())
+    serve_rest_router(state, bind).await
 }
 
 /// Start the HTTP server on the specified port (no-op health monitoring).
@@ -2948,6 +3034,28 @@ pub async fn run_http_server(
     read_only: bool,
     port: u16,
 ) -> anyhow::Result<()> {
+    run_http_server_with_options(
+        app_state,
+        read_only,
+        HttpServeBind {
+            host: "0.0.0.0".into(),
+            port,
+            token: None,
+            tls_cert: None,
+            tls_key: None,
+            enforce_loopback_host: false,
+        },
+    )
+    .await
+}
+
+/// Start the HTTP server with host/token/TLS options (P1-3 / P1-10).
+#[cfg(not(feature = "health"))]
+pub async fn run_http_server_with_options(
+    app_state: Arc<AppState>,
+    read_only: bool,
+    bind: HttpServeBind,
+) -> anyhow::Result<()> {
     let disk_size_manager = DiskSizeManager::new(10 * 1024 * 1024 * 1024);
     let followup_tracker = Arc::new(Mutex::new(FollowupTracker::new()));
     let state = Arc::new(Mutex::new(HttpServerState {
@@ -2955,17 +3063,69 @@ pub async fn run_http_server(
         read_only,
         disk_size_manager: Arc::new(Mutex::new(disk_size_manager)),
         followup_tracker,
+        auth_token: bind.token.clone(),
     }));
 
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    info!("REST API server listening on http://{}", addr);
+    serve_rest_router(state, bind).await
+}
+
+// ===== P1-3 BEGIN =====
+async fn serve_rest_router(state: SharedState, bind: HttpServeBind) -> anyhow::Result<()> {
+    crate::mcp::http_transport::validate_tls_pair(bind.tls_cert.as_ref(), bind.tls_key.as_ref())?;
+
+    let addr: std::net::SocketAddr = format!("{}:{}", bind.host, bind.port)
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid bind address {}:{}: {}", bind.host, bind.port, e))?;
+
+    let scheme = if bind.tls_cert.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    info!(
+        "REST API server listening on {}://{} (token_auth={}, loopback_policy={})",
+        scheme,
+        addr,
+        bind.token.is_some(),
+        bind.enforce_loopback_host
+    );
 
     let router = build_router(state);
-    axum::serve(listener, router).await?;
 
+    match (bind.tls_cert.as_ref(), bind.tls_key.as_ref()) {
+        (Some(cert), Some(key)) => {
+            #[cfg(feature = "http-tls")]
+            {
+                use axum_server::tls_rustls::RustlsConfig;
+                let tls_config = RustlsConfig::from_pem_file(cert, key).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to load TLS cert/key from {} / {}: {}",
+                        cert.display(),
+                        key.display(),
+                        e
+                    )
+                })?;
+                axum_server::bind_rustls(addr, tls_config)
+                    .serve(router.into_make_service())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("TLS server error: {}", e))?;
+            }
+            #[cfg(not(feature = "http-tls"))]
+            {
+                let _ = (cert, key, router);
+                anyhow::bail!(
+                    "TLS requested via --tls-cert/--tls-key but this binary was built                      without the `http-tls` feature. Rebuild with                      `--features http-server,http-tls`."
+                );
+            }
+        }
+        _ => {
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            axum::serve(listener, router).await?;
+        }
+    }
     Ok(())
 }
+// ===== P1-3 END =====
 
 /// Compute the REST API port.
 ///

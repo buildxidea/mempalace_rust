@@ -120,6 +120,9 @@ pub mod llm_refine;
 pub mod locales;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
+pub mod logging;
+#[doc(hidden)]
+#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod migrate;
 pub mod migrate_vector_index;
 #[doc(hidden)]
@@ -154,8 +157,6 @@ pub mod query_sanitizer;
 pub mod recent_searches_sweep;
 pub mod reflect;
 pub mod relations;
-#[doc(hidden)]
-#[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
 pub mod repair;
 #[doc(hidden)]
 #[deprecated(since = "0.2.0", note = "use palace:: or embed:: API instead")]
@@ -287,7 +288,9 @@ pub mod embed;
 pub use embed::{embedder_from_env, resolve_embedder, DEFAULT_EMBED_MODEL};
 
 pub mod eval;
-pub use embed::{Embedder, EmbeddingManifest, ManifestMismatch, NullEmbedder};
+// ===== P1-4 BEGIN =====
+pub use embed::{Embedder, EmbedderIdentity, EmbeddingManifest, ManifestMismatch, NullEmbedder};
+// ===== P1-4 END =====
 
 pub use event_capture::{
     EmbedderEvent, EventCapture, EventCaptureBox, MemoryWriteEvent, MultiEventCapture,

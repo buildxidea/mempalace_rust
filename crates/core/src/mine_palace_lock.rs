@@ -247,4 +247,35 @@ mod tests {
             debug
         );
     }
+
+    // ===== P2-16 BEGIN =====
+    /// Stress: if SIGINT (shutdown flag) fires mid-mine, lock release must still
+    /// succeed for our PID so a subsequent mine is not blocked by a stale lock.
+    #[cfg(unix)]
+    #[test]
+    fn test_p2_16_sigint_mid_mine_releases_lock() {
+        use crate::signal_handler::{is_shutdown_requested, request_shutdown, reset_shutdown};
+
+        reset_shutdown();
+        let dir = tempdir_like();
+        let lock_path = dir.join("sigint_palace.lock");
+        std::fs::write(&lock_path, format!("{}\n", std::process::id())).unwrap();
+
+        // Simulate Ctrl-C during mine.
+        request_shutdown();
+        assert!(is_shutdown_requested());
+
+        // Release path used by the mine finally-block must still work.
+        let released = release_palace_lock(&lock_path);
+        assert!(released, "own lock must release even after SIGINT flag");
+        assert!(!lock_path.exists());
+
+        // A fresh acquire on a sibling path must succeed (no stale hold).
+        let lock2 = dir.join("sigint_palace2.lock");
+        std::fs::write(&lock2, format!("{}\n", std::process::id())).unwrap();
+        assert!(release_palace_lock(&lock2));
+
+        reset_shutdown();
+    }
+    // ===== P2-16 END =====
 }

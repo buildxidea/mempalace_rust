@@ -85,7 +85,9 @@ pub mod cohere_remote;
 // manifest contract from `manifest.rs` to a `qdrant_remote.rs` and
 // surface the same three-state `EmbedderIdentity` enum.
 
-pub use manifest::{EmbeddingManifest, ManifestMismatch};
+// ===== P1-4 BEGIN =====
+pub use manifest::{EmbedderIdentity, EmbeddingManifest, ManifestMismatch};
+// ===== P1-4 END =====
 pub use null::NullEmbedder;
 
 #[cfg(feature = "embed-openai")]

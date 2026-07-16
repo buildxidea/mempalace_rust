@@ -98,15 +98,24 @@ impl From<QueryResult> for SearchResult {
             })
             .unwrap_or_else(|| "?".to_string());
 
+        // ===== P1-2 BEGIN =====
+        // Prefer original transcript time (authored_at) for recency display;
+        // fall back to created_at / filed_at (mine time) for older drawers.
         let created_at = meta
-            .get("created_at")
+            .get("authored_at")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
+            .or_else(|| {
+                meta.get("created_at")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
             .or_else(|| {
                 meta.get("filed_at")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             });
+        // ===== P1-2 END =====
 
         Self {
             text: qr.documents.into_iter().next().unwrap_or_default(),
@@ -128,6 +137,38 @@ impl From<QueryResult> for SearchResult {
         }
     }
 }
+
+// ===== P1-2 BEGIN =====
+/// Recency key for search result ordering: prefer `authored_at` (via
+/// `created_at` field after `From<QueryResult>`), then empty (sorts oldest).
+///
+/// ISO-8601 strings sort lexicographically when well-formed.
+fn recency_key(result: &SearchResult) -> &str {
+    result.created_at.as_deref().unwrap_or("")
+}
+
+/// Sort by primary score descending, breaking ties toward more recent
+/// `authored_at` / `filed_at` so equal-score candidates rank chronologically
+/// (upstream searcher tie-break, cff43ad).
+pub fn sort_by_score_then_recency(results: &mut [SearchResult], use_combined: bool) {
+    results.sort_by(|a, b| {
+        let score_a = if use_combined {
+            a.combined_score.unwrap_or(a.similarity)
+        } else {
+            a.similarity
+        };
+        let score_b = if use_combined {
+            b.combined_score.unwrap_or(b.similarity)
+        } else {
+            b.similarity
+        };
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| recency_key(b).cmp(recency_key(a)))
+    });
+}
+// ===== P1-2 END =====
 
 trait RoundTo3 {
     fn round_to_3(self) -> f64;
@@ -152,7 +193,27 @@ pub struct SearchResponse {
 pub struct SearchFilters {
     pub wing: Option<String>,
     pub room: Option<String>,
+    // ===== P1-6 BEGIN =====
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_file: Option<String>,
+    // ===== P1-6 END =====
 }
+
+// ===== P1-6 BEGIN =====
+/// Keep only results whose `source_file` equals `source_file`.
+pub fn filter_by_source_file(
+    results: Vec<SearchResult>,
+    source_file: Option<&str>,
+) -> Vec<SearchResult> {
+    let Some(want) = source_file else {
+        return results;
+    };
+    results
+        .into_iter()
+        .filter(|r| r.source_file == want)
+        .collect()
+}
+// ===== P1-6 END =====
 
 pub fn search_memories(
     query: &str,
@@ -274,11 +335,10 @@ pub fn search_memories_with_rerank(
                 }
             }
         }
-        all.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // ===== P1-2 BEGIN =====
+        // Tie-break equal similarity by authored_at/filed_at recency.
+        sort_by_score_then_recency(&mut all, false);
+        // ===== P1-2 END =====
         all.truncate(fetch_count);
         all
     };
@@ -296,12 +356,9 @@ pub fn search_memories_with_rerank(
             result.combined_score =
                 Some(0.7 * result.similarity + 0.3 * (bm25_score / (bm25_score + 1.0)));
         }
-        search_results.sort_by(|a, b| {
-            b.combined_score
-                .unwrap_or(0.0)
-                .partial_cmp(&a.combined_score.unwrap_or(0.0))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // ===== P1-2 BEGIN =====
+        sort_by_score_then_recency(&mut search_results, true);
+        // ===== P1-2 END =====
         search_results.truncate(n_results);
     }
 
@@ -329,15 +386,21 @@ pub fn search_memories_with_rerank(
         }
 
         if fusion == FusionMode::Hybrid || fusion == FusionMode::Ppr {
-            search_results.sort_by(|a, b| {
-                b.combined_score
-                    .unwrap_or(0.0)
-                    .partial_cmp(&a.combined_score.unwrap_or(0.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            // ===== P1-2 BEGIN =====
+            sort_by_score_then_recency(&mut search_results, true);
+            // ===== P1-2 END =====
             search_results.truncate(n_results);
         }
     }
+
+    // ===== P1-2 BEGIN =====
+    // Final pass: even when no BM25/PPR re-rank ran, break remaining
+    // similarity ties by authored_at/filed_at so recency is stable.
+    if !use_bm25 && fusion == FusionMode::Vector && search_results.len() > 1 {
+        sort_by_score_then_recency(&mut search_results, false);
+        search_results.truncate(n_results);
+    }
+    // ===== P1-2 END =====
 
     // Apply max_per_session filter (post-RRF deduplication by session)
     if let Some(max) = max_per_session {
@@ -355,6 +418,9 @@ pub fn search_memories_with_rerank(
         filters: SearchFilters {
             wing: wing.map(String::from),
             room: room.map(String::from),
+            // ===== P1-6 BEGIN =====
+            source_file: None,
+            // ===== P1-6 END =====
         },
         results: search_results,
     })
@@ -559,6 +625,79 @@ mod tests {
         assert!((compute_similarity(-0.5) - 1.0).abs() < 1e-6);
         assert!((compute_similarity(1.5) - 0.0).abs() < 1e-6);
     }
+
+    // ===== P1-2 BEGIN =====
+    #[test]
+    fn test_sort_by_score_then_recency_prefers_authored_at() {
+        // Equal similarity: more recent authored_at wins.
+        let mut results = vec![
+            SearchResult {
+                text: "older".into(),
+                wing: "w".into(),
+                room: "r".into(),
+                source_file: "a.jsonl".into(),
+                similarity: 0.9,
+                created_at: Some("2023-01-01T00:00:00Z".into()),
+                bm25_score: None,
+                combined_score: None,
+            },
+            SearchResult {
+                text: "newer".into(),
+                wing: "w".into(),
+                room: "r".into(),
+                source_file: "b.jsonl".into(),
+                similarity: 0.9,
+                created_at: Some("2024-06-15T12:00:00Z".into()),
+                bm25_score: None,
+                combined_score: None,
+            },
+            SearchResult {
+                text: "no-date".into(),
+                wing: "w".into(),
+                room: "r".into(),
+                source_file: "c.md".into(),
+                similarity: 0.9,
+                created_at: None,
+                bm25_score: None,
+                combined_score: None,
+            },
+        ];
+        sort_by_score_then_recency(&mut results, false);
+        assert_eq!(results[0].text, "newer");
+        assert_eq!(results[1].text, "older");
+        assert_eq!(results[2].text, "no-date");
+    }
+
+    #[test]
+    fn test_sort_by_score_then_recency_score_outranks_date() {
+        // Higher score always wins even if older.
+        let mut results = vec![
+            SearchResult {
+                text: "low-score-recent".into(),
+                wing: "w".into(),
+                room: "r".into(),
+                source_file: "a.jsonl".into(),
+                similarity: 0.5,
+                created_at: Some("2025-01-01T00:00:00Z".into()),
+                bm25_score: None,
+                combined_score: None,
+            },
+            SearchResult {
+                text: "high-score-old".into(),
+                wing: "w".into(),
+                room: "r".into(),
+                source_file: "b.jsonl".into(),
+                similarity: 0.95,
+                created_at: Some("2020-01-01T00:00:00Z".into()),
+                bm25_score: None,
+                combined_score: None,
+            },
+        ];
+        sort_by_score_then_recency(&mut results, false);
+        assert_eq!(results[0].text, "high-score-old");
+        assert_eq!(results[1].text, "low-score-recent");
+    }
+    // ===== P1-2 END =====
 
     #[test]
     fn test_round_to_3() {
@@ -826,4 +965,35 @@ mod tests {
         let duplicate = check_duplicate("JWT authentication", &palace_path, 0.95).unwrap();
         assert!(duplicate.is_none());
     }
+
+    // ===== P1-6 BEGIN =====
+    #[test]
+    fn test_p1_6_filter_by_source_file() {
+        let a = SearchResult {
+            text: "alpha".into(),
+            wing: "w".into(),
+            room: "r".into(),
+            source_file: "a.rs".into(),
+            similarity: 0.9,
+            created_at: None,
+            bm25_score: None,
+            combined_score: None,
+        };
+        let b = SearchResult {
+            text: "beta".into(),
+            wing: "w".into(),
+            room: "r".into(),
+            source_file: "b.rs".into(),
+            similarity: 0.8,
+            created_at: None,
+            bm25_score: None,
+            combined_score: None,
+        };
+        let filtered = filter_by_source_file(vec![a.clone(), b.clone()], Some("a.rs"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].source_file, "a.rs");
+        let all = filter_by_source_file(vec![a, b], None);
+        assert_eq!(all.len(), 2);
+    }
+    // ===== P1-6 END =====
 }

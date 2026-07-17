@@ -2601,6 +2601,28 @@ impl PalaceDb {
                 .as_mut()
                 .expect("bm25 should be initialized")
                 .upsert(bm25::Document::new(id.clone(), redacted.clone()));
+
+            // Persist to SQLite DrawerStore (same path as `add()`). Without this,
+            // rebuild_via_staging / rebuild_from_sqlite only wrote JSON and left
+            // drawers.db empty after the atomic swap — truncation_guard then
+            // reported 100% drawer loss.
+            if let Some(ref store) = self.drawer_store {
+                let wing = metadata.get("wing").and_then(|v| v.as_str()).unwrap_or("");
+                let room = metadata.get("room").and_then(|v| v.as_str()).unwrap_or("");
+                let source_file = metadata.get("source_file").and_then(|v| v.as_str());
+                let source_mtime = metadata.get("source_mtime").and_then(|v| v.as_f64());
+                if let Err(e) = store.insert(
+                    id,
+                    &redacted,
+                    metadata,
+                    wing,
+                    room,
+                    source_file,
+                    source_mtime,
+                ) {
+                    tracing::warn!("Failed to persist drawer to SQLite during upsert: {}", e);
+                }
+            }
         }
 
         Ok(())
@@ -3463,6 +3485,43 @@ mod tests {
         let stored = db._get_document("d-gh").expect("drawer present");
         assert!(stored.content.contains("<REDACTED:GITHUB_TOKEN>"));
         assert!(!stored.content.contains(raw_token));
+    }
+
+    /// rebuild_via_staging / rebuild_from_sqlite call `upsert_documents` then
+    /// swap the staging dir. Drawers must land in SQLite (`drawers.db`), not
+    /// only the JSON sidecar — otherwise truncation_guard sees 0 rows.
+    #[test]
+    fn test_upsert_documents_persists_to_sqlite_drawers_db() {
+        let temp = tempfile::tempdir().unwrap();
+        let palace = temp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        let mut db = PalaceDb::open(&palace).unwrap();
+        let mut meta: HashMap<String, serde_json::Value> = HashMap::new();
+        meta.insert("wing".into(), serde_json::json!("project"));
+        meta.insert("room".into(), serde_json::json!("general"));
+        meta.insert("source_file".into(), serde_json::json!("/tmp/notes.txt"));
+        db.upsert_documents(&[(
+            "drawer_a".to_string(),
+            "hello from upsert".to_string(),
+            meta,
+        )])
+        .unwrap();
+        db.flush().unwrap();
+        drop(db);
+
+        // Fresh open must load from drawers.db (SQLite), not only JSON.
+        let reopened = PalaceDb::open(&palace).unwrap();
+        assert_eq!(reopened.count(), 1);
+        let stored = reopened
+            ._get_document("drawer_a")
+            .expect("drawer in memory");
+        assert!(stored.content.contains("hello from upsert"));
+
+        let store = crate::drawer_store::DrawerStore::open(&palace).unwrap();
+        assert_eq!(store.len(), 1, "drawers.db must contain the upserted row");
+        let row = store.get_by_id("drawer_a").unwrap();
+        assert!(row.is_some(), "drawers.db row missing after upsert");
     }
 
     /// mp-032 wiring: `PalaceDb::add_drawer_with_dedup` honours the

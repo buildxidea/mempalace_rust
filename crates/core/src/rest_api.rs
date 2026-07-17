@@ -3130,20 +3130,19 @@ async fn serve_rest_router(state: SharedState, bind: HttpServeBind) -> anyhow::R
 /// Compute the REST API port.
 ///
 /// Precedence:
-///   1. MEMPALACE_HTTP_PORT env var
+///   1. `MEMPALACE_HTTP_PORT` env var
 ///   2. `port_override` (from `--port`)
-///   3. `instance_override` (from `--instance`): 3111 + N*100
+///   3. `instance_override` (from `--instance` / config): 3111 + N*100
 ///   4. Default: 3111
 ///
-/// # Errors
-/// Returns an error if both `port_override` and `instance_override` are `Some`.
+/// CLI clap already rejects simultaneous `--port` + `--instance`. At runtime we
+/// use precedence instead of hard-erroring: Config defaults `instance: Some(0)`,
+/// so treating that as mutually exclusive with `--port` broke every
+/// `serve --http --port N` invocation.
 pub fn get_http_port(
     port_override: Option<u16>,
     instance_override: Option<u16>,
 ) -> Result<u16, String> {
-    if port_override.is_some() && instance_override.is_some() {
-        return Err("--port and --instance are mutually exclusive".to_string());
-    }
     if let Ok(p) = std::env::var("MEMPALACE_HTTP_PORT") {
         if let Ok(n) = p.parse::<u16>() {
             return Ok(n);
@@ -3176,4 +3175,41 @@ pub fn get_engine_port(rest_port: Option<u16>) -> u16 {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or_else(|| rest_port.unwrap_or(3111).saturating_add(46023))
+}
+
+#[cfg(test)]
+mod port_resolution_tests {
+    use super::get_http_port;
+
+    #[test]
+    fn port_only_does_not_conflict_with_absent_instance() {
+        // `--port 13111` with no `--instance` must succeed. Passing
+        // `Some(0)` as a "default instance" was the smoke-test regression.
+        assert_eq!(get_http_port(Some(13111), None).unwrap(), 13111);
+    }
+
+    #[test]
+    fn instance_only_maps_offset() {
+        assert_eq!(get_http_port(None, Some(0)).unwrap(), 3111);
+        assert_eq!(get_http_port(None, Some(1)).unwrap(), 3211);
+        assert_eq!(get_http_port(None, Some(5)).unwrap(), 3611);
+    }
+
+    #[test]
+    fn port_wins_over_instance_when_both_present() {
+        // Runtime precedence: explicit --port beats instance (including
+        // config default Some(0)). CLI clap still rejects both flags.
+        assert_eq!(get_http_port(Some(9999), Some(1)).unwrap(), 9999);
+        assert_eq!(get_http_port(Some(13111), Some(0)).unwrap(), 13111);
+    }
+
+    #[test]
+    fn neither_returns_default() {
+        // Clear env so the test is hermetic.
+        let _guard = crate::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("MEMPALACE_HTTP_PORT");
+        assert_eq!(get_http_port(None, None).unwrap(), 3111);
+    }
 }

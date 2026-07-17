@@ -1872,18 +1872,18 @@ fn cmd_serve_http(
         config.palace_path = PathBuf::from(p);
     }
 
-    // Resolve effective instance from: CLI override -> env -> config -> 0.
-    let effective_instance = instance_override
-        .or_else(|| {
-            std::env::var("MEMPALACE_INSTANCE")
-                .ok()
-                .and_then(|v| v.parse::<u16>().ok())
-                .map(|n| n.min(50))
-        })
-        .or(config.instance.map(|n| n as u16))
-        .unwrap_or(0);
+    // Resolve instance only when the user actually set one via CLI / env /
+    // config. Defaulting to `Some(0)` made `--port` always conflict with
+    // "instance" even when no `--instance` was passed (smoke-test regression).
+    let effective_instance = instance_override.or_else(|| {
+        std::env::var("MEMPALACE_INSTANCE")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .map(|n| n.min(50))
+            .or(config.instance.map(|n| n as u16))
+    });
 
-    let port = crate::rest_api::get_http_port(port_override, Some(effective_instance))
+    let port = crate::rest_api::get_http_port(port_override, effective_instance)
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // ===== P1-3 / P1-10 BEGIN =====

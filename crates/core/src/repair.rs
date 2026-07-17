@@ -1694,4 +1694,49 @@ mod tests {
         assert!(!errors_are_isolated_fts5(&[]));
     }
     // ===== P2-5 END =====
+
+    /// rebuild_via_staging must copy drawers into SQLite on the staging
+    /// palace so the swapped drawers.db is non-empty (smoke-test regression).
+    #[test]
+    fn test_rebuild_via_staging_preserves_sqlite_drawer_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let palace = tmp.path().join("palace");
+        std::fs::create_dir_all(&palace).unwrap();
+
+        // Seed via the normal mine/add path (writes drawers.db).
+        let mut db = crate::palace_db::PalaceDb::open(&palace).unwrap();
+        db.add(
+            &[
+                ("d1", "first drawer about Clerk auth"),
+                ("d2", "second drawer about SQLite"),
+                ("d3", "third drawer about usearch"),
+            ],
+            &[
+                &[("wing", "project"), ("room", "general")],
+                &[("wing", "project"), ("room", "general")],
+                &[("wing", "project"), ("room", "general")],
+            ],
+        )
+        .unwrap();
+        db.flush().unwrap();
+        drop(db);
+
+        let before = crate::drawer_store::DrawerStore::open(&palace)
+            .unwrap()
+            .len();
+        assert_eq!(before, 3, "seed drawers must land in SQLite");
+
+        rebuild_via_staging(&palace).expect("rebuild_via_staging");
+
+        let after = crate::drawer_store::DrawerStore::open(&palace)
+            .unwrap()
+            .len();
+        assert_eq!(
+            after, before,
+            "rebuild must not drop SQLite drawers (was empty before upsert fix)"
+        );
+
+        // truncation_guard should also be happy
+        truncation_guard(&palace, before).unwrap();
+    }
 }
